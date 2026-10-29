@@ -84,13 +84,36 @@ Check:
 
 Stop the server with `Ctrl+C` in that terminal.
 
+### Docker (local debugging only)
+
+The backend and UI are packaged together for local debugging:
+
+```powershell
+copy .env.example .env
+docker compose up --build
+```
+
+Open http://localhost:8000/. Docker is not the TACC deployment mechanism.
+The optional `QWEN_BASE_URL` can point to a running course service, or remain
+blank to use local stub responses.
+
 ### Key `.env` knobs
 | Variable | Notes |
 |----------|--------|
-| `TACC_MODEL_ENDPOINT` / `TACC_API_KEY` / `TACC_MODEL` | Course model-serving; leave blank for stub |
+| `QWEN_BASE_URL` / `QWEN_MODEL` | Course Qwen OpenAI-compatible endpoint and model |
+| `TACC_MODEL_ENDPOINT` / `TACC_API_KEY` / `TACC_MODEL` | Legacy aliases supported for existing deployments |
 | `ENABLE_TRAVEL_HISTORY` | `1` = proposed (Agent1–4); `0` = Baseline A (Agent1–3) |
 | `TOOL_STAYS_MODE` / `TOOL_MAPS_MODE` | `stub` or `api` |
 | `DATABASE_URL` | Default SQLite under `./data/` |
 | `LANGFUSE_*` | Optional observability (`LANGFUSE_ENABLED=1`) |
 
 UI is not hosted on TACC; only the backend calls the course model-serving endpoint (request → queue → worker).
+
+### Deploy to TACC
+
+The repository includes a self-contained deployment package in
+[`tacc/`](./tacc/). It does not depend on `tacc_reference`. Submit
+[`tacc/qwen-public-serve/`](./tacc/qwen-public-serve/) first, copy its
+`SERVICE_BASE_URL` into [`server-url.txt`](./server-url.txt), then submit the
+repository root using [`tuxiv.conf`](./tuxiv.conf). See
+[`tacc/README.md`](./tacc/README.md) for the complete sequence.

@@ -1,13 +1,4 @@
-"""
-Thin stub for the course TACC model-serving endpoint.
-
-Call shape (conceptual — no real secrets here):
-  client → POST TACC_MODEL_ENDPOINT  (auth: TACC_API_KEY)
-        → request enters a queue
-        → a model worker picks it up and returns completion text / JSON
-
-The web UI is NOT hosted on TACC; only the backend uses this client.
-"""
+"""Client for the course Qwen OpenAI-compatible model endpoint."""
 
 from __future__ import annotations
 
@@ -19,12 +10,24 @@ from config.settings import Settings, get_settings
 
 
 class TACCClient:
+    """Keep the existing client name while speaking the Qwen chat protocol."""
+
     def __init__(self, settings: Optional[Settings] = None) -> None:
         self.settings = settings or get_settings()
 
     @property
+    def base_url(self) -> str:
+        return self.settings.qwen_base_url or self.settings.tacc_model_endpoint
+
+    @property
+    def model(self) -> str:
+        if self.settings.qwen_base_url:
+            return self.settings.qwen_model
+        return self.settings.tacc_model or self.settings.qwen_model
+
+    @property
     def configured(self) -> bool:
-        return bool(self.settings.tacc_model_endpoint)
+        return bool(self.base_url)
 
     def complete(
         self,
@@ -33,38 +36,40 @@ class TACCClient:
         system: Optional[str] = None,
         extra: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
-        """
-        Submit one LLM request.
-
-        Real course wiring: HTTP request → TACC queue → model worker → response.
-        This stub returns a placeholder when endpoint/key are empty so local
-        agent stubs can run without credentials.
-        """
+        """Submit one chat completion, or return a useful local stub."""
         if not self.configured:
             return {
                 "ok": False,
                 "stub": True,
-                "text": "[TACC stub] Set TACC_MODEL_ENDPOINT / TACC_API_KEY to call the queue.",
-                "model": self.settings.tacc_model or None,
+                "text": "[Qwen stub] Set QWEN_BASE_URL to call the course model.",
+                "model": self.model,
                 "prompt_chars": len(prompt),
                 "system_chars": len(system or ""),
                 "extra": extra or {},
             }
 
-        headers = {"Authorization": f"Bearer {self.settings.tacc_api_key}"}
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
         payload: dict[str, Any] = {
-            "model": self.settings.tacc_model or None,
-            "prompt": prompt,
-            "system": system,
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": 512,
+            "temperature": 0.7,
+            "chat_template_kwargs": {"enable_thinking": False},
             **(extra or {}),
         }
-        # Placeholder path — replace with the course's real request schema.
-        with httpx.Client(timeout=60.0) as client:
-            resp = client.post(
-                self.settings.tacc_model_endpoint,
+        headers = {"Content-Type": "application/json"}
+        if self.settings.tacc_api_key:
+            headers["Authorization"] = f"Bearer {self.settings.tacc_api_key}"
+        with httpx.Client(timeout=300.0) as client:
+            response = client.post(
+                self.base_url.rstrip("/") + "/chat/completions",
                 headers=headers,
                 json=payload,
             )
-            resp.raise_for_status()
-            data = resp.json()
-            return {"ok": True, "stub": False, "raw": data}
+            response.raise_for_status()
+            data = response.json()
+        text = data["choices"][0]["message"]["content"]
+        return {"ok": True, "stub": False, "text": text, "raw": data}
