@@ -28,6 +28,10 @@ class StayCandidate(BaseModel):
     nightly_cost: Optional[float] = None
     source_url: Optional[str] = None
     notes: Optional[str] = None
+    # Optional enrichments (backward compatible)
+    currency: Optional[str] = Field(default=None, description="e.g. USD, HKD")
+    rating: Optional[float] = Field(default=None, ge=0, le=5)
+    amenities: list[str] = Field(default_factory=list)
 
 
 class TransportLeg(BaseModel):

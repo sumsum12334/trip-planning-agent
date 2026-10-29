@@ -9,9 +9,10 @@ from agents.coordinator import run as coordinate
 from agents.coordinator.agent import health as coordinator_health
 from agents.estimate_transport.agent import health as transport_health
 from agents.search_stays.agent import health as stays_health
+from agents.search_stays.agent import run as search_stays_run
 from agents.travel_history.agent import health as history_health
 from config.settings import get_settings
-from shared.schemas import Itinerary, TripRequest
+from shared.schemas import Itinerary, StayCandidate, TripRequest
 from trip_planning_agent.tacc_client import TACCClient
 
 app = FastAPI(title="trip-planning-agent", version="0.1.0")
@@ -45,6 +46,12 @@ def health() -> dict:
 @app.post("/plan", response_model=Itinerary)
 def plan(request: TripRequest) -> Itinerary:
     return coordinate(request)
+
+
+@app.post("/agents/search_stays", response_model=list[StayCandidate])
+def agent_search_stays(request: TripRequest) -> list[StayCandidate]:
+    """Run Agent 1 alone (local testing / debugging)."""
+    return search_stays_run(request)
 
 
 def main() -> None:
