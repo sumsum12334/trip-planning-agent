@@ -1,0 +1,19 @@
+services:
+  app:
+    build: .
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    env_file:
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+    volumes:
+      - trip_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  trip_data:
