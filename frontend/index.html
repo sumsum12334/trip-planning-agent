@@ -2,18 +2,99 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>trip-planning-agent (placeholder)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trip Planner</title>
     <style>
-      body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
-      code { background: #f4f4f4; padding: 0.1rem 0.3rem; }
+      :root { color-scheme: light; font-family: system-ui, sans-serif; background: #f5f7fb; color: #172033; }
+      body { margin: 0; } main { max-width: 900px; margin: auto; padding: 2rem 1rem; }
+      nav { display: flex; gap: .5rem; margin-bottom: 1.5rem; } button, input, textarea { font: inherit; }
+      button { border: 0; border-radius: .5rem; padding: .65rem 1rem; cursor: pointer; background: #315efb; color: white; }
+      button.secondary { background: #e4e9f5; color: #172033; }
+      .panel { background: white; border-radius: 1rem; padding: 1.25rem; box-shadow: 0 5px 25px #17203312; }
+      .tab { display: none; } .tab.active { display: block; } label { display: block; margin: .8rem 0 .3rem; font-weight: 600; }
+      input, textarea { box-sizing: border-box; width: 100%; padding: .7rem; border: 1px solid #cbd3e3; border-radius: .5rem; }
+      label.checkbox { display: flex; align-items: center; gap: .5rem; font-weight: 400; }
+      label.checkbox input { width: auto; margin: 0; padding: 0; }
+      textarea { min-height: 100px; resize: vertical; } #messages { min-height: 260px; max-height: 480px; overflow: auto; margin-bottom: 1rem; }
+      .message { padding: .75rem; border-radius: .6rem; margin: .5rem 0; white-space: pre-wrap; }
+      .user { background: #edf1ff; } .assistant { background: #eef8f1; } small, .muted { color: #63708a; }
     </style>
   </head>
   <body>
-    <h1>Trip Planning Agent — frontend placeholder</h1>
-    <p>
-      UI is <strong>not</strong> hosted on TACC. Point this page at the local backend
-      (<code>APP_HOST</code>:<code>APP_PORT</code>, default <code>127.0.0.1:8000</code>).
-    </p>
-    <p>Replace with React/Vite (or similar) when ready. See repo README.</p>
+    <main>
+      <h1>Trip Planner</h1>
+      <nav><button data-tab="chat" class="secondary">Chat</button><button data-tab="settings" class="secondary">Settings</button></nav>
+      <section id="chat" class="tab active panel">
+        <h2>Plan a trip</h2>
+        <div id="messages"><p class="muted">Ask for destinations, itineraries, budgets, or travel tips.</p></div>
+        <label for="message">Message</label>
+        <textarea id="message" placeholder="Plan a 3-day trip to Kyoto for $800..."></textarea>
+        <p><button id="send">Send</button> <small id="status"></small></p>
+      </section>
+      <section id="settings" class="tab panel">
+        <h2>Settings</h2>
+        <p class="muted">Model settings apply immediately to this running backend process. API keys are never displayed or saved in this browser.</p>
+        <label for="endpoint">Endpoint URL</label>
+        <input id="endpoint" type="url" placeholder="http://NODE:8000/v1" />
+        <label for="model">Model</label>
+        <input id="model" placeholder="qwen3.8-27b" />
+        <label for="api-key">API key <small>(leave blank to keep the current key)</small></label>
+        <input id="api-key" type="password" autocomplete="off" placeholder="Optional" />
+        <label class="checkbox"><input id="clear-key" type="checkbox" /> <span>Clear current API key</span></label>
+        <label for="origin">Default origin</label><input id="origin" placeholder="Hong Kong" />
+        <label class="checkbox"><input id="history" type="checkbox" /> <span>Include travel history</span></label>
+        <p><button id="save">Save settings</button></p><p id="server-settings" class="muted">Loading server status...</p>
+      </section>
+    </main>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let conversation = [];
+      document.querySelectorAll("[data-tab]").forEach((button) => button.onclick = () => {
+        document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.id === button.dataset.tab));
+      });
+      function addMessage(role, text) {
+        const node = document.createElement("div"); node.className = `message ${role}`; node.textContent = text;
+        $("messages").append(node); $("messages").scrollTop = $("messages").scrollHeight;
+      }
+      $("send").onclick = async () => {
+        const message = $("message").value.trim(); if (!message) return;
+        addMessage("user", message); $("message").value = ""; $("status").textContent = "Thinking...";
+        try {
+          const response = await fetch("/api/chat", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({message, conversation}) });
+          if (!response.ok) throw new Error(await response.text());
+          const result = await response.json(); addMessage("assistant", result.text);
+          conversation.push({role: "user", content: message}, {role: "assistant", content: result.text});
+          $("status").textContent = result.stub ? "Local stub response" : `Model: ${result.model}`;
+        } catch (error) { addMessage("assistant", `Request failed: ${error.message}`); $("status").textContent = ""; }
+      };
+      $("save").onclick = () => {
+        saveSettings();
+      };
+      $("origin").value = localStorage.getItem("trip-origin") || ""; $("history").checked = localStorage.getItem("trip-history") === "true";
+      async function saveSettings() {
+        $("server-settings").textContent = "Saving...";
+        try {
+          const response = await fetch("/api/settings/model", {
+            method: "PUT", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+              endpoint_url: $("endpoint").value.trim(),
+              model: $("model").value.trim(),
+              api_key: $("clear-key").checked ? "" : ($("api-key").value || null)
+            })
+          });
+          if (!response.ok) throw new Error(await response.text());
+          const settings = await response.json(); $("api-key").value = ""; $("clear-key").checked = false;
+          localStorage.setItem("trip-origin", $("origin").value); localStorage.setItem("trip-history", $("history").checked);
+          renderSettings(settings, "Settings saved.");
+        } catch (error) { $("server-settings").textContent = `Save failed: ${error.message}`; }
+      }
+      function renderSettings(settings, prefix = "") {
+        $("endpoint").value = settings.endpoint_url || ""; $("model").value = settings.qwen_model || settings.model;
+        $("server-settings").textContent = `${prefix} Qwen: ${settings.qwen_configured ? "connected" : "stub mode"} | Model: ${settings.qwen_model || settings.model} | API key: ${settings.api_key_configured ? "configured" : "not configured"}`;
+      }
+      fetch("/api/settings").then((response) => response.json()).then((settings) => {
+        renderSettings(settings);
+      }).catch(() => $("server-settings").textContent = "Server status unavailable.");
+    </script>
   </body>
 </html>

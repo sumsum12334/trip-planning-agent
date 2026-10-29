@@ -73,14 +73,19 @@ pip install -r requirements.txt
 # If Activate.ps1 is blocked:
 # Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 
-# 3. Start backend
+# 3. Start backend and UI
 uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 Check:
 - Health: http://127.0.0.1:8000/health  (expect `"ok": true`)
 - API docs: http://127.0.0.1:8000/docs
-- Frontend placeholder: open `frontend\index.html` in a browser
+- UI: http://127.0.0.1:8000/
+
+The Settings tab can change the model endpoint, model name, and API key for
+the running process. The key is write-only and is not returned by the API.
+These changes are not persisted across restarts; use `.env` or the TACC
+`job.sh` environment for persistent deployment defaults.
 
 Stop the server with `Ctrl+C` in that terminal.
 

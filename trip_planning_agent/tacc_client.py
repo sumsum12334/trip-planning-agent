@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 import httpx
 
-from config.settings import Settings, get_settings
+from config.settings import Settings, get_model_config, get_settings
 
 
 class TACCClient:
@@ -17,13 +17,11 @@ class TACCClient:
 
     @property
     def base_url(self) -> str:
-        return self.settings.qwen_base_url or self.settings.tacc_model_endpoint
+        return get_model_config(self.settings)["base_url"]
 
     @property
     def model(self) -> str:
-        if self.settings.qwen_base_url:
-            return self.settings.qwen_model
-        return self.settings.tacc_model or self.settings.qwen_model
+        return get_model_config(self.settings)["model"]
 
     @property
     def configured(self) -> bool:
@@ -61,8 +59,9 @@ class TACCClient:
             **(extra or {}),
         }
         headers = {"Content-Type": "application/json"}
-        if self.settings.tacc_api_key:
-            headers["Authorization"] = f"Bearer {self.settings.tacc_api_key}"
+        api_key = get_model_config(self.settings)["api_key"]
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         with httpx.Client(timeout=300.0) as client:
             response = client.post(
                 self.base_url.rstrip("/") + "/chat/completions",
