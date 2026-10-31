@@ -41,6 +41,18 @@ class ConversationStore:
                 connection.execute(
                     "ALTER TABLE conversations ADD COLUMN events TEXT NOT NULL DEFAULT '[]'"
                 )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pending_questions (
+                    conversation_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    messages TEXT NOT NULL,
+                    question TEXT NOT NULL,
+                    options TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path)
@@ -124,4 +136,101 @@ class ConversationStore:
                 "DELETE FROM conversations WHERE id = ?",
                 (conversation_id,),
             )
+            connection.execute(
+                "DELETE FROM pending_questions WHERE conversation_id = ?",
+                (conversation_id,),
+            )
         return cursor.rowcount > 0
+
+    def save_pending_question(
+        self,
+        conversation_id: str,
+        user_id: str,
+        messages: list[dict[str, Any]],
+        question: str,
+        options: list[str],
+    ) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO pending_questions
+                    (conversation_id, user_id, messages, question, options, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(conversation_id) DO UPDATE SET
+                    user_id=excluded.user_id,
+                    messages=excluded.messages,
+                    question=excluded.question,
+                    options=excluded.options,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    conversation_id,
+                    user_id,
+                    json.dumps(messages),
+                    question,
+                    json.dumps(options),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+
+    def get_pending_question(self, conversation_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT user_id, messages, question, options
+                FROM pending_questions WHERE conversation_id = ?
+                """,
+                (conversation_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "user_id": row[0],
+            "messages": json.loads(row[1]),
+            "question": row[2],
+            "options": json.loads(row[3]),
+        }
+
+    def clear_pending_question(self, conversation_id: str) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                "DELETE FROM pending_questions WHERE conversation_id = ?",
+                (conversation_id,),
+            )
+
+    def mark_question_answered(
+        self, conversation_id: str, selected: str, question: str | None = None
+    ) -> bool:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT events FROM conversations WHERE id = ?",
+                (conversation_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            events = json.loads(row[0])
+            updated = False
+            for event in reversed(events):
+                data = event.get("data", {})
+                if (
+                    data.get("tool") == "ask_user_question"
+                    and data.get("result")
+                    and (question is None or data["result"].get("question") == question)
+                    and not data.get("selected")
+                ):
+                    data["selected"] = selected
+                    event["data"] = data
+                    event["detail"] = f"Answer selected: {selected}"
+                    event["status"] = "completed"
+                    updated = True
+                    break
+            if updated:
+                connection.execute(
+                    "UPDATE conversations SET events = ?, updated_at = ? WHERE id = ?",
+                    (
+                        json.dumps(events),
+                        datetime.now(timezone.utc).isoformat(),
+                        conversation_id,
+                    ),
+                )
+            return updated
