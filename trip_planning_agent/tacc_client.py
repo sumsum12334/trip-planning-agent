@@ -1,30 +1,33 @@
-"""
-Thin stub for the course TACC model-serving endpoint.
-
-Call shape (conceptual — no real secrets here):
-  client → POST TACC_MODEL_ENDPOINT  (auth: TACC_API_KEY)
-        → request enters a queue
-        → a model worker picks it up and returns completion text / JSON
-
-The web UI is NOT hosted on TACC; only the backend uses this client.
-"""
+"""Client for the configured NVIDIA-compatible OpenAI chat endpoint."""
 
 from __future__ import annotations
 
+import json
+from collections.abc import Callable, Iterator
 from typing import Any, Optional
 
 import httpx
 
-from config.settings import Settings, get_settings
+from config.settings import Settings, get_model_config, get_settings
 
 
 class TACCClient:
+    """Keep the existing client name while speaking the chat completions protocol."""
+
     def __init__(self, settings: Optional[Settings] = None) -> None:
         self.settings = settings or get_settings()
 
     @property
+    def base_url(self) -> str:
+        return get_model_config(self.settings)["base_url"]
+
+    @property
+    def model(self) -> str:
+        return get_model_config(self.settings)["model"]
+
+    @property
     def configured(self) -> bool:
-        return bool(self.settings.tacc_model_endpoint)
+        return bool(self.base_url)
 
     def complete(
         self,
@@ -32,39 +35,156 @@ class TACCClient:
         *,
         system: Optional[str] = None,
         extra: Optional[dict[str, Any]] = None,
+        on_event: Callable[[dict[str, str]], None] | None = None,
     ) -> dict[str, Any]:
-        """
-        Submit one LLM request.
-
-        Real course wiring: HTTP request → TACC queue → model worker → response.
-        This stub returns a placeholder when endpoint/key are empty so local
-        agent stubs can run without credentials.
-        """
+        """Submit one chat completion, or return a useful local stub."""
         if not self.configured:
+            if on_event:
+                on_event(
+                    {
+                        "type": "model",
+                        "label": "Using local model stub",
+                        "status": "completed",
+                    }
+                )
             return {
                 "ok": False,
                 "stub": True,
-                "text": "[TACC stub] Set TACC_MODEL_ENDPOINT / TACC_API_KEY to call the queue.",
-                "model": self.settings.tacc_model or None,
+                "text": "[Model stub] Set QWEN_BASE_URL to call the configured model.",
+                "model": self.model,
                 "prompt_chars": len(prompt),
                 "system_chars": len(system or ""),
                 "extra": extra or {},
             }
 
-        headers = {"Authorization": f"Bearer {self.settings.tacc_api_key}"}
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        if on_event:
+            on_event({"type": "model", "label": "Preparing model request", "status": "completed"})
         payload: dict[str, Any] = {
-            "model": self.settings.tacc_model or None,
-            "prompt": prompt,
-            "system": system,
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": 16384,
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "reasoning_budget": 16384,
+            "chat_template_kwargs": {"enable_thinking": False},
             **(extra or {}),
         }
-        # Placeholder path — replace with the course's real request schema.
-        with httpx.Client(timeout=60.0) as client:
-            resp = client.post(
-                self.settings.tacc_model_endpoint,
+        headers = {"Content-Type": "application/json"}
+        api_key = get_model_config(self.settings)["api_key"]
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        if on_event:
+            on_event(
+                {
+                    "type": "model",
+                    "label": "Model is thinking",
+                    "detail": self.model,
+                    "status": "running",
+                }
+            )
+        with httpx.Client(timeout=300.0) as client:
+            response = client.post(
+                self.base_url.rstrip("/") + "/chat/completions",
                 headers=headers,
                 json=payload,
             )
-            resp.raise_for_status()
-            data = resp.json()
-            return {"ok": True, "stub": False, "raw": data}
+            response.raise_for_status()
+            data = response.json()
+        if on_event:
+            on_event({"type": "model", "label": "Model response received", "status": "completed"})
+        text = data["choices"][0]["message"]["content"]
+        return {"ok": True, "stub": False, "text": text, "raw": data}
+
+    def stream(
+        self,
+        prompt: str,
+        *,
+        system: Optional[str] = None,
+        on_event: Callable[[dict[str, str]], None] | None = None,
+    ) -> Iterator[dict[str, str]]:
+        """Yield reasoning and answer deltas from the OpenAI-compatible SSE endpoint."""
+        if not self.configured:
+            if on_event:
+                on_event({"type": "model", "label": "Using local model stub", "status": "completed"})
+            yield {"kind": "content", "text": "[Model stub] Set QWEN_BASE_URL to call the configured model."}
+            return
+
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": 16384,
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "reasoning_budget": 16384,
+            "stream": True,
+            "chat_template_kwargs": {"enable_thinking": True},
+        }
+        headers = {"Content-Type": "application/json"}
+        api_key = get_model_config(self.settings)["api_key"]
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        if on_event:
+            on_event({"type": "model", "label": "Model is thinking", "detail": self.model, "status": "running"})
+
+        with httpx.Client(timeout=300.0) as client:
+            with client.stream(
+                "POST",
+                self.base_url.rstrip("/") + "/chat/completions",
+                headers=headers,
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    chunk = json.loads(data)
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    delta = choice.get("delta") or {}
+                    message = choice.get("message") or {}
+                    reasoning = (
+                        delta.get("reasoning_content")
+                        or delta.get("reasoning")
+                        or message.get("reasoning_content")
+                        or message.get("reasoning")
+                        or choice.get("reasoning_content")
+                        or choice.get("reasoning")
+                    )
+                    if reasoning:
+                        yield {"kind": "reasoning", "text": self._chunk_text(reasoning)}
+                    content = (
+                        delta.get("content")
+                        or delta.get("text")
+                        or message.get("content")
+                        or choice.get("text")
+                        or choice.get("content")
+                    )
+                    if content:
+                        yield {"kind": "content", "text": self._chunk_text(content)}
+        if on_event:
+            on_event({"type": "model", "label": "Model response received", "status": "completed"})
+
+    @staticmethod
+    def _chunk_text(value: Any) -> str:
+        """Normalize provider text parts into a displayable string."""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            return "".join(
+                item.get("text", "") if isinstance(item, dict) else str(item)
+                for item in value
+            )
+        return str(value)
