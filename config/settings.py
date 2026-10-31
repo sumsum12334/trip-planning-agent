@@ -24,11 +24,7 @@ class Settings(BaseSettings):
     # Qwen-compatible model-serving endpoint. QWEN_BASE_URL should include /v1.
     qwen_base_url: str = Field(default="", alias="QWEN_BASE_URL")
     qwen_model: str = Field(default="qwen3.8-27b", alias="QWEN_MODEL")
-
-    # Legacy names retained for existing deployments.
-    tacc_model_endpoint: str = Field(default="", alias="TACC_MODEL_ENDPOINT")
-    tacc_api_key: str = Field(default="", alias="TACC_API_KEY")
-    tacc_model: str = Field(default="", alias="TACC_MODEL")
+    qwen_api_key: str = Field(default="", alias="QWEN_API_KEY")
 
     # Baseline A = 0 (Agents 1–3); Proposed = 1 (include Agent 4 Travel_History)
     enable_travel_history: bool = Field(default=True, alias="ENABLE_TRAVEL_HISTORY")
@@ -36,6 +32,9 @@ class Settings(BaseSettings):
     # Tools
     tool_stays_mode: Literal["stub", "api"] = Field(default="stub", alias="TOOL_STAYS_MODE")
     tool_maps_mode: Literal["stub", "api"] = Field(default="stub", alias="TOOL_MAPS_MODE")
+    web_search_mode: Literal["stub", "duckduckgo"] = Field(
+        default="stub", alias="WEB_SEARCH_MODE"
+    )
 
     # Travel History DB
     database_url: str = Field(
@@ -69,14 +68,16 @@ def get_model_config(settings: Settings | None = None) -> dict[str, str]:
         return {
             "base_url": _model_overrides.get(
                 "base_url",
-                current.qwen_base_url or current.tacc_model_endpoint,
+                current.qwen_base_url,
             ),
             "model": _model_overrides.get(
                 "model",
-                current.qwen_model if current.qwen_base_url else current.tacc_model
-                or current.qwen_model,
+                current.qwen_model,
             ),
-            "api_key": _model_overrides.get("api_key", current.tacc_api_key),
+            "api_key": _model_overrides.get(
+                "api_key",
+                current.qwen_api_key,
+            ),
         }
 
 

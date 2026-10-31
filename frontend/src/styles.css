@@ -1,0 +1,16 @@
+:root { color-scheme: light; font-family: system-ui, sans-serif; background: #f5f7fb; color: #172033; }
+* { box-sizing: border-box; } body { margin: 0; } button, input, textarea { font: inherit; }
+button { border: 0; border-radius: .5rem; padding: .65rem 1rem; cursor: pointer; background: #315efb; color: white; }
+.retry { background: #a56a16; }
+.app { display: flex; min-height: 100vh; } aside { width: 260px; background: #172033; color: white; padding: 1rem; } aside > button { width: 100%; }
+.conversation-row { display: flex; align-items: center; gap: .25rem; margin: .25rem 0; } .conversation { flex: 1; text-align: left; background: transparent; color: #dce3f7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation:hover, .conversation.active { background: #2a3856; } .delete-conversation { background: #a63d4d; padding: .4rem .55rem; }
+main { flex: 1; width: min(100%, 1000px); margin: auto; padding: 2rem 1rem; } .panel { background: white; border-radius: 1rem; padding: 1.25rem; box-shadow: 0 5px 25px #17203312; }
+.chat-panel { min-height: 70vh; } .messages { min-height: 260px; max-height: 55vh; overflow: auto; margin-bottom: 1rem; } .message { padding: .75rem; border-radius: .6rem; margin: .5rem 0; white-space: pre-wrap; }
+.user { background: #edf1ff; } .assistant { background: #eef8f1; } label { display: block; margin: .8rem 0 .3rem; font-weight: 600; }
+.assistant :first-child { margin-top: 0; } .assistant :last-child { margin-bottom: 0; } .assistant pre { overflow-x: auto; padding: .8rem; border-radius: .5rem; background: #172033; color: #f5f7fb; } .assistant code { font-family: ui-monospace, monospace; } .assistant :not(pre) > code { padding: .1rem .25rem; border-radius: .25rem; background: #dce8df; } .assistant table { width: 100%; border-collapse: collapse; } .assistant th, .assistant td { padding: .45rem; border: 1px solid #cbd3e3; text-align: left; }
+textarea, input { width: 100%; padding: .7rem; border: 1px solid #cbd3e3; border-radius: .5rem; } textarea { min-height: 100px; resize: vertical; }
+.activity { border-top: 1px solid #e4e9f5; margin: 1rem 0; padding-top: .75rem; color: #63708a; font-size: .9rem; } .activity summary { cursor: pointer; font-weight: 600; } .activity-items { padding-top: .5rem; } .event { padding: .2rem 0; } .event.error { color: #a63d4d; }
+.reasoning { margin-bottom: .75rem; padding: .6rem .75rem; border-left: 3px solid #8a94a8; background: #f5f7fb; color: #63708a; } .reasoning summary { cursor: pointer; font-weight: 600; }
+.event::before { content: "✓"; color: #258a55; margin-right: .4rem; } .muted { color: #63708a; } .settings { margin-top: 1rem; }
+@media (max-width: 700px) { aside { width: 210px; } main { padding: 1rem .5rem; } }

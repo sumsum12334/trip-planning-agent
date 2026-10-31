@@ -1,7 +1,9 @@
-"""Client for the course Qwen OpenAI-compatible model endpoint."""
+"""Client for the configured NVIDIA-compatible OpenAI chat endpoint."""
 
 from __future__ import annotations
 
+import json
+from collections.abc import Callable, Iterator
 from typing import Any, Optional
 
 import httpx
@@ -10,7 +12,7 @@ from config.settings import Settings, get_model_config, get_settings
 
 
 class TACCClient:
-    """Keep the existing client name while speaking the Qwen chat protocol."""
+    """Keep the existing client name while speaking the chat completions protocol."""
 
     def __init__(self, settings: Optional[Settings] = None) -> None:
         self.settings = settings or get_settings()
@@ -33,13 +35,22 @@ class TACCClient:
         *,
         system: Optional[str] = None,
         extra: Optional[dict[str, Any]] = None,
+        on_event: Callable[[dict[str, str]], None] | None = None,
     ) -> dict[str, Any]:
         """Submit one chat completion, or return a useful local stub."""
         if not self.configured:
+            if on_event:
+                on_event(
+                    {
+                        "type": "model",
+                        "label": "Using local model stub",
+                        "status": "completed",
+                    }
+                )
             return {
                 "ok": False,
                 "stub": True,
-                "text": "[Qwen stub] Set QWEN_BASE_URL to call the course model.",
+                "text": "[Model stub] Set QWEN_BASE_URL to call the configured model.",
                 "model": self.model,
                 "prompt_chars": len(prompt),
                 "system_chars": len(system or ""),
@@ -50,11 +61,15 @@ class TACCClient:
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
+        if on_event:
+            on_event({"type": "model", "label": "Preparing model request", "status": "completed"})
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
-            "max_tokens": 512,
-            "temperature": 0.7,
+            "max_tokens": 16384,
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "reasoning_budget": 16384,
             "chat_template_kwargs": {"enable_thinking": False},
             **(extra or {}),
         }
@@ -62,6 +77,15 @@ class TACCClient:
         api_key = get_model_config(self.settings)["api_key"]
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
+        if on_event:
+            on_event(
+                {
+                    "type": "model",
+                    "label": "Model is thinking",
+                    "detail": self.model,
+                    "status": "running",
+                }
+            )
         with httpx.Client(timeout=300.0) as client:
             response = client.post(
                 self.base_url.rstrip("/") + "/chat/completions",
@@ -70,5 +94,97 @@ class TACCClient:
             )
             response.raise_for_status()
             data = response.json()
+        if on_event:
+            on_event({"type": "model", "label": "Model response received", "status": "completed"})
         text = data["choices"][0]["message"]["content"]
         return {"ok": True, "stub": False, "text": text, "raw": data}
+
+    def stream(
+        self,
+        prompt: str,
+        *,
+        system: Optional[str] = None,
+        on_event: Callable[[dict[str, str]], None] | None = None,
+    ) -> Iterator[dict[str, str]]:
+        """Yield reasoning and answer deltas from the OpenAI-compatible SSE endpoint."""
+        if not self.configured:
+            if on_event:
+                on_event({"type": "model", "label": "Using local model stub", "status": "completed"})
+            yield {"kind": "content", "text": "[Model stub] Set QWEN_BASE_URL to call the configured model."}
+            return
+
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": 16384,
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "reasoning_budget": 16384,
+            "stream": True,
+            "chat_template_kwargs": {"enable_thinking": True},
+        }
+        headers = {"Content-Type": "application/json"}
+        api_key = get_model_config(self.settings)["api_key"]
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        if on_event:
+            on_event({"type": "model", "label": "Model is thinking", "detail": self.model, "status": "running"})
+
+        with httpx.Client(timeout=300.0) as client:
+            with client.stream(
+                "POST",
+                self.base_url.rstrip("/") + "/chat/completions",
+                headers=headers,
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    chunk = json.loads(data)
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    delta = choice.get("delta") or {}
+                    message = choice.get("message") or {}
+                    reasoning = (
+                        delta.get("reasoning_content")
+                        or delta.get("reasoning")
+                        or message.get("reasoning_content")
+                        or message.get("reasoning")
+                        or choice.get("reasoning_content")
+                        or choice.get("reasoning")
+                    )
+                    if reasoning:
+                        yield {"kind": "reasoning", "text": self._chunk_text(reasoning)}
+                    content = (
+                        delta.get("content")
+                        or delta.get("text")
+                        or message.get("content")
+                        or choice.get("text")
+                        or choice.get("content")
+                    )
+                    if content:
+                        yield {"kind": "content", "text": self._chunk_text(content)}
+        if on_event:
+            on_event({"type": "model", "label": "Model response received", "status": "completed"})
+
+    @staticmethod
+    def _chunk_text(value: Any) -> str:
+        """Normalize provider text parts into a displayable string."""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            return "".join(
+                item.get("text", "") if isinstance(item, dict) else str(item)
+                for item in value
+            )
+        return str(value)
