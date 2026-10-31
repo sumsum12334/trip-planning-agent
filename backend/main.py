@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import queue
+import threading
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -17,6 +20,8 @@ from agents.coordinator.agent import health as coordinator_health
 from agents.estimate_transport.agent import health as transport_health
 from agents.search_stays.agent import health as stays_health
 from agents.travel_history.agent import health as history_health
+from agents.travel_history.agent import remember_from_message
+from agents.travel_history.agent import TravelHistoryStore
 from agents.web_search.agent import health as web_search_health
 from agents.web_search import run as web_search
 from config.settings import get_model_config, get_settings, update_model_config
@@ -30,6 +35,8 @@ from shared.schemas import (
     ModelSettingsResponse,
     ModelSettingsUpdate,
     TripRequest,
+    TravelHistoryCreate,
+    TravelHistoryEntry,
     WebSearchRequest,
 )
 from shared.prompts import TRIP_PLANNING_SYSTEM_PROMPT
@@ -68,6 +75,38 @@ def health() -> dict:
 @app.post("/plan", response_model=Itinerary)
 def plan(request: TripRequest) -> Itinerary:
     return coordinate(request)
+
+
+@app.get("/api/travel-history", response_model=list[TravelHistoryEntry])
+def list_travel_history(
+    user_id: str = Query(default="local-user", min_length=1, max_length=200),
+) -> list[TravelHistoryEntry]:
+    store = TravelHistoryStore(get_settings().database_url)
+    return [TravelHistoryEntry(**entry) for entry in store.list_entries(user_id)]
+
+
+@app.post("/api/travel-history", response_model=TravelHistoryEntry, status_code=201)
+def add_travel_history(request: TravelHistoryCreate) -> TravelHistoryEntry:
+    store = TravelHistoryStore(get_settings().database_url)
+    entry_id = store.add_entry(
+        user_id=request.user_id,
+        country=request.country,
+        city=request.city,
+        location=request.location,
+    )
+    entry = next(
+        item for item in store.list_entries(request.user_id) if item["id"] == entry_id
+    )
+    return TravelHistoryEntry(**entry)
+
+
+@app.delete("/api/travel-history/{entry_id}", status_code=204)
+def delete_travel_history(
+    entry_id: int,
+    user_id: str = Query(default="local-user", min_length=1, max_length=200),
+) -> None:
+    if not TravelHistoryStore(get_settings().database_url).delete(user_id, entry_id):
+        raise HTTPException(status_code=404, detail="Travel-history entry not found.")
 
 
 @app.get("/api/settings")
@@ -143,6 +182,17 @@ def chat(request: ChatRequest) -> ChatResponse:
         conversation,
         [event.model_dump() for event in events],
     )
+    memory_user_id = request.user_id or conversation_id
+    remembered_places = remember_from_message(memory_user_id, request.message)
+    if remembered_places:
+        events.append(
+            ChatEvent(
+                type="agent",
+                label="Travel history updated",
+                detail=", ".join(remembered_places),
+                status="completed",
+            )
+        )
     try:
         result = TACCClient().complete(
             prompt,
@@ -200,25 +250,180 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
         ) + f"\nuser: {request.message}"
     conversation.append({"role": "user", "content": request.message})
     conversation_id = store.save(request.conversation_id, conversation, [])
+    memory_user_id = request.user_id or conversation_id
+    remembered_places = remember_from_message(memory_user_id, request.message)
+    history_store = TravelHistoryStore(get_settings().database_url)
+    history_tools = [{
+        "type": "function",
+        "function": {
+            "name": "search_travel_history",
+            "description": "Search the user's saved travel history for locations related to a destination or place.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Destination, city, country, or location to search for.",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    }, {
+        "type": "function",
+        "function": {
+            "name": "ask_user_question",
+            "description": "Ask the user a focused clarification question with selectable options when a planning decision is needed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "description": "A concise question for the user."},
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 2,
+                        "maxItems": 6,
+                        "description": "Two to six concise selectable answers.",
+                    },
+                },
+                "required": ["question", "options"],
+            },
+        },
+    }, {
+        "type": "function",
+        "function": {
+            "name": "display_trip_plan",
+            "description": "Display a structured trip itinerary after enough planning details are known.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "destination": {"type": "string"},
+                    "days": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "day": {"type": "integer", "minimum": 1},
+                                "title": {"type": "string"},
+                                "activities": {"type": "array", "items": {"type": "string"}},
+                                "notes": {"type": "array", "items": {"type": "string"}},
+                            },
+                            "required": ["day", "title", "activities"],
+                        },
+                        "minItems": 1,
+                        "maxItems": 14,
+                    },
+                    "budget": {"type": "number"},
+                    "notes": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["destination", "days"],
+            },
+        },
+    }]
+
+    def execute_history_tool(name: str, arguments: dict[str, Any]) -> Any:
+        if name == "search_travel_history":
+            return history_store.search(memory_user_id, str(arguments.get("query", "")))
+        if name == "ask_user_question":
+            question = str(arguments.get("question", "")).strip()
+            options = [str(option).strip() for option in arguments.get("options", [])]
+            if not question or len(options) < 2 or any(not option for option in options):
+                raise ValueError("ask_user_question requires a question and at least two options.")
+            return {"question": question, "options": options[:6], "status": "awaiting_user"}
+        if name == "display_trip_plan":
+            destination = str(arguments.get("destination", "")).strip()
+            days = arguments.get("days", [])
+            if not destination or not isinstance(days, list) or not 1 <= len(days) <= 14:
+                raise ValueError("display_trip_plan requires a destination and one to fourteen days.")
+            normalized_days = []
+            for item in days:
+                if not isinstance(item, dict):
+                    raise ValueError("Each trip day must be an object.")
+                activities = [str(value).strip() for value in item.get("activities", [])]
+                if not item.get("title") or not activities:
+                    raise ValueError("Each trip day requires a title and activities.")
+                normalized_days.append({
+                    "day": int(item.get("day", len(normalized_days) + 1)),
+                    "title": str(item["title"]).strip(),
+                    "activities": activities,
+                    "notes": [str(value).strip() for value in item.get("notes", [])],
+                })
+            return {
+                "destination": destination,
+                "days": normalized_days,
+                "budget": arguments.get("budget"),
+                "notes": [str(value).strip() for value in arguments.get("notes", [])],
+                "status": "displayed",
+            }
+        raise ValueError(f"Unknown tool requested: {name}")
 
     def events():
-        activity: list[ChatEvent] = [
+        activity: list[ChatEvent] = []
+        initial_events: list[ChatEvent] = [
             ChatEvent(type="agent", label="Coordinator agent started", status="running")
         ]
-
+        if remembered_places:
+            initial_events.append(
+                ChatEvent(
+                    type="agent",
+                    label="Travel history updated",
+                    detail=", ".join(remembered_places),
+                    status="completed",
+                )
+            )
         def emit(event: ChatEvent) -> str:
             activity.append(event)
             return f"data: {json.dumps({'kind': 'event', **event.model_dump()})}\n\n"
 
-        yield emit(ChatEvent(type="model", label="Model is thinking", status="running"))
+        for event in initial_events:
+            yield emit(event)
+        yield emit(ChatEvent(type="model", label="Model request queued", status="running"))
         text_parts: list[str] = []
         reasoning_parts: list[str] = []
+        stream_queue: queue.Queue[tuple[str, object]] = queue.Queue()
+        pending_question: dict[str, Any] | None = None
+
+        def save_pause(messages: list[dict[str, Any]], result: dict[str, Any]) -> None:
+            stream_queue.put(("pause", (messages, result)))
+
+        def run_model() -> None:
+            try:
+                for delta in TACCClient().stream(
+                    prompt,
+                    system=TRIP_PLANNING_SYSTEM_PROMPT,
+                    on_event=lambda event: stream_queue.put(("event", event)),
+                    tools=history_tools,
+                    tool_executor=execute_history_tool,
+                    on_pause=save_pause,
+                ):
+                    stream_queue.put(("delta", delta))
+                stream_queue.put(("done", None))
+            except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
+                stream_queue.put(("error", error))
+
+        threading.Thread(target=run_model, daemon=True).start()
         try:
-            for delta in TACCClient().stream(
-                prompt,
-                system=TRIP_PLANNING_SYSTEM_PROMPT,
-                on_event=lambda event: activity.append(ChatEvent(**event)),
-            ):
+            while True:
+                kind, payload = stream_queue.get()
+                if kind == "event":
+                    yield emit(ChatEvent(**payload))
+                    continue
+                if kind == "error":
+                    raise payload
+                if kind == "pause":
+                    pending_messages, question = payload
+                    pending_question = question
+                    store.save_pending_question(
+                        conversation_id,
+                        memory_user_id,
+                        pending_messages,
+                        question["question"],
+                        question["options"],
+                    )
+                    continue
+                if kind == "done":
+                    break
+                delta = payload
                 if delta["kind"] == "reasoning":
                     reasoning_parts.append(delta["text"])
                 else:
@@ -235,7 +440,10 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
             assistant_message = {"role": "assistant", "content": "".join(text_parts)}
             if reasoning_parts:
                 assistant_message["reasoning"] = "".join(reasoning_parts)
-            conversation_with_response = conversation + [assistant_message]
+            conversation_with_response = (
+                conversation if pending_question is not None
+                else conversation + [assistant_message]
+            )
             store.save(
                 conversation_id,
                 conversation_with_response,
@@ -243,7 +451,7 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
             )
             final_text = "".join(text_parts)
             yield (
-                f"data: {json.dumps({'kind': 'done', 'text': final_text, 'reasoning': ''.join(reasoning_parts), 'model': client.model, 'stub': not client.configured, 'conversation_id': conversation_id, 'events': [event.model_dump() for event in activity]})}\n\n"
+                f"data: {json.dumps({'kind': 'done', 'text': final_text, 'reasoning': ''.join(reasoning_parts), 'model': client.model, 'stub': not client.configured, 'conversation_id': conversation_id, 'pending_question': pending_question, 'events': [event.model_dump() for event in activity]})}\n\n"
             )
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
             failure = ChatEvent(
@@ -276,6 +484,204 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
             yield f"data: {json.dumps({'kind': 'error', 'message': 'The model request failed. The user message was saved and can be retried.', 'conversation_id': conversation_id, 'events': [failure.model_dump(), agent_failure.model_dump()]})}\n\n"
 
     return StreamingResponse(events(), media_type="text/event-stream")
+
+
+@app.post("/api/chat/question", response_model=ChatResponse)
+def answer_chat_question(request: ChatRequest) -> ChatResponse:
+    """Resume a paused model tool call with a selected option."""
+    if not request.conversation_id:
+        raise HTTPException(status_code=400, detail="A conversation_id is required.")
+    store = ConversationStore(get_settings().database_url)
+    pending = store.get_pending_question(request.conversation_id)
+    if pending is None:
+        raise HTTPException(status_code=404, detail="No question is waiting for this conversation.")
+    if pending["user_id"] != request.user_id or request.message not in pending["options"]:
+        raise HTTPException(status_code=422, detail="Choose one of the displayed question options.")
+
+    history_store = TravelHistoryStore(get_settings().database_url)
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "search_travel_history",
+            "description": "Search the user's saved travel history for locations related to a destination or place.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        },
+    }, {
+        "type": "function",
+        "function": {
+            "name": "ask_user_question",
+            "description": "Ask the user a focused clarification question with selectable options when a planning decision is needed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string"},
+                    "options": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 6},
+                },
+                "required": ["question", "options"],
+            },
+        },
+    }, {
+        "type": "function",
+        "function": {
+            "name": "display_trip_plan",
+            "description": "Display a structured trip itinerary after enough planning details are known.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "destination": {"type": "string"},
+                    "days": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 14},
+                    "budget": {"type": "number"},
+                    "notes": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["destination", "days"],
+            },
+        },
+    }]
+
+    def execute_tool(name: str, arguments: dict[str, Any]) -> Any:
+        if name == "search_travel_history":
+            return history_store.search(request.user_id, str(arguments.get("query", "")))
+        if name == "ask_user_question":
+            question = str(arguments.get("question", "")).strip()
+            options = [str(option).strip() for option in arguments.get("options", [])]
+            if not question or len(options) < 2 or any(not option for option in options):
+                raise ValueError("ask_user_question requires a question and at least two options.")
+            return {"question": question, "options": options[:6], "status": "awaiting_user"}
+        if name == "display_trip_plan":
+            destination = str(arguments.get("destination", "")).strip()
+            days = arguments.get("days", [])
+            if not destination or not isinstance(days, list) or not 1 <= len(days) <= 14:
+                raise ValueError("display_trip_plan requires a destination and one to fourteen days.")
+            normalized_days = []
+            for item in days:
+                if not isinstance(item, dict):
+                    raise ValueError("Each trip day must be an object.")
+                activities = [str(value).strip() for value in item.get("activities", [])]
+                if not item.get("title") or not activities:
+                    raise ValueError("Each trip day requires a title and activities.")
+                normalized_days.append({
+                    "day": int(item.get("day", len(normalized_days) + 1)),
+                    "title": str(item["title"]).strip(),
+                    "activities": activities,
+                    "notes": [str(value).strip() for value in item.get("notes", [])],
+                })
+            return {
+                "destination": destination,
+                "days": normalized_days,
+                "budget": arguments.get("budget"),
+                "notes": [str(value).strip() for value in arguments.get("notes", [])],
+                "status": "displayed",
+            }
+        raise ValueError(f"Unknown tool requested: {name}")
+
+    messages = list(pending["messages"])
+    messages.append({"role": "user", "content": request.message})
+    events: list[ChatEvent] = [
+        ChatEvent(type="user", label="Answer recorded", detail=request.message, status="completed")
+    ]
+    text_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    next_pending: dict[str, Any] | None = None
+
+    def save_pause(next_messages: list[dict[str, Any]], result: dict[str, Any]) -> None:
+        nonlocal next_pending
+        next_pending = result
+        store.save_pending_question(
+            request.conversation_id or "",
+            request.user_id,
+            next_messages,
+            result["question"],
+            result["options"],
+        )
+
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        text_parts.clear()
+        reasoning_parts.clear()
+        try:
+            for delta in TACCClient().stream(
+                "",
+                tools=tools,
+                tool_executor=execute_tool,
+                initial_messages=messages,
+                on_event=lambda event: events.append(ChatEvent(**event)),
+                on_pause=save_pause,
+            ):
+                if delta["kind"] == "reasoning":
+                    reasoning_parts.append(delta["text"])
+                else:
+                    text_parts.append(delta["text"])
+            last_error = None
+            break
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
+            last_error = error
+            if attempt < 3:
+                events.append(
+                    ChatEvent(
+                        type="model",
+                        label=f"Retrying continuation ({attempt}/3)",
+                        detail="The model request was interrupted; retrying automatically.",
+                        status="running",
+                    )
+                )
+    if last_error is not None:
+        error_text = str(last_error) or last_error.__class__.__name__
+        failure = ChatEvent(
+            type="model",
+            label="Continuation failed; answer can be retried",
+            detail=error_text,
+            status="error",
+            data={"tool": "ask_user_question", "selected": request.message},
+        )
+        conversation = store.get(request.conversation_id)
+        if conversation is not None:
+            store.save(
+                request.conversation_id,
+                conversation["messages"],
+                [failure.model_dump()],
+            )
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "The assistant could not continue yet. Your choice is still saved for retry.",
+                "conversation_id": request.conversation_id,
+                "retryable": True,
+            },
+        ) from last_error
+
+    if next_pending is None:
+        store.clear_pending_question(request.conversation_id)
+    store.mark_question_answered(
+        request.conversation_id,
+        request.message,
+        pending["question"],
+    )
+    conversation = store.get(request.conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    answer_message = {
+        "role": "assistant",
+        "content": "".join(text_parts),
+        "reasoning": "".join(reasoning_parts),
+    }
+    conversation["messages"].append({"role": "user", "content": request.message})
+    conversation["messages"].append(answer_message)
+    conversation_id = store.save(
+        request.conversation_id,
+        conversation["messages"],
+        [event.model_dump() for event in events],
+    )
+    return ChatResponse(
+        text=answer_message["content"],
+        reasoning=answer_message["reasoning"],
+        model=TACCClient().model,
+        conversation_id=conversation_id,
+        events=events,
+    )
 
 
 @app.get("/api/conversations", response_model=list[ConversationSummary])

@@ -29,7 +29,9 @@ def _travel_history_node(state: CoordinatorState) -> CoordinatorState:
 
 def _search_stays_node(state: CoordinatorState) -> CoordinatorState:
     """Run Agent 1 and place accommodation candidates in graph state."""
-    return {"stays": search_stays(state["request"])}
+    request = state["request"]
+    excluded = state.get("visited", []) if request.avoid_visited else []
+    return {"stays": search_stays(request, excluded_locations=excluded)}
 
 
 def _coordinate_node(state: CoordinatorState) -> CoordinatorState:
@@ -43,6 +45,7 @@ def _coordinate_node(state: CoordinatorState) -> CoordinatorState:
     origin = request.origin or request.destination
     stay_loc = stays[0].location if stays else request.destination
     transport = estimate_transport(request, origin, stay_loc)
+    nights = max(request.days or 1, 1)
 
     # Optional LLM nudge via TACC (stub-safe)
     _ = tacc.complete(
@@ -57,7 +60,11 @@ def _coordinate_node(state: CoordinatorState) -> CoordinatorState:
         stays=stays,
         transports=[transport],
         pois=[],  # Coordinator owns POI for MVP
-        estimated_cost=(stays[0].nightly_cost if stays else 0) or 0,
+        estimated_cost=(
+            ((stays[0].nightly_cost or 0) * nights) + (transport.cost or 0)
+            if stays
+            else (transport.cost or 0)
+        ),
     )
     notes = []
     if settings.baseline_a:
