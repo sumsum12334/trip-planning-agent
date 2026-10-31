@@ -13,12 +13,47 @@
   behavior, uncertainty handling, clarification guidance, Markdown formatting,
   and hidden chain-of-thought boundaries consistent across chat and agents.
 
+## Engineering standards
+
+- Keep changes incremental and traceable. Prefer one focused commit per
+  feature or behavior change, with tests and documentation updated in the
+  same commit when they are directly related.
+- Preserve the application boundaries: FastAPI owns HTTP contracts and
+  streaming, agent modules own domain behavior, `TACCClient` owns the
+  OpenAI-compatible model protocol, `ConversationStore` owns chat persistence,
+  and React owns presentation and user interaction.
+- Treat tool calls as typed workflow events. Persist tool arguments, results,
+  errors, pending questions, and user selections; never infer durable state
+  from display text alone.
+- User questions must be resumable: validate the conversation and selected
+  option server-side, disable duplicate submissions in the UI, preserve a
+  retryable pending state after continuation failures, and mark the question
+  answered only after successful model continuation.
+- Structured UI tools such as `display_trip_plan` must validate their payloads
+  before emitting events. Render structured data in dedicated components rather
+  than relying on model-formatted prose.
+- Keep streaming behavior observable without exposing private chain-of-thought.
+  Emit concise lifecycle, tool, retry, and failure events; label local stubs,
+  estimates, and unavailable integrations explicitly.
+- For frontend changes, verify both the production Vite build and the
+  responsive layout. Keep pending input, status, retry, and error states
+  understandable without relying on the Live workflow panel.
+- For Python changes, run syntax compilation and a focused runtime or
+  persistence check covering the changed behavior. Do not claim validation
+  that was not actually run.
+
 ## Development
 
 - Prefer small, typed Python changes that follow the existing Pydantic and FastAPI patterns.
 - Keep browser UI behavior usable on narrow screens and fit the available viewport without requiring a full-screen mode.
 - Update [README.md](README.md) when public endpoints, configuration, or architecture direction changes.
 - Validate Python syntax and run focused tests or API checks after changes.
+- Make the project work end-to-end: implement real, testable behavior across
+  backend, agents, persistence, streaming events, and UI rather than stopping
+  at scaffolding or mock-looking success responses.
+- Do not cheat: do not fabricate tool results, live availability, benchmark
+  outcomes, test passes, or completed work. Keep model reasoning private,
+  expose only safe workflow events, and label stubs and estimates clearly.
 - When requirements, behavior, or architecture are ambiguous, ask the user a focused clarifying question before choosing a consequential direction. Do not silently guess when multiple reasonable options exist.
 
 ## TODOs

@@ -62,11 +62,55 @@ Agent 1 (`search_stays`) are explicit graph nodes that prepare shared state
 before the coordinator node renders the itinerary. This keeps the existing
 architecture stable while future work can add explicit planning, tool, revision,
 and rendering nodes.
+
+Agent 1 currently has a deterministic, credential-free stub provider. It
+returns candidates ordered by nightly cost and filters them against the
+requested total budget divided by the requested number of nights. When
+`avoid_visited=true`, the coordinator passes Agent 4's visited places to the
+stay node as exclusions. `TOOL_STAYS_MODE=api` fails explicitly until a real
+provider is configured rather than returning an unmarked empty result.
+
+Agent 4 uses the configured SQLite `DATABASE_URL` and stores visits in the
+`travel_history` table, keyed by `TripRequest.user_id`. It returns distinct
+places in most-recent-first order and is disabled for Baseline A when
+`ENABLE_TRAVEL_HISTORY=0`. Evaluation fixtures or application code can add a
+visit through `TravelHistoryStore.record_visit`.
+Chat messages also record explicit past-visit statements, using the
+conversation ID as the memory key. For example, "I have gone to the Peak
+before" is stored as "Victoria Peak" and produces a visible travel-history
+activity event. The chat model receives `search_travel_history` as a callable
+tool and decides when to search related saved locations; travel history is not
+injected into the system prompt or user prompt.
+
 The web UI exposes agent activity (coordinator lifecycle, model request
 preparation, agent steps,
 model calls, thinking status, results, and errors) without displaying private
 chain-of-thought. "Thinking" is represented by safe execution status rather
 than hidden model reasoning.
+
+The UI also includes a Travel history page. Entries store country, city, and
+visited location, and can be added or removed manually. Chat activity renders
+safe workflow/tool events such as travel-history lookup and memory updates;
+private chain-of-thought is never used as an activity event.
+
+The chat workflow also provides an `ask_user_question` tool. When the model
+needs a planning decision, it can return a structured question with two to six
+options; the UI renders selectable options instead of requiring the model to
+print a question list. Tool arguments and results are persisted in the
+conversation events. The Live workflow is collapsed by default to keep the
+chat compact; expand it to inspect the ordered tool calls and saved results.
+Selecting an option resumes the same model tool session through
+`POST /api/chat/question`; it is not sent as an ordinary chat message.
+The question is shown above the chat while waiting, and a failed continuation
+keeps the pending choice available for retry instead of marking it answered.
+The `display_trip_plan` tool provides structured destination, day, activity,
+budget, and note data that the UI renders as a visual itinerary card.
+
+Travel history API endpoints:
+
+- `GET /api/travel-history?user_id=...`
+- `POST /api/travel-history`
+- `DELETE /api/travel-history/{entry_id}?user_id=...`
 
 Assistant responses render GitHub-flavored Markdown, including headings, lists,
 links, tables, inline code, and fenced code blocks. User messages remain plain
