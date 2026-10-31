@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -59,6 +59,7 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=12000)
     conversation: list[dict[str, str]] = Field(default_factory=list)
     conversation_id: Optional[str] = None
+    user_id: str = Field(default="local-user", min_length=1, max_length=200)
 
 
 class ChatEvent(BaseModel):
@@ -66,10 +67,12 @@ class ChatEvent(BaseModel):
     label: str
     detail: Optional[str] = None
     status: str = "completed"
+    data: dict[str, Any] = Field(default_factory=dict)
 
 
 class ChatResponse(BaseModel):
     text: str
+    reasoning: str = ""
     stub: bool = False
     model: str
     conversation_id: str
@@ -102,3 +105,19 @@ class ModelSettingsResponse(BaseModel):
 class WebSearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=500)
     limit: int = Field(default=5, ge=1, le=10)
+
+
+class TravelHistoryEntry(BaseModel):
+    id: int
+    user_id: str
+    country: Optional[str] = None
+    city: Optional[str] = None
+    location: str
+    visited_at: str
+
+
+class TravelHistoryCreate(BaseModel):
+    user_id: str = Field(default="local-user", min_length=1, max_length=200)
+    country: Optional[str] = Field(default=None, max_length=120)
+    city: Optional[str] = Field(default=None, max_length=120)
+    location: str = Field(min_length=1, max_length=240)
