@@ -12,9 +12,14 @@ from uuid import uuid4
 
 
 def _database_path(database_url: str) -> Path:
-    if not database_url.startswith("sqlite:///"):
-        raise ValueError("Conversation storage currently requires a SQLite DATABASE_URL.")
-    return Path(database_url.removeprefix("sqlite:///"))
+    """Resolve the conversation SQLite file.
+
+    Chat still uses SQLite. When DATABASE_URL points at Postgres (travel
+    history), conversations fall back to `./data/conversations.sqlite`.
+    """
+    if database_url.startswith("sqlite:///"):
+        return Path(database_url.removeprefix("sqlite:///"))
+    return Path("./data/conversations.sqlite")
 
 
 class ConversationStore:

@@ -24,7 +24,7 @@ Frontend  ──HTTP──►  Backend (FastAPI)
    Search Stays      Estimate Transport Travel History
          │               │                   │
          ▼               ▼                   ▼
-   stay search       maps / distance    SQLite / memory
+   stay search       maps / distance    SQLite|Postgres
    (stub|api)        (stub|api)         (DATABASE_URL)
          │               │                   │
          └───────────────┴───────────────────┘
@@ -69,11 +69,12 @@ Agent 1 uses the curated stub catalog in `agents/search_stays/tools.py`
 Agent 4 when `avoid_visited=true`. Direct probe: `POST /agents/search_stays`.
 `TOOL_STAYS_MODE=api` fails explicitly until a real provider is configured.
 
-Agent 4 uses the configured SQLite `DATABASE_URL` and stores visits in the
-`travel_history` table, keyed by `TripRequest.user_id`. It returns distinct
-places in most-recent-first order and is disabled for Baseline A when
-`ENABLE_TRAVEL_HISTORY=0`. Evaluation fixtures or application code can add a
-visit through `TravelHistoryStore.record_visit`.
+Agent 4 uses `DATABASE_URL` (SQLite by default, or Postgres) and stores
+visits in the `travel_history` table, keyed by `TripRequest.user_id`. It
+returns distinct places in most-recent-first order and is disabled for Baseline A
+when `ENABLE_TRAVEL_HISTORY=0`. Evaluation fixtures or application code can add a
+visit through `TravelHistoryStore.record_visit`. Chat conversations remain on
+SQLite even when travel history points at Postgres.
 Chat messages also record explicit past-visit statements, using the
 conversation ID as the memory key. For example, "I have gone to the Peak
 before" is stored as "Victoria Peak" and produces a visible travel-history
@@ -205,11 +206,24 @@ docker compose up --build
 ```
 
 The compose file bind-mounts the local `./data` folder to `/app/data`, so
-SQLite conversations and travel-history data remain on the host and survive
-container recreation. Open http://localhost:8000/. Docker is only for local
-development and is not the TACC deployment mechanism.
+SQLite conversations (and SQLite travel-history when that is the backend) remain
+on the host and survive container recreation. Open http://localhost:8000/.
+Docker is only for local development and is not the TACC deployment mechanism.
 The optional `QWEN_BASE_URL` can point to a running course service, or remain
 blank to use local stub responses.
+
+Optional Postgres for Agent 4 travel history (same compose file):
+
+```powershell
+docker compose up -d postgres
+pip install ".[db]"
+# then in .env:
+# DATABASE_URL=postgresql://trip:trip@localhost:5432/travel_history
+```
+
+Credentials match `.env.example` (`trip` / `trip` / `travel_history`). Stop
+only Postgres with `docker compose stop postgres`; `docker compose down` keeps
+the `pgdata` volume unless you add `-v`.
 
 Useful checks from another PowerShell window:
 
@@ -228,7 +242,7 @@ errors.
 | `QWEN_BASE_URL` / `QWEN_MODEL` / `QWEN_API_KEY` | Course Qwen OpenAI-compatible endpoint, model, and API key |
 | `ENABLE_TRAVEL_HISTORY` | `1` = proposed (Agent1–4); `0` = Baseline A (Agent1–3) |
 | `TOOL_STAYS_MODE` / `TOOL_MAPS_MODE` | `stub` or `api` |
-| `DATABASE_URL` | Default SQLite under `./data/` |
+| `DATABASE_URL` | Travel history DB: default `sqlite:///./data/travel_history.sqlite`; Postgres via `postgresql://trip:trip@localhost:5432/travel_history` (install `.[db]`, `docker compose up -d postgres`). Chat stays on SQLite. |
 | `LANGFUSE_*` | Optional observability (`LANGFUSE_ENABLED=1`) |
 
 UI is not hosted on TACC; only the backend calls the course model-serving endpoint (request → queue → worker).

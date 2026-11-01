@@ -14,3 +14,27 @@ services:
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+
+  # Optional local Postgres for Agent 4 travel history.
+  # Start with: docker compose up -d postgres
+  # Then set DATABASE_URL=postgresql://trip:trip@localhost:5432/travel_history
+  # and pip install '.[db]' (or psycopg[binary]). Chat conversations stay on SQLite.
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: trip
+      POSTGRES_PASSWORD: trip
+      POSTGRES_DB: travel_history
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trip -d travel_history"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:
