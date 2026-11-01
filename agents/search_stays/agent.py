@@ -1,39 +1,58 @@
-"""Agent 1 - search_stays: accommodation under budget / location."""
+"""Agent 1 - search_stays: accommodation under budget and location."""
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
-from agents.search_stays.tools import nightly_budget_cap, search_stays
 from config.settings import get_settings
 from shared.schemas import StayCandidate, TripRequest
 
 
-def run(request: TripRequest) -> list[StayCandidate]:
-    """Run stay search for a trip request via the stays tool."""
+_STUB_STAYS = (
+    ("Harbour View Guesthouse", 55.0),
+    ("Central Market Hotel", 85.0),
+    ("Summit Boutique Hotel", 120.0),
+)
+
+
+def run(
+    request: TripRequest,
+    excluded_locations: Iterable[str] = (),
+) -> list[StayCandidate]:
+    """Return stay candidates, excluding locations supplied by travel history.
+
+    The stub is deliberately deterministic so the coordinator and evaluation
+    workflow can be exercised without reservation credentials.
+    """
     settings = get_settings()
-    mode = settings.tool_stays_mode
-    cap = nightly_budget_cap(request.budget, request.days)
+    if settings.tool_stays_mode != "stub":
+        raise RuntimeError(
+            "TOOL_STAYS_MODE=api is not implemented; use stub until a stay provider is configured."
+        )
 
-    stays = search_stays(
-        destination=request.destination,
-        budget=request.budget,
-        days=request.days,
-        interests=request.interests,
-    )
-
-    enriched: list[StayCandidate] = []
-    for stay in stays:
-        note_parts = [
-            "TOOL_STAYS_MODE=%s" % mode,
-            "filter: destination=%r" % request.destination,
-        ]
-        if cap is not None:
-            note_parts.append("nightly_cap=%.2f" % cap)
-        if stay.notes:
-            note_parts.append(stay.notes)
-        enriched.append(stay.model_copy(update={"notes": "; ".join(note_parts)}))
-    return enriched
+    excluded = {place.strip().casefold() for place in excluded_locations if place.strip()}
+    nights = max(request.days or 3, 1)
+    nightly_budget = request.budget / nights if request.budget is not None else None
+    candidates = []
+    for name, nightly_cost in _STUB_STAYS:
+        if nightly_budget is not None and nightly_cost > nightly_budget:
+            continue
+        if any(
+            excluded_place in name.casefold() or excluded_place in request.destination.casefold()
+            for excluded_place in excluded
+        ):
+            continue
+        candidates.append(
+            StayCandidate(
+                name=name,
+                location=request.destination,
+                nightly_cost=nightly_cost,
+                source_url="https://example.com/stay/stub",
+                notes="deterministic local candidate; availability requires confirmation",
+            )
+        )
+    return candidates
 
 
 def health() -> dict[str, Any]:
@@ -41,5 +60,5 @@ def health() -> dict[str, Any]:
     return {
         "agent": "search_stays",
         "tool_mode": s.tool_stays_mode,
-        "catalog": "stub" if s.tool_stays_mode == "stub" else "api-pending",
+        "provider_configured": s.tool_stays_mode == "stub",
     }
