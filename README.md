@@ -1,4 +1,4 @@
-﻿# trip-planning-agent
+# trip-planning-agent
 CSIT6000V Course Project
 
 ## Architecture
@@ -24,7 +24,7 @@ Frontend  ──HTTP──►  Backend (FastAPI)
    Search Stays      Estimate Transport Travel History
          │               │                   │
          ▼               ▼                   ▼
-   stay search       maps / distance    SQLite / memory
+   stay search       maps / distance    SQLite|Postgres
    (stub|api)        (stub|api)         (DATABASE_URL)
          │               │                   │
          └───────────────┴───────────────────┘
@@ -63,18 +63,32 @@ before the coordinator node renders the itinerary. This keeps the existing
 architecture stable while future work can add explicit planning, tool, revision,
 and rendering nodes.
 
-Agent 1 currently has a deterministic, credential-free stub provider. It
-returns candidates ordered by nightly cost and filters them against the
-requested total budget divided by the requested number of nights. When
-`avoid_visited=true`, the coordinator passes Agent 4's visited places to the
-stay node as exclusions. `TOOL_STAYS_MODE=api` fails explicitly until a real
-provider is configured rather than returning an unmarked empty result.
+Agent 1 uses the curated stub catalog in `agents/search_stays/tools.py`
+(city match + generic fallback, ordered by nightly cost under budget/nights).
+`run(..., excluded_locations=...)` filters out name/location overlaps from
+Agent 4 when `avoid_visited=true`. Direct probe: `POST /agents/search_stays`.
+`TOOL_STAYS_MODE=api` fails explicitly until a real provider is configured.
 
-Agent 4 uses the configured SQLite `DATABASE_URL` and stores visits in the
-`travel_history` table, keyed by `TripRequest.user_id`. It returns distinct
-places in most-recent-first order and is disabled for Baseline A when
+Agent 4 uses `DATABASE_URL` and stores visits in the `travel_history`
+table, keyed by `TripRequest.user_id`. It returns distinct places in
+most-recent-first order and is disabled for Baseline A when
 `ENABLE_TRAVEL_HISTORY=0`. Evaluation fixtures or application code can add a
-visit through `TravelHistoryStore.record_visit`.
+visit through `TravelHistoryStore.record_visit`. Chat conversations remain on
+local SQLite even when travel history points at Postgres.
+
+#### Travel history database (`DATABASE_URL`)
+
+| Backend | When to use | Connection |
+|---------|-------------|------------|
+| **SQLite (default)** | Local without Docker/cloud | `DATABASE_URL=sqlite:///./data/travel_history.sqlite` |
+| **Postgres (Docker)** | Optional local Postgres | `docker compose up -d postgres`, then `DATABASE_URL=postgresql://trip:trip@localhost:5432/travel_history` |
+| **Postgres (Neon)** | Course/cloud shared DB | Pooled `DATABASE_URL` from `.env` after `neon init` / `neon deploy` |
+
+**Driver:** install once with `pip install ".[db]"` (pulls `psycopg[binary]`), or `pip install "psycopg[binary]"`.
+
+**Neon:** this repo can be linked with Neon CLI (`neon init` / `neon deploy`). The app reads the pooled `DATABASE_URL` from `.env` (also `DATABASE_URL_UNPOOLED` and `NEON_BRANCH`). Refresh credentials with `neon env pull` (or re-run deploy). `.env` is gitignored — never commit real URLs or passwords; use placeholders in docs only.
+
+**Health check:** `GET /health` → `agents.travel_history.storage` is `sqlite` or `postgres` (also reports a redacted connection summary).
 Chat messages also record explicit past-visit statements, using the
 conversation ID as the memory key. For example, "I have gone to the Peak
 before" is stored as "Victoria Peak" and produces a visible travel-history
@@ -206,11 +220,28 @@ docker compose up --build
 ```
 
 The compose file bind-mounts the local `./data` folder to `/app/data`, so
-SQLite conversations and travel-history data remain on the host and survive
-container recreation. Open http://localhost:8000/. Docker is only for local
-development and is not the TACC deployment mechanism.
+SQLite conversations (and SQLite travel-history when that is the backend) remain
+on the host and survive container recreation. Open http://localhost:8000/.
+Docker is only for local development and is not the TACC deployment mechanism.
 The optional `QWEN_BASE_URL` can point to a running course service, or remain
 blank to use local stub responses.
+
+Optional local Postgres for Agent 4 travel history (same compose file):
+
+```powershell
+docker compose up -d postgres
+pip install ".[db]"
+# then in .env:
+# DATABASE_URL=postgresql://trip:trip@localhost:5432/travel_history
+```
+
+Credentials match `.env.example` (`trip` / `trip` / `travel_history`). Stop
+only Postgres with `docker compose stop postgres`; `docker compose down` keeps
+the `pgdata` volume unless you add `-v`.
+
+For cloud Postgres (Neon), keep Docker Postgres off and set `DATABASE_URL` to
+the pooled connection string in `.env` (see Travel history database above). Do
+not put real Neon passwords in the README or git.
 
 Useful checks from another PowerShell window:
 
@@ -229,7 +260,9 @@ errors.
 | `QWEN_BASE_URL` / `QWEN_MODEL` / `QWEN_API_KEY` | Course Qwen OpenAI-compatible endpoint, model, and API key |
 | `ENABLE_TRAVEL_HISTORY` | `1` = proposed (Agent1–4); `0` = Baseline A (Agent1–3) |
 | `TOOL_STAYS_MODE` / `TOOL_MAPS_MODE` | `stub` or `api` |
-| `DATABASE_URL` | Default SQLite under `./data/` |
+| `DATABASE_URL` | Travel history DB. Default SQLite: `sqlite:///./data/travel_history.sqlite`. Local Docker Postgres: `postgresql://trip:trip@localhost:5432/travel_history` (`pip install ".[db]"`, `docker compose up -d postgres`). Neon: pooled URL from `.env` after `neon init` / `neon deploy` (refresh with `neon env pull`). Chat stays on SQLite. `GET /health` → `agents.travel_history.storage` = `sqlite` \| `postgres`. |
+| `DATABASE_URL_UNPOOLED` | Optional Neon direct URL (migrations/admin). App runtime uses pooled `DATABASE_URL`. |
+| `NEON_BRANCH` | Optional Neon branch name (e.g. `production`) when using Neon. |
 | `LANGFUSE_*` | Optional observability (`LANGFUSE_ENABLED=1`) |
 
 UI is not hosted on TACC; only the backend calls the course model-serving endpoint (request → queue → worker).
