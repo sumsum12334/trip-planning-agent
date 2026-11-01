@@ -9,6 +9,11 @@ from typing import Any, Optional
 import httpx
 
 from config.settings import Settings, get_model_config, get_settings
+from trip_planning_agent.observability import (
+    finish_generation,
+    model_generation,
+    update_generation,
+)
 
 
 class TACCClient:
@@ -36,6 +41,8 @@ class TACCClient:
         system: Optional[str] = None,
         extra: Optional[dict[str, Any]] = None,
         on_event: Callable[[dict[str, Any]], None] | None = None,
+        session_id: str | None = None,
+        trace_context: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Submit one chat completion, or return a useful local stub."""
         if not self.configured:
@@ -86,17 +93,37 @@ class TACCClient:
                     "status": "running",
                 }
             )
-        with httpx.Client(timeout=300.0) as client:
-            response = client.post(
-                self.base_url.rstrip("/") + "/chat/completions",
-                headers=headers,
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
+        with model_generation(
+            name="tacc.chat_completion",
+            model=self.model,
+            prompt=prompt,
+            system=system,
+            input=messages,
+            session_id=session_id,
+            metadata={"stream": False},
+            trace_context=trace_context,
+            settings=self.settings,
+        ) as generation:
+            try:
+                with httpx.Client(timeout=300.0) as client:
+                    response = client.post(
+                        self.base_url.rstrip("/") + "/chat/completions",
+                        headers=headers,
+                        json=payload,
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                text = data["choices"][0]["message"]["content"]
+                finish_generation(generation, output=text)
+            except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
+                finish_generation(
+                    generation,
+                    output={"error": str(error)},
+                    error=error,
+                )
+                raise
         if on_event:
             on_event({"type": "model", "label": "Model response received", "status": "completed"})
-        text = data["choices"][0]["message"]["content"]
         return {"ok": True, "stub": False, "text": text, "raw": data}
 
     def stream(
@@ -109,6 +136,8 @@ class TACCClient:
         tool_executor: Callable[[str, dict[str, Any]], Any] | None = None,
         initial_messages: list[dict[str, Any]] | None = None,
         on_pause: Callable[[list[dict[str, Any]], dict[str, Any]], None] | None = None,
+        session_id: str | None = None,
+        trace_context: dict[str, str] | None = None,
     ) -> Iterator[dict[str, str]]:
         """Yield reasoning and answer deltas from the OpenAI-compatible SSE endpoint."""
         if not self.configured:
@@ -151,54 +180,90 @@ class TACCClient:
                 if tools:
                     payload["tools"] = tools
                 tool_calls: dict[int, dict[str, Any]] = {}
-                with client.stream(
-                    "POST",
-                    self.base_url.rstrip("/") + "/chat/completions",
-                    headers=headers,
-                    json=payload,
-                ) as response:
-                    response.raise_for_status()
-                    for line in response.iter_lines():
-                        if not line.startswith("data:"):
-                            continue
-                        data = line[5:].strip()
-                        if data == "[DONE]":
-                            break
-                        chunk = json.loads(data)
-                        choices = chunk.get("choices", [])
-                        if not choices:
-                            continue
-                        choice = choices[0]
-                        delta = choice.get("delta") or {}
-                        message = choice.get("message") or {}
-                        reasoning = (
-                            delta.get("reasoning_content")
-                            or delta.get("reasoning")
-                            or message.get("reasoning_content")
-                            or message.get("reasoning")
-                            or choice.get("reasoning_content")
-                            or choice.get("reasoning")
+                streamed_text: list[str] = []
+                with model_generation(
+                    name="tacc.chat_completion_stream",
+                    model=self.model,
+                    prompt=prompt,
+                    system=system,
+                    input=messages,
+                    session_id=session_id,
+                    metadata={"stream": True, "message_count": len(messages)},
+                    trace_context=trace_context,
+                    settings=self.settings,
+                ) as generation:
+                    try:
+                        with client.stream(
+                            "POST",
+                            self.base_url.rstrip("/") + "/chat/completions",
+                            headers=headers,
+                            json=payload,
+                        ) as response:
+                            response.raise_for_status()
+                            for line in response.iter_lines():
+                                if not line.startswith("data:"):
+                                    continue
+                                data = line[5:].strip()
+                                if data == "[DONE]":
+                                    break
+                                chunk = json.loads(data)
+                                choices = chunk.get("choices", [])
+                                if not choices:
+                                    continue
+                                choice = choices[0]
+                                delta = choice.get("delta") or {}
+                                message = choice.get("message") or {}
+                                reasoning = (
+                                    delta.get("reasoning_content")
+                                    or delta.get("reasoning")
+                                    or message.get("reasoning_content")
+                                    or message.get("reasoning")
+                                    or choice.get("reasoning_content")
+                                    or choice.get("reasoning")
+                                )
+                                if reasoning:
+                                    yield {"kind": "reasoning", "text": self._chunk_text(reasoning)}
+                                content = (
+                                    delta.get("content")
+                                    or delta.get("text")
+                                    or message.get("content")
+                                    or choice.get("text")
+                                    or choice.get("content")
+                                )
+                                if content:
+                                    text = self._chunk_text(content)
+                                    streamed_text.append(text)
+                                    update_generation(
+                                        generation,
+                                        output="".join(streamed_text),
+                                    )
+                                    yield {"kind": "content", "text": text}
+                                for call in delta.get("tool_calls") or []:
+                                    index = call.get("index", 0)
+                                    current = tool_calls.setdefault(
+                                        index, {"id": "", "name": "", "arguments": ""}
+                                    )
+                                    current["id"] += call.get("id") or ""
+                                    function = call.get("function") or {}
+                                    current["name"] += function.get("name") or ""
+                                    current["arguments"] += function.get("arguments") or ""
+                        output_text = "".join(streamed_text)
+                        if output_text:
+                            generation_output: Any = output_text
+                        elif tool_calls:
+                            generation_output = {
+                                "tool_calls": self._tool_call_summary(tool_calls)
+                            }
+                        else:
+                            generation_output = {"text": ""}
+                        finish_generation(generation, output=generation_output)
+                    except (httpx.HTTPError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+                        finish_generation(
+                            generation,
+                            output="".join(streamed_text) or {"error": str(error)},
+                            error=error,
                         )
-                        if reasoning:
-                            yield {"kind": "reasoning", "text": self._chunk_text(reasoning)}
-                        content = (
-                            delta.get("content")
-                            or delta.get("text")
-                            or message.get("content")
-                            or choice.get("text")
-                            or choice.get("content")
-                        )
-                        if content:
-                            yield {"kind": "content", "text": self._chunk_text(content)}
-                        for call in delta.get("tool_calls") or []:
-                            index = call.get("index", 0)
-                            current = tool_calls.setdefault(
-                                index, {"id": "", "name": "", "arguments": ""}
-                            )
-                            current["id"] += call.get("id") or ""
-                            function = call.get("function") or {}
-                            current["name"] += function.get("name") or ""
-                            current["arguments"] += function.get("arguments") or ""
+                        raise
                 if not tool_calls:
                     break
                 if not tool_executor:
@@ -270,6 +335,24 @@ class TACCClient:
                         return
         if on_event:
             on_event({"type": "model", "label": "Model response received", "status": "completed"})
+
+    @staticmethod
+    def _tool_call_summary(tool_calls: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
+        """Return a trace-safe summary of tool calls without private reasoning."""
+        summary: list[dict[str, Any]] = []
+        for call in tool_calls.values():
+            arguments: Any = call.get("arguments") or ""
+            try:
+                arguments = json.loads(arguments or "{}")
+            except (json.JSONDecodeError, TypeError):
+                pass
+            summary.append(
+                {
+                    "name": call.get("name") or "",
+                    "arguments": arguments,
+                }
+            )
+        return summary
 
     @staticmethod
     def _chunk_text(value: Any) -> str:

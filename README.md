@@ -230,7 +230,25 @@ errors.
 | `ENABLE_TRAVEL_HISTORY` | `1` = proposed (Agent1–4); `0` = Baseline A (Agent1–3) |
 | `TOOL_STAYS_MODE` / `TOOL_MAPS_MODE` | `stub` or `api` |
 | `DATABASE_URL` | Default SQLite under `./data/` |
-| `LANGFUSE_*` | Optional observability (`LANGFUSE_ENABLED=1`) |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST` | Langfuse 5.x credentials and host |
+| `LANGFUSE_ENABLED` | Set to `1` to emit flushed model-generation traces |
+
+Install the Langfuse extra before starting the backend:
+
+```powershell
+pip install -e ".[langfuse]"
+```
+
+Each chat turn creates one Langfuse trace (`chat.turn`, or `chat.question` for
+a resumed clarification) with the Qwen requests recorded as child generations.
+Tool-call rounds stay in the same trace and record the requested tool names and
+arguments as their output, so multi-step turns no longer appear as separate
+traces. `/plan` requests create a `plan.request` trace around the coordinator
+workflow. Chat traces use the application `conversation_id` as their Langfuse
+session ID, so all turns in one conversation can be reviewed together.
+Standalone `/plan` requests receive a generated session ID. Streaming requests
+record the final answer text, while private reasoning content is not sent to
+Langfuse. Tracking errors are logged without changing the model request result.
 
 UI is not hosted on TACC; only the backend calls the course model-serving endpoint (request → queue → worker).
 

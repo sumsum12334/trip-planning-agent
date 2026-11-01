@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import queue
 import threading
+import uuid
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -42,6 +43,11 @@ from shared.schemas import (
 from shared.prompts import TRIP_PLANNING_SYSTEM_PROMPT
 from trip_planning_agent.tacc_client import TACCClient
 from trip_planning_agent.conversation_store import ConversationStore
+from trip_planning_agent.observability import (
+    end_trace,
+    start_trace,
+    trace_context_for,
+)
 
 app = FastAPI(title="trip-planning-agent", version="0.1.0")
 app.add_middleware(
@@ -74,7 +80,7 @@ def health() -> dict:
 
 @app.post("/plan", response_model=Itinerary)
 def plan(request: TripRequest) -> Itinerary:
-    return coordinate(request)
+    return coordinate(request, session_id=f"plan-{uuid.uuid4()}")
 
 
 @app.get("/api/travel-history", response_model=list[TravelHistoryEntry])
@@ -193,15 +199,28 @@ def chat(request: ChatRequest) -> ChatResponse:
                 status="completed",
             )
         )
+    client = TACCClient()
+    trace = start_trace(
+        name="chat.turn",
+        input={
+            "message": request.message,
+            "history_turns": max(len(conversation) - 1, 0),
+        },
+        session_id=conversation_id,
+        metadata={"stream": False, "model": client.model},
+    )
     try:
-        result = TACCClient().complete(
+        result = client.complete(
             prompt,
             system=TRIP_PLANNING_SYSTEM_PROMPT,
             on_event=lambda event: events.append(ChatEvent(**event)),
+            session_id=conversation_id,
+            trace_context=trace_context_for(trace),
         )
         if not result.get("ok") and not result.get("stub"):
             raise ValueError("The model service returned an invalid response.")
     except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
+        end_trace(trace, output={"error": str(error)}, error=error)
         failure_event = ChatEvent(
             type="model",
             label="Model request failed",
@@ -221,7 +240,7 @@ def chat(request: ChatRequest) -> ChatResponse:
                 "conversation_id": conversation_id,
             },
         ) from error
-    client = TACCClient()
+    end_trace(trace, output=str(result["text"]))
     conversation.extend(
         [{"role": "assistant", "content": str(result["text"])}]
     )
@@ -380,6 +399,17 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
         yield emit(ChatEvent(type="model", label="Model request queued", status="running"))
         text_parts: list[str] = []
         reasoning_parts: list[str] = []
+        client = TACCClient()
+        trace = start_trace(
+            name="chat.turn",
+            input={
+                "message": request.message,
+                "history_turns": max(len(conversation) - 1, 0),
+            },
+            session_id=conversation_id,
+            metadata={"stream": True, "model": client.model},
+        )
+        trace_finished = False
         stream_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         pending_question: dict[str, Any] | None = None
 
@@ -388,13 +418,15 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
 
         def run_model() -> None:
             try:
-                for delta in TACCClient().stream(
+                for delta in client.stream(
                     prompt,
                     system=TRIP_PLANNING_SYSTEM_PROMPT,
                     on_event=lambda event: stream_queue.put(("event", event)),
                     tools=history_tools,
                     tool_executor=execute_history_tool,
                     on_pause=save_pause,
+                    session_id=conversation_id,
+                    trace_context=trace_context_for(trace),
                 ):
                     stream_queue.put(("delta", delta))
                 stream_queue.put(("done", None))
@@ -436,7 +468,6 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                     status="completed",
                 )
             )
-            client = TACCClient()
             assistant_message = {"role": "assistant", "content": "".join(text_parts)}
             if reasoning_parts:
                 assistant_message["reasoning"] = "".join(reasoning_parts)
@@ -450,10 +481,27 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                 [event.model_dump() for event in activity],
             )
             final_text = "".join(text_parts)
+            if final_text:
+                trace_output: Any = final_text
+            elif pending_question is not None:
+                trace_output = {
+                    "status": "awaiting_user",
+                    "question": pending_question.get("question", ""),
+                }
+            else:
+                trace_output = {"text": ""}
+            end_trace(trace, output=trace_output)
+            trace_finished = True
             yield (
                 f"data: {json.dumps({'kind': 'done', 'text': final_text, 'reasoning': ''.join(reasoning_parts), 'model': client.model, 'stub': not client.configured, 'conversation_id': conversation_id, 'pending_question': pending_question, 'events': [event.model_dump() for event in activity]})}\n\n"
             )
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
+            end_trace(
+                trace,
+                output="".join(text_parts) or {"error": str(error)},
+                error=error,
+            )
+            trace_finished = True
             failure = ChatEvent(
                 type="model",
                 label="Model request failed",
@@ -482,6 +530,12 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                 + [failure.model_dump(), agent_failure.model_dump()],
             )
             yield f"data: {json.dumps({'kind': 'error', 'message': 'The model request failed. The user message was saved and can be retried.', 'conversation_id': conversation_id, 'events': [failure.model_dump(), agent_failure.model_dump()]})}\n\n"
+        finally:
+            if not trace_finished:
+                end_trace(
+                    trace,
+                    output="".join(text_parts) or {"text": ""},
+                )
 
     return StreamingResponse(events(), media_type="text/event-stream")
 
@@ -586,6 +640,17 @@ def answer_chat_question(request: ChatRequest) -> ChatResponse:
     text_parts: list[str] = []
     reasoning_parts: list[str] = []
     next_pending: dict[str, Any] | None = None
+    client = TACCClient()
+    trace = start_trace(
+        name="chat.question",
+        input={
+            "answer": request.message,
+            "question": pending["question"],
+            "conversation_id": request.conversation_id,
+        },
+        session_id=request.conversation_id,
+        metadata={"stream": True, "model": client.model, "continuation": True},
+    )
 
     def save_pause(next_messages: list[dict[str, Any]], result: dict[str, Any]) -> None:
         nonlocal next_pending
@@ -603,13 +668,15 @@ def answer_chat_question(request: ChatRequest) -> ChatResponse:
         text_parts.clear()
         reasoning_parts.clear()
         try:
-            for delta in TACCClient().stream(
+            for delta in client.stream(
                 "",
                 tools=tools,
                 tool_executor=execute_tool,
                 initial_messages=messages,
                 on_event=lambda event: events.append(ChatEvent(**event)),
                 on_pause=save_pause,
+                session_id=request.conversation_id,
+                trace_context=trace_context_for(trace),
             ):
                 if delta["kind"] == "reasoning":
                     reasoning_parts.append(delta["text"])
@@ -630,6 +697,11 @@ def answer_chat_question(request: ChatRequest) -> ChatResponse:
                 )
     if last_error is not None:
         error_text = str(last_error) or last_error.__class__.__name__
+        end_trace(
+            trace,
+            output="".join(text_parts) or {"error": error_text},
+            error=last_error,
+        )
         failure = ChatEvent(
             type="model",
             label="Continuation failed; answer can be retried",
@@ -652,6 +724,15 @@ def answer_chat_question(request: ChatRequest) -> ChatResponse:
                 "retryable": True,
             },
         ) from last_error
+
+    if next_pending is not None:
+        trace_output: Any = {
+            "status": "awaiting_user",
+            "question": next_pending.get("question", ""),
+        }
+    else:
+        trace_output = "".join(text_parts) or {"text": ""}
+    end_trace(trace, output=trace_output)
 
     if next_pending is None:
         store.clear_pending_question(request.conversation_id)
@@ -678,7 +759,7 @@ def answer_chat_question(request: ChatRequest) -> ChatResponse:
     return ChatResponse(
         text=answer_message["content"],
         reasoning=answer_message["reasoning"],
-        model=TACCClient().model,
+        model=client.model,
         conversation_id=conversation_id,
         events=events,
     )
