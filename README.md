@@ -1,4 +1,4 @@
-﻿# trip-planning-agent
+# trip-planning-agent
 CSIT6000V Course Project
 
 ## Architecture
@@ -63,12 +63,11 @@ before the coordinator node renders the itinerary. This keeps the existing
 architecture stable while future work can add explicit planning, tool, revision,
 and rendering nodes.
 
-Agent 1 currently has a deterministic, credential-free stub provider. It
-returns candidates ordered by nightly cost and filters them against the
-requested total budget divided by the requested number of nights. When
-`avoid_visited=true`, the coordinator passes Agent 4's visited places to the
-stay node as exclusions. `TOOL_STAYS_MODE=api` fails explicitly until a real
-provider is configured rather than returning an unmarked empty result.
+Agent 1 uses the curated stub catalog in `agents/search_stays/tools.py`
+(city match + generic fallback, ordered by nightly cost under budget/nights).
+`run(..., excluded_locations=...)` filters out name/location overlaps from
+Agent 4 when `avoid_visited=true`. Direct probe: `POST /agents/search_stays`.
+`TOOL_STAYS_MODE=api` fails explicitly until a real provider is configured.
 
 Agent 4 uses the configured SQLite `DATABASE_URL` and stores visits in the
 `travel_history` table, keyed by `TripRequest.user_id`. It returns distinct

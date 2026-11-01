@@ -8,51 +8,42 @@ from typing import Any
 from config.settings import get_settings
 from shared.schemas import StayCandidate, TripRequest
 
+from . import tools
 
-_STUB_STAYS = (
-    ("Harbour View Guesthouse", 55.0),
-    ("Central Market Hotel", 85.0),
-    ("Summit Boutique Hotel", 120.0),
-)
+
+def _overlaps_excluded(stay: StayCandidate, excluded: set[str]) -> bool:
+    """True if stay name or location overlaps any excluded place (casefold)."""
+    if not excluded:
+        return False
+    name = stay.name.casefold()
+    location = stay.location.casefold()
+    return any(place in name or place in location for place in excluded)
 
 
 def run(
     request: TripRequest,
     excluded_locations: Iterable[str] = (),
 ) -> list[StayCandidate]:
-    """Return stay candidates, excluding locations supplied by travel history.
+    """Return stay candidates via tools catalog, excluding travel-history places.
 
-    The stub is deliberately deterministic so the coordinator and evaluation
-    workflow can be exercised without reservation credentials.
+    Uses TOOL_STAYS_MODE (stub catalog or future API). The coordinator passes
+    Agent 4 visited places when avoid_visited=true.
     """
     settings = get_settings()
-    if settings.tool_stays_mode != "stub":
-        raise RuntimeError(
-            "TOOL_STAYS_MODE=api is not implemented; use stub until a stay provider is configured."
-        )
+    if settings.tool_stays_mode != "stub" and settings.tool_stays_mode != "api":
+        # tools.search_stays already falls back to stub for unknown modes
+        pass
 
-    excluded = {place.strip().casefold() for place in excluded_locations if place.strip()}
-    nights = max(request.days or 3, 1)
-    nightly_budget = request.budget / nights if request.budget is not None else None
-    candidates = []
-    for name, nightly_cost in _STUB_STAYS:
-        if nightly_budget is not None and nightly_cost > nightly_budget:
-            continue
-        if any(
-            excluded_place in name.casefold() or excluded_place in request.destination.casefold()
-            for excluded_place in excluded
-        ):
-            continue
-        candidates.append(
-            StayCandidate(
-                name=name,
-                location=request.destination,
-                nightly_cost=nightly_cost,
-                source_url="https://example.com/stay/stub",
-                notes="deterministic local candidate; availability requires confirmation",
-            )
-        )
-    return candidates
+    candidates = tools.search_stays(
+        destination=request.destination,
+        budget=request.budget,
+        days=request.days,
+        interests=request.interests or None,
+    )
+    excluded = {place.strip().casefold() for place in excluded_locations if place and place.strip()}
+    if not excluded:
+        return candidates
+    return [stay for stay in candidates if not _overlaps_excluded(stay, excluded)]
 
 
 def health() -> dict[str, Any]:
@@ -61,4 +52,5 @@ def health() -> dict[str, Any]:
         "agent": "search_stays",
         "tool_mode": s.tool_stays_mode,
         "provider_configured": s.tool_stays_mode == "stub",
+        "catalog": "tools.stub" if s.tool_stays_mode == "stub" else s.tool_stays_mode,
     }

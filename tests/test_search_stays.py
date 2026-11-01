@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from agents.search_stays.agent import run
+from agents.search_stays.agent import health, run
 from agents.search_stays.tools import nightly_budget_cap, search_stays
 from shared.schemas import TripRequest
 
@@ -20,9 +20,22 @@ def test_stub_search_tokyo_respects_budget_and_returns_results():
         assert stay.nightly_cost is not None
         assert stay.nightly_cost <= cap
         assert "tokyo" in stay.location.casefold()
-        assert stay.notes and "TOOL_STAYS_MODE=stub" in stay.notes
+        assert stay.notes and "stub" in stay.notes.casefold()
     costs = [s.nightly_cost for s in stays if s.nightly_cost is not None]
     assert costs == sorted(costs)
+
+
+def test_excluded_locations_filters_name_or_location():
+    req = TripRequest(destination="Tokyo", budget=400, days=4)
+    all_stays = run(req)
+    assert all_stays
+    # Exclude by location token that appears in Tokyo Shinjuku / Shibuya / Asakusa rows
+    filtered = run(req, excluded_locations=["Shinjuku", "capsule"])
+    names = {s.name for s in filtered}
+    locations = {s.location.casefold() for s in filtered}
+    assert all("shinjuku" not in loc for loc in locations)
+    assert all("capsule" not in name.casefold() for name in names)
+    assert len(filtered) < len(all_stays)
 
 
 def test_stub_generic_fallback_for_unknown_city():
@@ -31,6 +44,14 @@ def test_stub_generic_fallback_for_unknown_city():
     assert all("generic" in s.location.casefold() for s in stays)
     cap = nightly_budget_cap(300, 3)
     assert all(s.nightly_cost is not None and s.nightly_cost <= cap for s in stays)
+
+
+def test_health_reports_stub_catalog():
+    info = health()
+    assert info["agent"] == "search_stays"
+    assert info["tool_mode"] == "stub"
+    assert info["provider_configured"] is True
+    assert "catalog" in info
 
 
 def test_api_mode_raises(monkeypatch):

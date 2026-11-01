@@ -27,6 +27,7 @@ from agents.web_search import run as web_search
 from config.settings import get_model_config, get_settings, update_model_config
 from shared.schemas import (
     ChatEvent,
+    StayCandidate,
     ChatRequest,
     ChatResponse,
     ConversationResponse,
@@ -75,6 +76,15 @@ def health() -> dict:
 @app.post("/plan", response_model=Itinerary)
 def plan(request: TripRequest) -> Itinerary:
     return coordinate(request)
+
+
+@app.post("/agents/search_stays", response_model=list[StayCandidate])
+def agent_search_stays(request: TripRequest) -> list[StayCandidate]:
+    """Direct Agent 1 stay search (stub catalog or configured provider)."""
+    from agents.search_stays.agent import run as search_stays_run
+
+    return search_stays_run(request)
+
 
 
 @app.get("/api/travel-history", response_model=list[TravelHistoryEntry])
@@ -716,3 +726,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
