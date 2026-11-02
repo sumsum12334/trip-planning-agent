@@ -446,7 +446,7 @@ function App() {
             <TravelExploreIcon fontSize="small" />
           </Box>
           <Box>
-            <Typography fontWeight={700} color="#fff" fontFamily='"Space Grotesk", sans-serif' fontSize={19}>Tripwise</Typography>
+            <Typography fontWeight={700} color="#fff" fontFamily='"Inter", system-ui, sans-serif' fontSize={19}>Tripwise</Typography>
             <Typography variant="caption" sx={{ color: "#8794b7" }}>AI travel planner</Typography>
           </Box>
         </Stack>
