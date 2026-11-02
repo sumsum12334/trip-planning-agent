@@ -82,6 +82,24 @@ export function createAppTheme(mode = "light") {
       MuiTextField: {
         defaultProps: { size: "small", fullWidth: true },
       },
+      MuiFilledInput: {
+        styleOverrides: {
+          root: {
+            borderRadius: 12,
+            overflow: "hidden",
+            "&:before, &:after": { display: "none" },
+            "&.Mui-focused": { boxShadow: "none", backgroundColor: "rgba(108,99,255,0.12)" },
+          },
+        },
+      },
+      MuiOutlinedInput: {
+        styleOverrides: {
+          root: {
+            "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderWidth: 1 },
+            "&.Mui-focused": { boxShadow: "none" },
+          },
+        },
+      },
       MuiIconButton: {
         styleOverrides: {
           root: { borderRadius: 10 },
