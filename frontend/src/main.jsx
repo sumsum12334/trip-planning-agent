@@ -1,9 +1,10 @@
-import { StrictMode, useEffect, useRef, useState } from "react";
+import { StrictMode, createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   Alert,
+  Avatar,
   Box,
   Button,
   CssBaseline,
@@ -16,18 +17,93 @@ import {
   Stack,
   TextField,
   ThemeProvider,
+  Tooltip,
   Typography,
+  useTheme,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import ChatBubbleOutlinedIcon from "@mui/icons-material/ChatBubbleOutlined";
+import DarkModeOutlinedIcon from "@mui/icons-material/DarkModeOutlined";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import HistoryEduIcon from "@mui/icons-material/HistoryEdu";
+import LightModeOutlinedIcon from "@mui/icons-material/LightModeOutlined";
 import PlaceIcon from "@mui/icons-material/Place";
 import SendIcon from "@mui/icons-material/Send";
 import SettingsIcon from "@mui/icons-material/Settings";
 import TravelExploreIcon from "@mui/icons-material/TravelExplore";
-import theme from "./theme";
+import { createAppTheme } from "./theme";
 import "./styles.css";
+
+const ColorModeContext = createContext({ mode: "light", toggleColorMode: () => {} });
+const useColorMode = () => useContext(ColorModeContext);
+
+function Markdown({ children }) {
+  return <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>;
+}
+
+function MessageBubble({ role, content, reasoning, kicker, footer }) {
+  const theme = useTheme();
+  const isUser = role === "user";
+  const isQuestion = role === "question";
+  return (
+    <Stack
+      direction={isUser ? "row-reverse" : "row"}
+      spacing={1.25}
+      sx={{ maxWidth: "min(820px, 92%)", alignSelf: isUser ? "flex-end" : "flex-start", width: "fit-content" }}
+    >
+      <Avatar
+        sx={{
+          width: 34,
+          height: 34,
+          fontSize: 12,
+          fontWeight: 700,
+          bgcolor: isUser ? "action.selected" : "primary.main",
+          color: isUser ? "text.primary" : "primary.contrastText",
+        }}
+      >
+        {isUser ? "You" : isQuestion ? "?" : "AI"}
+      </Avatar>
+      <Paper
+        sx={{
+          px: 1.75,
+          py: 1.35,
+          borderRadius: isUser ? "16px 4px 16px 16px" : "4px 16px 16px 16px",
+          bgcolor: isUser
+            ? (theme.palette.mode === "dark" ? "rgba(139,132,255,0.22)" : "rgba(108,99,255,0.12)")
+            : isQuestion
+              ? (theme.palette.mode === "dark" ? "rgba(139,132,255,0.16)" : "#f3f1ff")
+              : (theme.palette.mode === "dark" ? "rgba(255,255,255,0.04)" : "#f5f7fb"),
+          boxShadow: theme.palette.mode === "dark" ? "none" : "0 4px 14px rgba(15,23,42,0.04)",
+          lineHeight: 1.55,
+          "& p": { m: 0 },
+          "& p + p": { mt: 1 },
+          "& pre": {
+            overflow: "auto",
+            p: 1.5,
+            borderRadius: 2,
+            bgcolor: theme.palette.mode === "dark" ? "#0b1020" : "#18233e",
+            color: "#fff",
+          },
+        }}
+      >
+        {kicker && (
+          <Typography variant="caption" color="primary" fontWeight={800} sx={{ display: "block", mb: 0.5, letterSpacing: 0.6 }}>
+            {kicker}
+          </Typography>
+        )}
+        {reasoning ? (
+          <Box component="details" sx={{ mb: 1, color: "text.secondary", fontSize: 12 }}>
+            <Box component="summary" sx={{ cursor: "pointer" }}>Model reasoning</Box>
+            <Markdown>{reasoning}</Markdown>
+          </Box>
+        ) : null}
+        {typeof content === "string" ? (role === "user" ? content : <Markdown>{content}</Markdown>) : content}
+        {footer}
+      </Paper>
+    </Stack>
+  );
+}
+
 
 const USER_KEY = "trip-planner-user-id";
 const emptyConversation = () => ({ id: null, messages: [], events: [] });
@@ -364,7 +440,7 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
   }
   return <section className="page chat-page">
     <div className="page-title"><div><p className="eyebrow">AI TRIP COMPANION</p><h1>Plan something memorable.</h1><p className="muted">Your coordinator connects stays, transport, and travel memory in one workflow.</p></div><span className="hero-icon">✦</span></div>
-    <div className="chat-workspace"><section className="panel chat-panel"><div className="messages" ref={messagesRef}>
+    <div className="chat-workspace"><section className="panel chat-panel"><Box className="messages" ref={messagesRef} sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
       {!current.messages.length && <div className="welcome"><span>✦</span><h2>Where will you go next?</h2><p>Ask for an itinerary, compare options, or tell me about somewhere you have visited.</p></div>}
       {(() => {
         const questions = current.events.filter((event) => event.data?.tool === "ask_user_question" && event.data?.result?.question);
@@ -376,19 +452,41 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
             if (question) {
               renderedQuestions.add(question);
               output.push(
-                <div className="message assistant question-message" key={`question-${index}`}>
-                  <div className="avatar">?</div>
-                  <div className="bubble"><strong>Question</strong><p>{question.data.result.question}</p><small className="question-answer">Answer: {item.content}</small></div>
-                </div>,
+                <MessageBubble
+                  key={`question-${index}`}
+                  role="question"
+                  kicker="Question"
+                  content={<Typography component="span">{question.data.result.question}</Typography>}
+                  footer={<Typography variant="caption" color="primary" fontWeight={700} sx={{ display: "block", mt: 1 }}>Answer: {item.content}</Typography>}
+                />,
               );
             }
           }
-          output.push(<div className={`message ${item.role}`} key={`${item.role}-${index}`}><div className="avatar">{item.role === "assistant" ? "✦" : "You"}</div><div className="bubble">{item.reasoning && <details className="reasoning"><summary>Model reasoning</summary><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.reasoning}</ReactMarkdown></details>}{item.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown> : item.content}</div></div>);
+          output.push(
+            <MessageBubble
+              key={`${item.role}-${index}`}
+              role={item.role}
+              content={item.content}
+              reasoning={item.reasoning}
+            />,
+          );
         });
-        questions.filter((event) => !renderedQuestions.has(event)).forEach((event, index) => output.push(<div className="message assistant question-message" key={`pending-question-${index}`}><div className="avatar">?</div><div className="bubble"><strong>Question</strong><p>{event.data.result.question}</p>{event.data.selected && <small className="question-answer">Answer: {event.data.selected}</small>}</div></div>));
-        return output;
+        questions.filter((event) => !renderedQuestions.has(event)).forEach((event, index) => output.push(
+          <MessageBubble
+            key={`pending-question-${index}`}
+            role="question"
+            kicker="Question"
+            content={<Typography component="span">{event.data.result.question}</Typography>}
+            footer={event.data.selected ? <Typography variant="caption" color="primary" fontWeight={700} sx={{ display: "block", mt: 1 }}>Answer: {event.data.selected}</Typography> : null}
+          />,
+        ));
+        return (
+          <Stack spacing={2} sx={{ width: "100%" }}>
+            {output}
+          </Stack>
+        );
       })()}
-    </div>
+    </Box>
       <div className={`workflow-status ${workflow.className}`}><span>{workflow.icon}</span><strong>{workflow.label}</strong><small>{workflow.className === "waiting" ? "Choose an option below." : workflow.className === "working" ? "The assistant is processing your request." : ""}</small></div>
       <QuestionBox event={questionEvent} onOption={answerQuestion} disabled={answering} retryOption={retryOption} selectedOption={selectedOption} />
       <Box className="composer" component="form" onSubmit={sendMessage} sx={{ display: "flex", gap: 1.5, alignItems: "flex-end", p: 2.5, borderTop: "1px solid #edf0f6" }}>
@@ -411,6 +509,9 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
 }
 
 function App() {
+  const theme = useTheme();
+  const colorMode = useColorMode();
+  const isDark = theme.palette.mode === "dark";
   const [page, setPage] = useState("chat");
   const [conversations, setConversations] = useState([]);
   const [current, setCurrent] = useState(emptyConversation);
@@ -429,33 +530,48 @@ function App() {
     }
   }
   return (
-    <Box className="app" sx={{ display: "flex", minHeight: "100vh" }}>
+    <Box
+      className="app"
+      data-color-mode={theme.palette.mode}
+      sx={{
+        display: "flex",
+        minHeight: "100vh",
+        bgcolor: "background.default",
+        color: "text.primary",
+      }}
+    >
       <Box
         component="aside"
         sx={{
-          width: 274,
+          width: 280,
           display: "flex",
           flexDirection: "column",
           p: 2.5,
-          bgcolor: "#111b35",
+          bgcolor: isDark ? "#0a0f1c" : "#111b35",
           color: "#dfe6fa",
+          borderRight: "1px solid",
+          borderColor: isDark ? "rgba(255,255,255,0.06)" : "transparent",
         }}
       >
-        <Stack direction="row" spacing={1.5} alignItems="center" className="brand" sx={{ mx: 1, mb: 3 }}>
-          <Box className="brand-mark" sx={{ width: 34, height: 34, borderRadius: "11px", bgcolor: "primary.main", color: "#fff", display: "grid", placeItems: "center", boxShadow: "0 8px 18px #5048be66" }}>
+        <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mx: 0.5, mb: 3 }}>
+          <Box sx={{ width: 36, height: 36, borderRadius: "12px", bgcolor: "primary.main", color: "#fff", display: "grid", placeItems: "center", boxShadow: "0 8px 18px rgba(80,72,190,0.4)" }}>
             <TravelExploreIcon fontSize="small" />
           </Box>
-          <Box>
-            <Typography fontWeight={700} color="#fff" fontFamily='"Inter", system-ui, sans-serif' fontSize={19}>Tripwise</Typography>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography fontWeight={700} color="#fff" fontSize={18}>Tripwise</Typography>
             <Typography variant="caption" sx={{ color: "#8794b7" }}>AI travel planner</Typography>
           </Box>
+          <Tooltip title={isDark ? "Switch to light mode" : "Switch to dark mode"}>
+            <IconButton onClick={colorMode.toggleColorMode} size="small" sx={{ color: "#c5ceea", bgcolor: "rgba(255,255,255,0.06)", "&:hover": { bgcolor: "rgba(255,255,255,0.12)" } }}>
+              {isDark ? <LightModeOutlinedIcon fontSize="small" /> : <DarkModeOutlinedIcon fontSize="small" />}
+            </IconButton>
+          </Tooltip>
         </Stack>
         <Button
-          className="new-button"
           variant="contained"
           startIcon={<AddIcon />}
           onClick={() => { setCurrent(emptyConversation()); setPage("chat"); }}
-          sx={{ mb: 1 }}
+          sx={{ mb: 1, py: 1.1 }}
         >
           New conversation
         </Button>
@@ -485,7 +601,7 @@ function App() {
             Travel history
           </Button>
         </Stack>
-        <Typography className="sidebar-label" sx={{ mx: 1, mb: 1, color: "#6e7c9f", fontSize: 10, letterSpacing: 1.5, fontWeight: 700 }}>
+        <Typography sx={{ mx: 1, mb: 1, color: "#6e7c9f", fontSize: 10, letterSpacing: 1.5, fontWeight: 700 }}>
           RECENT CHATS
         </Typography>
         <ConversationList
@@ -498,7 +614,7 @@ function App() {
           onDelete={deleteConversation}
         />
         <Divider sx={{ borderColor: "#293556", mt: "auto", pt: 2 }} />
-        <Typography className="sidebar-footer" sx={{ pt: 2, px: 1, color: "#7380a1", fontSize: 12 }}>
+        <Typography sx={{ pt: 2, px: 1, color: "#7380a1", fontSize: 12 }}>
           Agent 1–4 <Box component="span" sx={{ float: "right", color: "#5fd39a" }}>online</Box>
         </Typography>
       </Box>
@@ -511,11 +627,38 @@ function App() {
   );
 }
 
+function Root() {
+  const [mode, setMode] = useState(() => {
+    try {
+      return window.localStorage.getItem("trip-color-mode") || "light";
+    } catch {
+      return "light";
+    }
+  });
+  const colorMode = useMemo(
+    () => ({
+      mode,
+      toggleColorMode: () => setMode((prev) => {
+        const next = prev === "light" ? "dark" : "light";
+        try { window.localStorage.setItem("trip-color-mode", next); } catch { /* ignore */ }
+        return next;
+      }),
+    }),
+    [mode],
+  );
+  const theme = useMemo(() => createAppTheme(mode), [mode]);
+  return (
+    <ColorModeContext.Provider value={colorMode}>
+      <ThemeProvider theme={theme}>
+        <CssBaseline />
+        <App />
+      </ThemeProvider>
+    </ColorModeContext.Provider>
+  );
+}
+
 createRoot(document.getElementById("root")).render(
   <StrictMode>
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
-      <App />
-    </ThemeProvider>
+    <Root />
   </StrictMode>,
 );
