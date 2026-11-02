@@ -2,6 +2,31 @@ import { StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import {
+  Alert,
+  Box,
+  Button,
+  CssBaseline,
+  Divider,
+  IconButton,
+  List,
+  ListItemButton,
+  ListItemText,
+  Paper,
+  Stack,
+  TextField,
+  ThemeProvider,
+  Typography,
+} from "@mui/material";
+import AddIcon from "@mui/icons-material/Add";
+import ChatBubbleOutlinedIcon from "@mui/icons-material/ChatBubbleOutlined";
+import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
+import HistoryEduIcon from "@mui/icons-material/HistoryEdu";
+import PlaceIcon from "@mui/icons-material/Place";
+import SendIcon from "@mui/icons-material/Send";
+import SettingsIcon from "@mui/icons-material/Settings";
+import TravelExploreIcon from "@mui/icons-material/TravelExplore";
+import theme from "./theme";
 import "./styles.css";
 
 const USER_KEY = "trip-planner-user-id";
@@ -69,10 +94,25 @@ function QuestionBox({ event, onOption, disabled, retryOption, selectedOption })
   return <section className="question-box">
     <div className="question-box-header"><span className="question-box-icon">?</span><div><div className="question-kicker">YOUR INPUT NEEDED</div><strong>{event.data.result.question}</strong></div></div>
     <p>Choose an option to continue planning.</p>
-    <div className="question-options">
-      {options.map((option) => <button type="button" key={option} disabled={disabled || Boolean(selected)} className={selected === option ? "selected" : ""} onClick={() => onOption(option)}>{selected === option ? "Selected" : option}</button>)}
-    </div>
-    {retryOption && <button className="question-retry" type="button" onClick={() => onOption(retryOption)}>↻ Retry sending “{retryOption}”</button>}
+    <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1} className="question-options" sx={{ mt: 1.5, ml: "39px" }}>
+      {options.map((option) => (
+        <Button
+          key={option}
+          type="button"
+          size="small"
+          variant={selected === option ? "contained" : "outlined"}
+          disabled={disabled || Boolean(selected)}
+          onClick={() => onOption(option)}
+        >
+          {selected === option ? "Selected" : option}
+        </Button>
+      ))}
+    </Stack>
+    {retryOption && (
+      <Button className="question-retry" type="button" size="small" color="error" variant="outlined" onClick={() => onOption(retryOption)} sx={{ mt: 1.5, ml: "39px" }}>
+        Retry sending "{retryOption}"
+      </Button>
+    )}
   </section>;
 }
 
@@ -85,14 +125,28 @@ function workflowState(events, pendingQuestion, status) {
 }
 
 function ConversationList({ conversations, activeId, onSelect, onDelete }) {
-  return <div className="conversation-list">
-    {conversations.map((item) => <div className="conversation-row" key={item.id}>
-      <button className={`conversation ${activeId === item.id ? "active" : ""}`} onClick={() => onSelect(item.id)}>
-        <span>▤</span>{item.title}
-      </button>
-      <button className="icon-button danger" title="Delete conversation" onClick={() => onDelete(item.id)}>×</button>
-    </div>)}
-  </div>;
+  return (
+    <List dense disablePadding className="conversation-list" sx={{ overflow: "auto", flex: 1 }}>
+      {conversations.map((item) => (
+        <Box key={item.id} sx={{ display: "flex", alignItems: "center", gap: 0.5, px: 0.5 }}>
+          <ListItemButton
+            selected={activeId === item.id}
+            onClick={() => onSelect(item.id)}
+            sx={{ borderRadius: 2, py: 0.75, flex: 1, minWidth: 0 }}
+          >
+            <ChatBubbleOutlinedIcon sx={{ fontSize: 16, mr: 1, opacity: 0.7 }} />
+            <ListItemText
+              primary={item.title}
+              primaryTypographyProps={{ noWrap: true, fontSize: 13 }}
+            />
+          </ListItemButton>
+          <IconButton size="small" color="error" title="Delete conversation" onClick={() => onDelete(item.id)}>
+            <DeleteOutlinedIcon fontSize="small" />
+          </IconButton>
+        </Box>
+      ))}
+    </List>
+  );
 }
 
 function ModelSettings() {
@@ -111,13 +165,43 @@ function ModelSettings() {
     setApiKey(""); setSettings({ ...settings, endpoint_url: result.endpoint_url, qwen_model: result.model });
     setStatus(result.api_key_configured ? "Saved; API key configured." : "Saved; API key not configured.");
   }
-  return <details className="settings panel"><summary>⚙ Model settings</summary>
-    <p className="muted">Settings apply to this running backend. API keys are never displayed.</p>
-    <label>Endpoint URL<input value={settings.endpoint_url || ""} onChange={(event) => setSettings({ ...settings, endpoint_url: event.target.value })} /></label>
-    <label>Model<input value={settings.qwen_model || ""} onChange={(event) => setSettings({ ...settings, qwen_model: event.target.value })} /></label>
-    <label>API key<input type="password" autoComplete="off" placeholder="Leave blank to keep current key" value={apiKey} onChange={(event) => setApiKey(event.target.value)} /></label>
-    <button onClick={save}>Save settings</button> <small className="muted">{status}</small>
-  </details>;
+  return (
+    <Paper className="settings panel" variant="outlined" sx={{ mt: 2, p: 2 }}>
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+        <SettingsIcon color="primary" fontSize="small" />
+        <Typography fontWeight={700}>Model settings</Typography>
+      </Stack>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        Settings apply to this running backend. API keys are never displayed.
+      </Typography>
+      <Stack spacing={2}>
+        <TextField
+          label="Endpoint URL"
+          value={settings.endpoint_url || ""}
+          onChange={(event) => setSettings({ ...settings, endpoint_url: event.target.value })}
+        />
+        <TextField
+          label="Model"
+          value={settings.qwen_model || ""}
+          onChange={(event) => setSettings({ ...settings, qwen_model: event.target.value })}
+        />
+        <TextField
+          label="API key"
+          type="password"
+          autoComplete="off"
+          placeholder="Leave blank to keep current key"
+          value={apiKey}
+          onChange={(event) => setApiKey(event.target.value)}
+        />
+        <Stack direction="row" spacing={2} alignItems="center">
+          <Button variant="contained" color="inherit" onClick={save} sx={{ bgcolor: "#263452", color: "#fff", "&:hover": { bgcolor: "#1b2538" } }}>
+            Save settings
+          </Button>
+          <Typography variant="caption" color="text.secondary">{status}</Typography>
+        </Stack>
+      </Stack>
+    </Paper>
+  );
 }
 
 function HistoryPage({ userId }) {
@@ -146,15 +230,24 @@ function HistoryPage({ userId }) {
   return <section className="page">
     <div className="page-title"><div><p className="eyebrow">YOUR MEMORY</p><h1>Travel history</h1><p className="muted">Places you have visited, used to make future plans more personal.</p></div><span className="hero-icon">🧭</span></div>
     <div className="history-layout">
-      <form className="panel history-form" onSubmit={add}><div className="section-title"><span>＋</span><h2>Add a place</h2></div>
-        <label>Country<input value={form.country} onChange={(e) => setForm({ ...form, country: e.target.value })} placeholder="Hong Kong" /></label>
-        <label>City<input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} placeholder="Hong Kong" /></label>
-        <label>Location visited<input required value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Victoria Peak" /></label>
-        <button type="submit">Save visit</button>{status && <small className="form-status">{status}</small>}
-      </form>
+      <Paper className="panel history-form" variant="outlined" sx={{ p: 3 }} component="form" onSubmit={add}>
+        <Stack direction="row" spacing={1} alignItems="center" className="section-title" sx={{ mb: 2 }}>
+          <PlaceIcon color="primary" />
+          <Typography variant="h2" sx={{ fontSize: 18, m: 0 }}>Add a place</Typography>
+        </Stack>
+        <Stack spacing={2}>
+          <TextField label="Country" value={form.country} onChange={(e) => setForm({ ...form, country: e.target.value })} placeholder="Hong Kong" />
+          <TextField label="City" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} placeholder="Hong Kong" />
+          <TextField required label="Location visited" value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Victoria Peak" />
+          <Button type="submit" variant="contained">Save visit</Button>
+          {status && <Alert severity="info">{status}</Alert>}
+        </Stack>
+      </Paper>
       <div className="panel history-list"><div className="section-title"><span>▣</span><h2>Visited places</h2><b>{entries.length}</b></div>
         {!entries.length && <div className="empty-state"><span>✈</span><p>No places saved yet.</p><small>Add a visit or tell the assistant you have been there before.</small></div>}
-        {entries.map((entry) => <div className="history-entry" key={entry.id}><span className="place-pin">●</span><div><strong>{entry.location}</strong><p>{[entry.city, entry.country].filter(Boolean).join(", ") || "Location details not specified"}</p></div><button className="icon-button danger" title="Remove visit" onClick={() => remove(entry.id)}>⌫</button></div>)}
+        {entries.map((entry) => <div className="history-entry" key={entry.id}><span className="place-pin">●</span><div><strong>{entry.location}</strong><p>{[entry.city, entry.country].filter(Boolean).join(", ") || "Location details not specified"}</p></div><IconButton className="icon-button danger" color="error" title="Remove visit" onClick={() => remove(entry.id)} sx={{ ml: "auto" }}>
+            <DeleteOutlinedIcon fontSize="small" />
+          </IconButton></div>)}
       </div>
     </div>
   </section>;
@@ -298,24 +391,131 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
     </div>
       <div className={`workflow-status ${workflow.className}`}><span>{workflow.icon}</span><strong>{workflow.label}</strong><small>{workflow.className === "waiting" ? "Choose an option below." : workflow.className === "working" ? "The assistant is processing your request." : ""}</small></div>
       <QuestionBox event={questionEvent} onOption={answerQuestion} disabled={answering} retryOption={retryOption} selectedOption={selectedOption} />
-      <form className="composer" onSubmit={sendMessage}><textarea value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Plan a 3-day trip to Kyoto for $800..." /><button className="send-button" type="submit">Send <span>➜</span></button></form>
-      <div className="composer-footer"><span>{status || "Markdown supported"}</span>{retryText && <button className="retry" onClick={(event) => sendMessage(event, true)}>↻ Retry</button>}</div>
+      <Box className="composer" component="form" onSubmit={sendMessage} sx={{ display: "flex", gap: 1.5, alignItems: "flex-end", p: 2.5, borderTop: "1px solid #edf0f6" }}>
+        <TextField
+          multiline
+          minRows={2}
+          maxRows={5}
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          placeholder="Plan a 3-day trip to Kyoto for $800..."
+          sx={{ flex: 1 }}
+        />
+        <Button className="send-button" type="submit" variant="contained" endIcon={<SendIcon />}>
+          Send
+        </Button>
+      </Box>
+      <div className="composer-footer"><span>{status || "Markdown supported"}</span>{retryText && <Button className="retry" size="small" color="warning" variant="outlined" onClick={(event) => sendMessage(event, true)}>Retry</Button>}</div>
     </section><Activity events={current.events} /></div><ModelSettings />
   </section>;
 }
 
 function App() {
-  const [page, setPage] = useState("chat"); const [conversations, setConversations] = useState([]); const [current, setCurrent] = useState(emptyConversation); const userId = getUserId();
-  async function loadConversations() { const response = await fetch("/api/conversations"); if (response.ok) setConversations(await response.json()); }
+  const [page, setPage] = useState("chat");
+  const [conversations, setConversations] = useState([]);
+  const [current, setCurrent] = useState(emptyConversation);
+  const userId = getUserId();
+  async function loadConversations() {
+    const response = await fetch("/api/conversations");
+    if (response.ok) setConversations(await response.json());
+  }
   useEffect(() => { loadConversations(); }, []);
-  async function deleteConversation(id) { if (!window.confirm("Delete this conversation?")) return; const response = await fetch(`/api/conversations/${id}`, { method: "DELETE" }); if (response.ok) { if (current.id === id) setCurrent(emptyConversation()); await loadConversations(); } }
-  return <div className="app"><aside><div className="brand"><span className="brand-mark">✦</span><div><strong>Tripwise</strong><small>AI travel planner</small></div></div>
-    <button className="new-button" onClick={() => { setCurrent(emptyConversation()); setPage("chat"); }}>＋ New conversation</button>
-    <nav><button className={page === "chat" ? "nav-active" : ""} onClick={() => setPage("chat")}><span>◉</span>Chat</button><button className={page === "history" ? "nav-active" : ""} onClick={() => setPage("history")}><span>⌖</span>Travel history</button></nav>
-    <div className="sidebar-label">RECENT CHATS</div><ConversationList conversations={conversations} activeId={current.id} onSelect={(id) => { setPage("chat"); fetch(`/api/conversations/${id}`).then((r) => r.json()).then((item) => setCurrent({ id: item.id, messages: item.messages, events: item.events || [] })); }} onDelete={deleteConversation} />
-    <div className="sidebar-footer">Agent 1–4 <span>● online</span></div></aside>
-    <main>{page === "history" ? <HistoryPage userId={userId} /> : <ChatPage current={current} setCurrent={setCurrent} conversations={conversations} loadConversations={loadConversations} userId={userId} />}</main>
-  </div>;
+  async function deleteConversation(id) {
+    if (!window.confirm("Delete this conversation?")) return;
+    const response = await fetch(`/api/conversations/${id}`, { method: "DELETE" });
+    if (response.ok) {
+      if (current.id === id) setCurrent(emptyConversation());
+      await loadConversations();
+    }
+  }
+  return (
+    <Box className="app" sx={{ display: "flex", minHeight: "100vh" }}>
+      <Box
+        component="aside"
+        sx={{
+          width: 274,
+          display: "flex",
+          flexDirection: "column",
+          p: 2.5,
+          bgcolor: "#111b35",
+          color: "#dfe6fa",
+        }}
+      >
+        <Stack direction="row" spacing={1.5} alignItems="center" className="brand" sx={{ mx: 1, mb: 3 }}>
+          <Box className="brand-mark" sx={{ width: 34, height: 34, borderRadius: "11px", bgcolor: "primary.main", color: "#fff", display: "grid", placeItems: "center", boxShadow: "0 8px 18px #5048be66" }}>
+            <TravelExploreIcon fontSize="small" />
+          </Box>
+          <Box>
+            <Typography fontWeight={700} color="#fff" fontFamily='"Space Grotesk", sans-serif' fontSize={19}>Tripwise</Typography>
+            <Typography variant="caption" sx={{ color: "#8794b7" }}>AI travel planner</Typography>
+          </Box>
+        </Stack>
+        <Button
+          className="new-button"
+          variant="contained"
+          startIcon={<AddIcon />}
+          onClick={() => { setCurrent(emptyConversation()); setPage("chat"); }}
+          sx={{ mb: 1 }}
+        >
+          New conversation
+        </Button>
+        <Stack component="nav" spacing={0.5} sx={{ my: 2.5 }}>
+          <Button
+            startIcon={<ChatBubbleOutlinedIcon />}
+            onClick={() => setPage("chat")}
+            sx={{
+              justifyContent: "flex-start",
+              color: page === "chat" ? "#fff" : "#9daaca",
+              bgcolor: page === "chat" ? "#242f52" : "transparent",
+              "&:hover": { bgcolor: "#242f52", color: "#fff" },
+            }}
+          >
+            Chat
+          </Button>
+          <Button
+            startIcon={<HistoryEduIcon />}
+            onClick={() => setPage("history")}
+            sx={{
+              justifyContent: "flex-start",
+              color: page === "history" ? "#fff" : "#9daaca",
+              bgcolor: page === "history" ? "#242f52" : "transparent",
+              "&:hover": { bgcolor: "#242f52", color: "#fff" },
+            }}
+          >
+            Travel history
+          </Button>
+        </Stack>
+        <Typography className="sidebar-label" sx={{ mx: 1, mb: 1, color: "#6e7c9f", fontSize: 10, letterSpacing: 1.5, fontWeight: 700 }}>
+          RECENT CHATS
+        </Typography>
+        <ConversationList
+          conversations={conversations}
+          activeId={current.id}
+          onSelect={(id) => {
+            setPage("chat");
+            fetch(`/api/conversations/${id}`).then((r) => r.json()).then((item) => setCurrent({ id: item.id, messages: item.messages, events: item.events || [] }));
+          }}
+          onDelete={deleteConversation}
+        />
+        <Divider sx={{ borderColor: "#293556", mt: "auto", pt: 2 }} />
+        <Typography className="sidebar-footer" sx={{ pt: 2, px: 1, color: "#7380a1", fontSize: 12 }}>
+          Agent 1–4 <Box component="span" sx={{ float: "right", color: "#5fd39a" }}>online</Box>
+        </Typography>
+      </Box>
+      <Box component="main" sx={{ flex: 1, minWidth: 0 }}>
+        {page === "history"
+          ? <HistoryPage userId={userId} />
+          : <ChatPage current={current} setCurrent={setCurrent} conversations={conversations} loadConversations={loadConversations} userId={userId} />}
+      </Box>
+    </Box>
+  );
 }
 
-createRoot(document.getElementById("root")).render(<StrictMode><App /></StrictMode>);
+createRoot(document.getElementById("root")).render(
+  <StrictMode>
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <App />
+    </ThemeProvider>
+  </StrictMode>,
+);
