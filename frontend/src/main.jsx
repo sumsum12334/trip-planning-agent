@@ -252,16 +252,19 @@ function ModelSettings() {
       </Typography>
       <Stack spacing={2}>
         <TextField
+          variant="filled"
           label="Endpoint URL"
           value={settings.endpoint_url || ""}
           onChange={(event) => setSettings({ ...settings, endpoint_url: event.target.value })}
         />
         <TextField
+          variant="filled"
           label="Model"
           value={settings.qwen_model || ""}
           onChange={(event) => setSettings({ ...settings, qwen_model: event.target.value })}
         />
         <TextField
+          variant="filled"
           label="API key"
           type="password"
           autoComplete="off"
@@ -312,9 +315,9 @@ function HistoryPage({ userId }) {
           <Typography variant="h2" sx={{ fontSize: 18, m: 0 }}>Add a place</Typography>
         </Stack>
         <Stack spacing={2}>
-          <TextField label="Country" value={form.country} onChange={(e) => setForm({ ...form, country: e.target.value })} placeholder="Hong Kong" />
-          <TextField label="City" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} placeholder="Hong Kong" />
-          <TextField required label="Location visited" value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Victoria Peak" />
+          <TextField variant="filled" label="Country" value={form.country} onChange={(e) => setForm({ ...form, country: e.target.value })} placeholder="Hong Kong" />
+          <TextField variant="filled" label="City" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} placeholder="Hong Kong" />
+          <TextField variant="filled" required label="Location visited" value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Victoria Peak" />
           <Button type="submit" variant="contained">Save visit</Button>
           {status && <Alert severity="info">{status}</Alert>}
         </Stack>
