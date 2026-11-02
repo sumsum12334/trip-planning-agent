@@ -1,8 +1,109 @@
-import { StrictMode, useEffect, useRef, useState } from "react";
+import { StrictMode, createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import {
+  Alert,
+  Avatar,
+  Box,
+  Button,
+  CssBaseline,
+  Divider,
+  IconButton,
+  List,
+  ListItemButton,
+  ListItemText,
+  Paper,
+  Stack,
+  TextField,
+  ThemeProvider,
+  Tooltip,
+  Typography,
+  useTheme,
+} from "@mui/material";
+import AddIcon from "@mui/icons-material/Add";
+import ChatBubbleOutlinedIcon from "@mui/icons-material/ChatBubbleOutlined";
+import DarkModeOutlinedIcon from "@mui/icons-material/DarkModeOutlined";
+import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
+import HistoryEduIcon from "@mui/icons-material/HistoryEdu";
+import LightModeOutlinedIcon from "@mui/icons-material/LightModeOutlined";
+import PlaceIcon from "@mui/icons-material/Place";
+import SendIcon from "@mui/icons-material/Send";
+import SettingsIcon from "@mui/icons-material/Settings";
+import TravelExploreIcon from "@mui/icons-material/TravelExplore";
+import { createAppTheme } from "./theme";
 import "./styles.css";
+
+const ColorModeContext = createContext({ mode: "light", toggleColorMode: () => {} });
+const useColorMode = () => useContext(ColorModeContext);
+
+function Markdown({ children }) {
+  return <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>;
+}
+
+function MessageBubble({ role, content, reasoning, kicker, footer }) {
+  const theme = useTheme();
+  const isUser = role === "user";
+  const isQuestion = role === "question";
+  return (
+    <Stack
+      direction={isUser ? "row-reverse" : "row"}
+      spacing={1.25}
+      sx={{ maxWidth: "min(820px, 92%)", alignSelf: isUser ? "flex-end" : "flex-start", width: "fit-content" }}
+    >
+      <Avatar
+        sx={{
+          width: 34,
+          height: 34,
+          fontSize: 12,
+          fontWeight: 700,
+          bgcolor: isUser ? "action.selected" : "primary.main",
+          color: isUser ? "text.primary" : "primary.contrastText",
+        }}
+      >
+        {isUser ? "You" : isQuestion ? "?" : "AI"}
+      </Avatar>
+      <Paper
+        sx={{
+          px: 1.75,
+          py: 1.35,
+          borderRadius: isUser ? "16px 4px 16px 16px" : "4px 16px 16px 16px",
+          bgcolor: isUser
+            ? (theme.palette.mode === "dark" ? "rgba(139,132,255,0.22)" : "rgba(108,99,255,0.12)")
+            : isQuestion
+              ? (theme.palette.mode === "dark" ? "rgba(139,132,255,0.16)" : "#f3f1ff")
+              : (theme.palette.mode === "dark" ? "rgba(255,255,255,0.04)" : "#f5f7fb"),
+          boxShadow: theme.palette.mode === "dark" ? "none" : "0 4px 14px rgba(15,23,42,0.04)",
+          lineHeight: 1.55,
+          "& p": { m: 0 },
+          "& p + p": { mt: 1 },
+          "& pre": {
+            overflow: "auto",
+            p: 1.5,
+            borderRadius: 2,
+            bgcolor: theme.palette.mode === "dark" ? "#0b1020" : "#18233e",
+            color: "#fff",
+          },
+        }}
+      >
+        {kicker && (
+          <Typography variant="caption" color="primary" fontWeight={800} sx={{ display: "block", mb: 0.5, letterSpacing: 0.6 }}>
+            {kicker}
+          </Typography>
+        )}
+        {reasoning ? (
+          <Box component="details" sx={{ mb: 1, color: "text.secondary", fontSize: 12 }}>
+            <Box component="summary" sx={{ cursor: "pointer" }}>Model reasoning</Box>
+            <Markdown>{reasoning}</Markdown>
+          </Box>
+        ) : null}
+        {typeof content === "string" ? (role === "user" ? content : <Markdown>{content}</Markdown>) : content}
+        {footer}
+      </Paper>
+    </Stack>
+  );
+}
+
 
 const USER_KEY = "trip-planner-user-id";
 const emptyConversation = () => ({ id: null, messages: [], events: [] });
@@ -69,10 +170,25 @@ function QuestionBox({ event, onOption, disabled, retryOption, selectedOption })
   return <section className="question-box">
     <div className="question-box-header"><span className="question-box-icon">?</span><div><div className="question-kicker">YOUR INPUT NEEDED</div><strong>{event.data.result.question}</strong></div></div>
     <p>Choose an option to continue planning.</p>
-    <div className="question-options">
-      {options.map((option) => <button type="button" key={option} disabled={disabled || Boolean(selected)} className={selected === option ? "selected" : ""} onClick={() => onOption(option)}>{selected === option ? "Selected" : option}</button>)}
-    </div>
-    {retryOption && <button className="question-retry" type="button" onClick={() => onOption(retryOption)}>↻ Retry sending “{retryOption}”</button>}
+    <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1} className="question-options" sx={{ mt: 1.5, ml: "39px" }}>
+      {options.map((option) => (
+        <Button
+          key={option}
+          type="button"
+          size="small"
+          variant={selected === option ? "contained" : "outlined"}
+          disabled={disabled || Boolean(selected)}
+          onClick={() => onOption(option)}
+        >
+          {selected === option ? "Selected" : option}
+        </Button>
+      ))}
+    </Stack>
+    {retryOption && (
+      <Button className="question-retry" type="button" size="small" color="error" variant="outlined" onClick={() => onOption(retryOption)} sx={{ mt: 1.5, ml: "39px" }}>
+        Retry sending "{retryOption}"
+      </Button>
+    )}
   </section>;
 }
 
@@ -85,14 +201,28 @@ function workflowState(events, pendingQuestion, status) {
 }
 
 function ConversationList({ conversations, activeId, onSelect, onDelete }) {
-  return <div className="conversation-list">
-    {conversations.map((item) => <div className="conversation-row" key={item.id}>
-      <button className={`conversation ${activeId === item.id ? "active" : ""}`} onClick={() => onSelect(item.id)}>
-        <span>▤</span>{item.title}
-      </button>
-      <button className="icon-button danger" title="Delete conversation" onClick={() => onDelete(item.id)}>×</button>
-    </div>)}
-  </div>;
+  return (
+    <List dense disablePadding className="conversation-list" sx={{ overflow: "auto", flex: 1 }}>
+      {conversations.map((item) => (
+        <Box key={item.id} sx={{ display: "flex", alignItems: "center", gap: 0.5, px: 0.5 }}>
+          <ListItemButton
+            selected={activeId === item.id}
+            onClick={() => onSelect(item.id)}
+            sx={{ borderRadius: 2, py: 0.75, flex: 1, minWidth: 0 }}
+          >
+            <ChatBubbleOutlinedIcon sx={{ fontSize: 16, mr: 1, opacity: 0.7 }} />
+            <ListItemText
+              primary={item.title}
+              primaryTypographyProps={{ noWrap: true, fontSize: 13 }}
+            />
+          </ListItemButton>
+          <IconButton size="small" color="error" title="Delete conversation" onClick={() => onDelete(item.id)}>
+            <DeleteOutlinedIcon fontSize="small" />
+          </IconButton>
+        </Box>
+      ))}
+    </List>
+  );
 }
 
 function ModelSettings() {
@@ -111,13 +241,46 @@ function ModelSettings() {
     setApiKey(""); setSettings({ ...settings, endpoint_url: result.endpoint_url, qwen_model: result.model });
     setStatus(result.api_key_configured ? "Saved; API key configured." : "Saved; API key not configured.");
   }
-  return <details className="settings panel"><summary>⚙ Model settings</summary>
-    <p className="muted">Settings apply to this running backend. API keys are never displayed.</p>
-    <label>Endpoint URL<input value={settings.endpoint_url || ""} onChange={(event) => setSettings({ ...settings, endpoint_url: event.target.value })} /></label>
-    <label>Model<input value={settings.qwen_model || ""} onChange={(event) => setSettings({ ...settings, qwen_model: event.target.value })} /></label>
-    <label>API key<input type="password" autoComplete="off" placeholder="Leave blank to keep current key" value={apiKey} onChange={(event) => setApiKey(event.target.value)} /></label>
-    <button onClick={save}>Save settings</button> <small className="muted">{status}</small>
-  </details>;
+  return (
+    <Paper className="settings panel" variant="outlined" sx={{ mt: 2, p: 2 }}>
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+        <SettingsIcon color="primary" fontSize="small" />
+        <Typography fontWeight={700}>Model settings</Typography>
+      </Stack>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        Settings apply to this running backend. API keys are never displayed.
+      </Typography>
+      <Stack spacing={2}>
+        <TextField
+          variant="filled"
+          label="Endpoint URL"
+          value={settings.endpoint_url || ""}
+          onChange={(event) => setSettings({ ...settings, endpoint_url: event.target.value })}
+        />
+        <TextField
+          variant="filled"
+          label="Model"
+          value={settings.qwen_model || ""}
+          onChange={(event) => setSettings({ ...settings, qwen_model: event.target.value })}
+        />
+        <TextField
+          variant="filled"
+          label="API key"
+          type="password"
+          autoComplete="off"
+          placeholder="Leave blank to keep current key"
+          value={apiKey}
+          onChange={(event) => setApiKey(event.target.value)}
+        />
+        <Stack direction="row" spacing={2} alignItems="center">
+          <Button variant="contained" color="inherit" onClick={save} sx={{ bgcolor: "#263452", color: "#fff", "&:hover": { bgcolor: "#1b2538" } }}>
+            Save settings
+          </Button>
+          <Typography variant="caption" color="text.secondary">{status}</Typography>
+        </Stack>
+      </Stack>
+    </Paper>
+  );
 }
 
 function HistoryPage({ userId }) {
@@ -146,15 +309,24 @@ function HistoryPage({ userId }) {
   return <section className="page">
     <div className="page-title"><div><p className="eyebrow">YOUR MEMORY</p><h1>Travel history</h1><p className="muted">Places you have visited, used to make future plans more personal.</p></div><span className="hero-icon">🧭</span></div>
     <div className="history-layout">
-      <form className="panel history-form" onSubmit={add}><div className="section-title"><span>＋</span><h2>Add a place</h2></div>
-        <label>Country<input value={form.country} onChange={(e) => setForm({ ...form, country: e.target.value })} placeholder="Hong Kong" /></label>
-        <label>City<input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} placeholder="Hong Kong" /></label>
-        <label>Location visited<input required value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Victoria Peak" /></label>
-        <button type="submit">Save visit</button>{status && <small className="form-status">{status}</small>}
-      </form>
+      <Paper className="panel history-form" variant="outlined" sx={{ p: 3 }} component="form" onSubmit={add}>
+        <Stack direction="row" spacing={1} alignItems="center" className="section-title" sx={{ mb: 2 }}>
+          <PlaceIcon color="primary" />
+          <Typography variant="h2" sx={{ fontSize: 18, m: 0 }}>Add a place</Typography>
+        </Stack>
+        <Stack spacing={2}>
+          <TextField variant="filled" label="Country" value={form.country} onChange={(e) => setForm({ ...form, country: e.target.value })} placeholder="Hong Kong" />
+          <TextField variant="filled" label="City" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} placeholder="Hong Kong" />
+          <TextField variant="filled" required label="Location visited" value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Victoria Peak" />
+          <Button type="submit" variant="contained">Save visit</Button>
+          {status && <Alert severity="info">{status}</Alert>}
+        </Stack>
+      </Paper>
       <div className="panel history-list"><div className="section-title"><span>▣</span><h2>Visited places</h2><b>{entries.length}</b></div>
         {!entries.length && <div className="empty-state"><span>✈</span><p>No places saved yet.</p><small>Add a visit or tell the assistant you have been there before.</small></div>}
-        {entries.map((entry) => <div className="history-entry" key={entry.id}><span className="place-pin">●</span><div><strong>{entry.location}</strong><p>{[entry.city, entry.country].filter(Boolean).join(", ") || "Location details not specified"}</p></div><button className="icon-button danger" title="Remove visit" onClick={() => remove(entry.id)}>⌫</button></div>)}
+        {entries.map((entry) => <div className="history-entry" key={entry.id}><span className="place-pin">●</span><div><strong>{entry.location}</strong><p>{[entry.city, entry.country].filter(Boolean).join(", ") || "Location details not specified"}</p></div><IconButton className="icon-button danger" color="error" title="Remove visit" onClick={() => remove(entry.id)} sx={{ ml: "auto" }}>
+            <DeleteOutlinedIcon fontSize="small" />
+          </IconButton></div>)}
       </div>
     </div>
   </section>;
@@ -271,7 +443,7 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
   }
   return <section className="page chat-page">
     <div className="page-title"><div><p className="eyebrow">AI TRIP COMPANION</p><h1>Plan something memorable.</h1><p className="muted">Your coordinator connects stays, transport, and travel memory in one workflow.</p></div><span className="hero-icon">✦</span></div>
-    <div className="chat-workspace"><section className="panel chat-panel"><div className="messages" ref={messagesRef}>
+    <div className="chat-workspace"><section className="panel chat-panel"><Box className="messages" ref={messagesRef} sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
       {!current.messages.length && <div className="welcome"><span>✦</span><h2>Where will you go next?</h2><p>Ask for an itinerary, compare options, or tell me about somewhere you have visited.</p></div>}
       {(() => {
         const questions = current.events.filter((event) => event.data?.tool === "ask_user_question" && event.data?.result?.question);
@@ -283,39 +455,213 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
             if (question) {
               renderedQuestions.add(question);
               output.push(
-                <div className="message assistant question-message" key={`question-${index}`}>
-                  <div className="avatar">?</div>
-                  <div className="bubble"><strong>Question</strong><p>{question.data.result.question}</p><small className="question-answer">Answer: {item.content}</small></div>
-                </div>,
+                <MessageBubble
+                  key={`question-${index}`}
+                  role="question"
+                  kicker="Question"
+                  content={<Typography component="span">{question.data.result.question}</Typography>}
+                  footer={<Typography variant="caption" color="primary" fontWeight={700} sx={{ display: "block", mt: 1 }}>Answer: {item.content}</Typography>}
+                />,
               );
             }
           }
-          output.push(<div className={`message ${item.role}`} key={`${item.role}-${index}`}><div className="avatar">{item.role === "assistant" ? "✦" : "You"}</div><div className="bubble">{item.reasoning && <details className="reasoning"><summary>Model reasoning</summary><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.reasoning}</ReactMarkdown></details>}{item.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown> : item.content}</div></div>);
+          output.push(
+            <MessageBubble
+              key={`${item.role}-${index}`}
+              role={item.role}
+              content={item.content}
+              reasoning={item.reasoning}
+            />,
+          );
         });
-        questions.filter((event) => !renderedQuestions.has(event)).forEach((event, index) => output.push(<div className="message assistant question-message" key={`pending-question-${index}`}><div className="avatar">?</div><div className="bubble"><strong>Question</strong><p>{event.data.result.question}</p>{event.data.selected && <small className="question-answer">Answer: {event.data.selected}</small>}</div></div>));
-        return output;
+        questions.filter((event) => !renderedQuestions.has(event)).forEach((event, index) => output.push(
+          <MessageBubble
+            key={`pending-question-${index}`}
+            role="question"
+            kicker="Question"
+            content={<Typography component="span">{event.data.result.question}</Typography>}
+            footer={event.data.selected ? <Typography variant="caption" color="primary" fontWeight={700} sx={{ display: "block", mt: 1 }}>Answer: {event.data.selected}</Typography> : null}
+          />,
+        ));
+        return (
+          <Stack spacing={2} sx={{ width: "100%" }}>
+            {output}
+          </Stack>
+        );
       })()}
-    </div>
+    </Box>
       <div className={`workflow-status ${workflow.className}`}><span>{workflow.icon}</span><strong>{workflow.label}</strong><small>{workflow.className === "waiting" ? "Choose an option below." : workflow.className === "working" ? "The assistant is processing your request." : ""}</small></div>
       <QuestionBox event={questionEvent} onOption={answerQuestion} disabled={answering} retryOption={retryOption} selectedOption={selectedOption} />
-      <form className="composer" onSubmit={sendMessage}><textarea value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Plan a 3-day trip to Kyoto for $800..." /><button className="send-button" type="submit">Send <span>➜</span></button></form>
-      <div className="composer-footer"><span>{status || "Markdown supported"}</span>{retryText && <button className="retry" onClick={(event) => sendMessage(event, true)}>↻ Retry</button>}</div>
+      <Box className="composer" component="form" onSubmit={sendMessage} sx={{ display: "flex", gap: 1.5, alignItems: "flex-end", p: 2.5, borderTop: "1px solid #edf0f6" }}>
+        <TextField
+          multiline
+          minRows={2}
+          maxRows={5}
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          placeholder="Plan a 3-day trip to Kyoto for $800..."
+          sx={{ flex: 1 }}
+        />
+        <Button className="send-button" type="submit" variant="contained" endIcon={<SendIcon />}>
+          Send
+        </Button>
+      </Box>
+      <div className="composer-footer"><span>{status || "Markdown supported"}</span>{retryText && <Button className="retry" size="small" color="warning" variant="outlined" onClick={(event) => sendMessage(event, true)}>Retry</Button>}</div>
     </section><Activity events={current.events} /></div><ModelSettings />
   </section>;
 }
 
 function App() {
-  const [page, setPage] = useState("chat"); const [conversations, setConversations] = useState([]); const [current, setCurrent] = useState(emptyConversation); const userId = getUserId();
-  async function loadConversations() { const response = await fetch("/api/conversations"); if (response.ok) setConversations(await response.json()); }
+  const theme = useTheme();
+  const colorMode = useColorMode();
+  const isDark = theme.palette.mode === "dark";
+  const [page, setPage] = useState("chat");
+  const [conversations, setConversations] = useState([]);
+  const [current, setCurrent] = useState(emptyConversation);
+  const userId = getUserId();
+  async function loadConversations() {
+    const response = await fetch("/api/conversations");
+    if (response.ok) setConversations(await response.json());
+  }
   useEffect(() => { loadConversations(); }, []);
-  async function deleteConversation(id) { if (!window.confirm("Delete this conversation?")) return; const response = await fetch(`/api/conversations/${id}`, { method: "DELETE" }); if (response.ok) { if (current.id === id) setCurrent(emptyConversation()); await loadConversations(); } }
-  return <div className="app"><aside><div className="brand"><span className="brand-mark">✦</span><div><strong>Tripwise</strong><small>AI travel planner</small></div></div>
-    <button className="new-button" onClick={() => { setCurrent(emptyConversation()); setPage("chat"); }}>＋ New conversation</button>
-    <nav><button className={page === "chat" ? "nav-active" : ""} onClick={() => setPage("chat")}><span>◉</span>Chat</button><button className={page === "history" ? "nav-active" : ""} onClick={() => setPage("history")}><span>⌖</span>Travel history</button></nav>
-    <div className="sidebar-label">RECENT CHATS</div><ConversationList conversations={conversations} activeId={current.id} onSelect={(id) => { setPage("chat"); fetch(`/api/conversations/${id}`).then((r) => r.json()).then((item) => setCurrent({ id: item.id, messages: item.messages, events: item.events || [] })); }} onDelete={deleteConversation} />
-    <div className="sidebar-footer">Agent 1–4 <span>● online</span></div></aside>
-    <main>{page === "history" ? <HistoryPage userId={userId} /> : <ChatPage current={current} setCurrent={setCurrent} conversations={conversations} loadConversations={loadConversations} userId={userId} />}</main>
-  </div>;
+  async function deleteConversation(id) {
+    if (!window.confirm("Delete this conversation?")) return;
+    const response = await fetch(`/api/conversations/${id}`, { method: "DELETE" });
+    if (response.ok) {
+      if (current.id === id) setCurrent(emptyConversation());
+      await loadConversations();
+    }
+  }
+  return (
+    <Box
+      className="app"
+      data-color-mode={theme.palette.mode}
+      sx={{
+        display: "flex",
+        minHeight: "100vh",
+        bgcolor: "background.default",
+        color: "text.primary",
+      }}
+    >
+      <Box
+        component="aside"
+        sx={{
+          width: 280,
+          display: "flex",
+          flexDirection: "column",
+          p: 2.5,
+          bgcolor: isDark ? "#0a0f1c" : "#111b35",
+          color: "#dfe6fa",
+          borderRight: "1px solid",
+          borderColor: isDark ? "rgba(255,255,255,0.06)" : "transparent",
+        }}
+      >
+        <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mx: 0.5, mb: 3 }}>
+          <Box sx={{ width: 36, height: 36, borderRadius: "12px", bgcolor: "primary.main", color: "#fff", display: "grid", placeItems: "center", boxShadow: "0 8px 18px rgba(80,72,190,0.4)" }}>
+            <TravelExploreIcon fontSize="small" />
+          </Box>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography fontWeight={700} color="#fff" fontSize={18}>Tripwise</Typography>
+            <Typography variant="caption" sx={{ color: "#8794b7" }}>AI travel planner</Typography>
+          </Box>
+          <Tooltip title={isDark ? "Switch to light mode" : "Switch to dark mode"}>
+            <IconButton onClick={colorMode.toggleColorMode} size="small" sx={{ color: "#c5ceea", bgcolor: "rgba(255,255,255,0.06)", "&:hover": { bgcolor: "rgba(255,255,255,0.12)" } }}>
+              {isDark ? <LightModeOutlinedIcon fontSize="small" /> : <DarkModeOutlinedIcon fontSize="small" />}
+            </IconButton>
+          </Tooltip>
+        </Stack>
+        <Button
+          variant="contained"
+          startIcon={<AddIcon />}
+          onClick={() => { setCurrent(emptyConversation()); setPage("chat"); }}
+          sx={{ mb: 1, py: 1.1 }}
+        >
+          New conversation
+        </Button>
+        <Stack component="nav" spacing={0.5} sx={{ my: 2.5 }}>
+          <Button
+            startIcon={<ChatBubbleOutlinedIcon />}
+            onClick={() => setPage("chat")}
+            sx={{
+              justifyContent: "flex-start",
+              color: page === "chat" ? "#fff" : "#9daaca",
+              bgcolor: page === "chat" ? "#242f52" : "transparent",
+              "&:hover": { bgcolor: "#242f52", color: "#fff" },
+            }}
+          >
+            Chat
+          </Button>
+          <Button
+            startIcon={<HistoryEduIcon />}
+            onClick={() => setPage("history")}
+            sx={{
+              justifyContent: "flex-start",
+              color: page === "history" ? "#fff" : "#9daaca",
+              bgcolor: page === "history" ? "#242f52" : "transparent",
+              "&:hover": { bgcolor: "#242f52", color: "#fff" },
+            }}
+          >
+            Travel history
+          </Button>
+        </Stack>
+        <Typography sx={{ mx: 1, mb: 1, color: "#6e7c9f", fontSize: 10, letterSpacing: 1.5, fontWeight: 700 }}>
+          RECENT CHATS
+        </Typography>
+        <ConversationList
+          conversations={conversations}
+          activeId={current.id}
+          onSelect={(id) => {
+            setPage("chat");
+            fetch(`/api/conversations/${id}`).then((r) => r.json()).then((item) => setCurrent({ id: item.id, messages: item.messages, events: item.events || [] }));
+          }}
+          onDelete={deleteConversation}
+        />
+        <Divider sx={{ borderColor: "#293556", mt: "auto", pt: 2 }} />
+        <Typography sx={{ pt: 2, px: 1, color: "#7380a1", fontSize: 12 }}>
+          Agent 1–4 <Box component="span" sx={{ float: "right", color: "#5fd39a" }}>online</Box>
+        </Typography>
+      </Box>
+      <Box component="main" sx={{ flex: 1, minWidth: 0, bgcolor: "background.default", color: "text.primary" }}>
+        {page === "history"
+          ? <HistoryPage userId={userId} />
+          : <ChatPage current={current} setCurrent={setCurrent} conversations={conversations} loadConversations={loadConversations} userId={userId} />}
+      </Box>
+    </Box>
+  );
 }
 
-createRoot(document.getElementById("root")).render(<StrictMode><App /></StrictMode>);
+function Root() {
+  const [mode, setMode] = useState(() => {
+    try {
+      return window.localStorage.getItem("trip-color-mode") || "light";
+    } catch {
+      return "light";
+    }
+  });
+  const colorMode = useMemo(
+    () => ({
+      mode,
+      toggleColorMode: () => setMode((prev) => {
+        const next = prev === "light" ? "dark" : "light";
+        try { window.localStorage.setItem("trip-color-mode", next); } catch { /* ignore */ }
+        return next;
+      }),
+    }),
+    [mode],
+  );
+  const theme = useMemo(() => createAppTheme(mode), [mode]);
+  return (
+    <ColorModeContext.Provider value={colorMode}>
+      <ThemeProvider theme={theme}>
+        <CssBaseline />
+        <App />
+      </ThemeProvider>
+    </ColorModeContext.Provider>
+  );
+}
+
+createRoot(document.getElementById("root")).render(
+  <StrictMode>
+    <Root />
+  </StrictMode>,
+);
