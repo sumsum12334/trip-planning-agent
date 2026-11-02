@@ -28,6 +28,9 @@ class StayCandidate(BaseModel):
     nightly_cost: Optional[float] = None
     source_url: Optional[str] = None
     notes: Optional[str] = None
+    currency: Optional[str] = None
+    rating: Optional[float] = None
+    amenities: list[str] = Field(default_factory=list)
 
 
 class TransportLeg(BaseModel):
@@ -121,3 +124,4 @@ class TravelHistoryCreate(BaseModel):
     country: Optional[str] = Field(default=None, max_length=120)
     city: Optional[str] = Field(default=None, max_length=120)
     location: str = Field(min_length=1, max_length=240)
+
