@@ -118,7 +118,36 @@ Selecting an option resumes the same model tool session through
 The question is shown above the chat while waiting, and a failed continuation
 keeps the pending choice available for retry instead of marking it answered.
 The `display_trip_plan` tool provides structured destination, day, activity,
-budget, and note data that the UI renders as a visual itinerary card.
+budget, `budget_items` (category breakdown), currency, note, coordinate, place,
+and reference data that the UI renders as the focal, wide trip-plan panel to the
+right of the conversation. The chat pane is intentionally smaller, and the Live
+workflow is a separate collapsible panel in the chat pane rather than part of
+the plan. The card is theme-aware (light/dark) and its map and day cards reflow
+across the available width. It can draw the route on an interactive
+OpenStreetMap/Leaflet map (points are
+labeled approximate and a map link is shown when no coordinates are provided),
+export the plan as a day-by-day Markdown file, print or save a PDF report, edit
+the total budget and each breakdown item, and list the reference links the plan
+relies on. Payloads are validated in `shared/trip_plan.py` before events are
+emitted, and only `http(s)` reference URLs are accepted.
+
+Edited budgets are persisted with `PUT /api/conversations/{id}/trip-plan` and
+are sent to the model on the next turn as a `plan_context` block, so the agent
+reflects the user's corrected figures without a separate notification message.
+
+The chat model can also call the sub-agent tools `search_stays` (Agent 1),
+`estimate_transport` (Agent 2), and `web_search` during a turn, defined in
+`agents/chat_tools.py`. Tool results carry their mode (`stub`/`api`) and
+provider failures are returned as labeled errors so one failing tool does not
+abort the turn.
+
+The chat composer shows a **Stop** button while a model turn is streaming. The
+button calls `POST /api/chat/stop` with the turn's `request_id`, then aborts the
+local stream; the backend sets a cooperative cancel event that the streaming
+loop and `TACCClient` check between deltas, saving the partial response. After a
+response, the UI also shows contextual **Next steps** suggestions, and the
+"YOUR INPUT NEEDED" question panel is hidden once its question has been
+answered.
 
 Travel history API endpoints:
 
@@ -166,6 +195,9 @@ The chat endpoints are:
 - `GET /api/conversations/{conversation_id}`
 - `DELETE /api/conversations/{conversation_id}`
 - `POST /api/chat` (accepts an optional `conversation_id`)
+- `POST /api/chat/stream` (accepts an optional `request_id` used for cancellation and `plan_context`)
+- `POST /api/chat/stop` (body `{"request_id": "..."}`; sets the turn's cancel event)
+- `PUT /api/conversations/{conversation_id}/trip-plan` (persist edited `budget`, `currency`, and `budget_items` onto the latest plan)
 
 ## Run local (Windows)
 

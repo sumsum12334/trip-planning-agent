@@ -63,6 +63,22 @@ class ChatRequest(BaseModel):
     conversation: list[dict[str, str]] = Field(default_factory=list)
     conversation_id: Optional[str] = None
     user_id: str = Field(default="local-user", min_length=1, max_length=200)
+    request_id: Optional[str] = Field(default=None, max_length=100)
+    plan_context: Optional[dict[str, Any]] = None
+
+
+class ChatStopRequest(BaseModel):
+    """Request to cooperatively stop an in-flight streaming chat turn."""
+
+    request_id: str = Field(min_length=1, max_length=100)
+
+
+class TripPlanUpdate(BaseModel):
+    """User-edited budget fields persisted onto the latest trip-plan event."""
+
+    budget: Optional[float] = Field(default=None, ge=0)
+    currency: Optional[str] = Field(default=None, max_length=12)
+    budget_items: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ChatEvent(BaseModel):

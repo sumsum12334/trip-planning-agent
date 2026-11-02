@@ -107,3 +107,120 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
   outline: none !important;
   box-shadow: none !important;
 }
+
+/* Trip plan panel (moved out of the Live workflow list) */
+.messages .trip-plan-card{max-width:100%;margin:18px 0 6px}
+.trip-plan-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.plan-tool{padding:7px 11px;border-radius:9px;border:1px solid #cfdcf3;background:#fff;color:#3f5f95;font-size:12px;font-weight:600}
+.plan-tool:hover{background:#eef4ff;border-color:#a9c4ec}
+.plan-tool.primary{background:#6c63ff;border-color:#6c63ff;color:#fff}
+.plan-tool.primary:hover{background:#5b52e6}
+.plan-tool:disabled{opacity:.5;cursor:not-allowed}
+.trip-map-wrap{position:relative;isolation:isolate;margin-top:12px}
+.trip-map{height:240px;width:100%;border-radius:12px;overflow:hidden;border:1px solid #dbe6f7}
+.trip-map-note{display:block;margin-top:6px;color:#8995a9;font-size:11px}
+.trip-map-fallback{margin-top:12px;padding:16px;border:1px dashed #c9d6ee;border-radius:12px;background:#f7faff;color:#5f6d8c;font-size:12px}
+.trip-map-fallback p{margin:0 0 10px}
+.trip-map-links{display:flex;flex-wrap:wrap;gap:10px}
+.trip-map-links a{color:#3f6fc4;font-weight:600;text-decoration:none}
+.trip-map-links a:hover{text-decoration:underline}
+.trip-map-marker{background:transparent;border:0}
+.trip-map-marker span{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:#6c63ff;color:#fff;font-weight:700;font-size:12px;border:2px solid #fff;box-shadow:0 2px 8px #33406b80}
+.trip-places{display:flex;flex-wrap:wrap;gap:8px;margin-top:7px}
+.trip-places a,.trip-places span{color:#4b6ea8;font-size:11px;text-decoration:none}
+.trip-places a:hover{text-decoration:underline}
+.trip-budget-row{display:flex;flex-wrap:wrap;align-items:center;gap:9px;margin-top:14px;padding-top:12px;border-top:1px solid #e2ebf8;font-size:13px;color:#5f6d8c}
+.trip-budget-row strong{color:#3b5ecb}
+.budget-input{width:120px;padding:7px 10px;border:1px solid #cfdcf3;border-radius:9px;outline:none}
+.budget-notice{display:block;margin-top:7px;color:#4b6ea8;font-size:11px}
+.budget-notice.warn{color:#aa6c16}
+.trip-references{margin-top:12px;padding-top:10px;border-top:1px solid #e2ebf8}
+.references-toggle{padding:0;background:transparent;color:#3f5f95;font-size:12px;font-weight:700}
+.trip-references ul{margin:9px 0 0;padding-left:18px;display:grid;gap:5px}
+.trip-references a{color:#3f6fc4;font-size:12px;text-decoration:none;word-break:break-word}
+.trip-references a:hover{text-decoration:underline}
+.next-steps{margin:0 20px 12px}
+.next-steps-label{display:block;margin-bottom:7px;color:#8a95aa;font-size:11px;font-weight:700;letter-spacing:1px}
+.next-step-chips{display:flex;flex-wrap:wrap;gap:8px}
+.next-step-chip{padding:8px 12px;border:1px solid #d9def0;border-radius:999px;background:#fff;color:#4a5675;font-size:12px}
+.next-step-chip:hover{border-color:#a9a2ff;background:#f5f4ff;color:#5149a5}
+.next-step-chip:disabled{opacity:.55;cursor:not-allowed}
+.stop-button{padding:14px 18px;border-radius:12px;background:#e35b71;color:#fff;font-weight:700}
+.stop-button:hover{background:#cf4a60}
+.stop-button span{margin-left:5px}
+@media(max-width:560px){.trip-map{height:190px}}
+
+/* Trip plan side column (separate from the conversation window) */
+.chat-workspace{grid-template-columns:minmax(0,1fr) minmax(320px,390px)}
+.chat-side{display:grid;gap:18px;align-content:start;position:sticky;top:24px;max-height:calc(100vh - 48px);overflow:auto;padding-right:2px}
+.chat-side .trip-plan-card{margin:0;max-width:100%}
+.chat-side .activity-card{position:static;max-height:none;overflow:visible;margin:0}
+@media(max-width:1050px){.chat-workspace{grid-template-columns:1fr}.chat-side{position:static;max-height:none;overflow:visible}}
+
+/* Budget breakdown */
+.trip-budget-block{margin-top:14px;padding-top:12px;border-top:1px solid #e2ebf8}
+.trip-budget-head{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.trip-budget-head>span{font-size:10px;font-weight:800;letter-spacing:1px;color:#7a83a0}
+.trip-budget-head>strong{color:#3b5ecb;font-size:14px}
+.trip-budget-head .plan-tool{margin-left:auto}
+.budget-items{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:5px}
+.budget-items li{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:#5f6d8c;padding:6px 9px;background:#fff;border:1px solid #e6eefb;border-radius:8px}
+.budget-items b{color:#334568}
+.budget-editor{margin-top:10px}
+.budget-editor-rows{list-style:none;margin:0 0 8px;padding:0;display:grid;gap:6px}
+.budget-editor-rows li{display:flex;gap:6px;align-items:center}
+.budget-category{flex:1;min-width:0;padding:7px 9px;border:1px solid #cfdcf3;border-radius:8px;outline:none;font-size:12px}
+.budget-amount{width:96px;padding:7px 9px;border:1px solid #cfdcf3;border-radius:8px;outline:none;font-size:12px}
+.budget-editor-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
+.budget-editor-total{color:#3b5ecb;font-size:12px;font-weight:700;margin-left:auto}
+.budget-row label{display:block;font-size:12px;font-weight:600;color:#43506d}
+.budget-row input{display:block;margin-top:5px}
+
+/* Layout: trip plan is the focus; chat is a smaller pane */
+.chat-workspace{grid-template-columns:minmax(0,1fr)}
+.chat-workspace.has-plan{grid-template-columns:minmax(300px,0.82fr) minmax(0,1.7fr)}
+.chat-side{display:grid;gap:18px;align-content:start;position:sticky;top:24px;max-height:calc(100vh - 48px);overflow:auto;padding-right:2px}
+.chat-side:empty{display:none}
+.chat-side .trip-plan-card{margin:0;max-width:100%}
+.chat-panel>.activity-card{margin:16px 20px 0;max-height:none;position:static;overflow:visible}
+.trip-plan-content{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:14px;align-items:start}
+.trip-plan-content .trip-map-wrap{margin-top:0}
+.trip-plan-content .trip-days{margin-top:0;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));align-content:start}
+@media(max-width:1150px){.chat-workspace.has-plan{grid-template-columns:minmax(0,1fr)}.chat-side{position:static;max-height:none;overflow:visible}.trip-plan-content{grid-template-columns:1fr}}
+
+/* Trip plan dark-mode readability */
+.app[data-color-mode="dark"] .trip-plan-card{background:linear-gradient(135deg,#152033,#171e33);border-color:rgba(106,168,255,0.28);color:#e8ecf8}
+.app[data-color-mode="dark"] .trip-plan-header h3{color:#f2f5ff}
+.app[data-color-mode="dark"] .trip-plan-header>span{background:rgba(139,132,255,0.2);color:#b9b3ff}
+.app[data-color-mode="dark"] .day-number{color:#8bb4ff}
+.app[data-color-mode="dark"] .trip-day{background:#12192c;border-color:rgba(154,166,196,0.14)}
+.app[data-color-mode="dark"] .trip-day strong{color:#dbe3ff}
+.app[data-color-mode="dark"] .trip-day ul{color:#aab5d0}
+.app[data-color-mode="dark"] .trip-day small,
+.app[data-color-mode="dark"] .trip-notes,
+.app[data-color-mode="dark"] .trip-map-note{color:#9aa6c4}
+.app[data-color-mode="dark"] .trip-places a,
+.app[data-color-mode="dark"] .trip-places span{color:#8bb4ff}
+.app[data-color-mode="dark"] .trip-budget-block,
+.app[data-color-mode="dark"] .trip-references{border-top-color:rgba(154,166,196,0.14)}
+.app[data-color-mode="dark"] .trip-budget-head>span{color:#9aa6c4}
+.app[data-color-mode="dark"] .trip-budget-head>strong{color:#9db8ff}
+.app[data-color-mode="dark"] .budget-items li{background:#12192c;border-color:rgba(154,166,196,0.14);color:#c5cee6}
+.app[data-color-mode="dark"] .budget-items b{color:#dbe3ff}
+.app[data-color-mode="dark"] .plan-tool{background:#1c2740;border-color:rgba(154,166,196,0.2);color:#cfd8f5}
+.app[data-color-mode="dark"] .plan-tool:hover{background:#243256;border-color:#5a7cc0}
+.app[data-color-mode="dark"] .plan-tool.primary{background:#6c63ff;border-color:#6c63ff;color:#fff}
+.app[data-color-mode="dark"] .budget-category,
+.app[data-color-mode="dark"] .budget-amount{background:#12192c;border-color:rgba(154,166,196,0.2);color:#e8ecf8}
+.app[data-color-mode="dark"] .budget-row label{color:#aab5d0}
+.app[data-color-mode="dark"] .budget-editor-total{color:#9db8ff}
+.app[data-color-mode="dark"] .budget-notice{color:#9db8ff}
+.app[data-color-mode="dark"] .budget-notice.warn{color:#f0c060}
+.app[data-color-mode="dark"] .references-toggle{color:#cfd8f5}
+.app[data-color-mode="dark"] .trip-references a{color:#8bb4ff}
+.app[data-color-mode="dark"] .trip-map{border-color:rgba(154,166,196,0.18)}
+.app[data-color-mode="dark"] .trip-map-fallback{background:#141b2e;border-color:rgba(154,166,196,0.2);color:#aab5d0}
+.app[data-color-mode="dark"] .trip-map-links a{color:#8bb4ff}
+.app[data-color-mode="dark"] .next-steps-label{color:#9aa6c4}
+.app[data-color-mode="dark"] .next-step-chip{background:#1c2740;border-color:rgba(154,166,196,0.2);color:#cfd8f5}
+.app[data-color-mode="dark"] .next-step-chip:hover{background:#243256;color:#fff;border-color:#5a7cc0}

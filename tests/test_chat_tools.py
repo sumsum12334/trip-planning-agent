@@ -1,0 +1,46 @@
+"""Tests for the chat model's sub-agent tools."""
+
+from __future__ import annotations
+
+import pytest
+
+from agents.chat_tools import AGENT_TOOL_NAMES, AGENT_TOOL_SCHEMAS, execute_agent_tool
+
+
+def test_schemas_cover_expected_agent_tools():
+    names = {schema["function"]["name"] for schema in AGENT_TOOL_SCHEMAS}
+    assert names == AGENT_TOOL_NAMES == {"search_stays", "estimate_transport", "web_search"}
+
+
+def test_search_stays_returns_stub_candidates():
+    result = execute_agent_tool("search_stays", {"destination": "Tokyo", "budget": 400, "days": 4})
+    assert result["mode"] == "stub"
+    assert result["stays"], "expected stub stay candidates"
+    assert result["stays"][0]["name"]
+
+
+def test_estimate_transport_returns_leg():
+    leg = execute_agent_tool("estimate_transport", {"from_place": "A", "to_place": "B"})
+    assert leg["from_place"] == "A"
+    assert leg["to_place"] == "B"
+    assert leg["mode"] == "stub"
+
+
+def test_web_search_stub_mode():
+    result = execute_agent_tool("web_search", {"query": "things to do in Kyoto", "limit": 3})
+    assert result["mode"] == "stub"
+    assert result["results"]
+
+
+@pytest.mark.parametrize(
+    "name,arguments",
+    [
+        ("search_stays", {"destination": "  "}),
+        ("estimate_transport", {"from_place": "A"}),
+        ("web_search", {"query": ""}),
+        ("not_a_tool", {}),
+    ],
+)
+def test_invalid_agent_tool_arguments_raise(name, arguments):
+    with pytest.raises(ValueError):
+        execute_agent_tool(name, arguments)
