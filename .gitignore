@@ -63,3 +63,4 @@ Desktop.ini
 .cache/
 coverage/
 .DS_Store
+.neon
