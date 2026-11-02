@@ -618,7 +618,7 @@ function App() {
           Agent 1–4 <Box component="span" sx={{ float: "right", color: "#5fd39a" }}>online</Box>
         </Typography>
       </Box>
-      <Box component="main" sx={{ flex: 1, minWidth: 0 }}>
+      <Box component="main" sx={{ flex: 1, minWidth: 0, bgcolor: "background.default", color: "text.primary" }}>
         {page === "history"
           ? <HistoryPage userId={userId} />
           : <ChatPage current={current} setCurrent={setCurrent} conversations={conversations} loadConversations={loadConversations} userId={userId} />}

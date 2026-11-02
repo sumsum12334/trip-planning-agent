@@ -16,7 +16,7 @@ export function createAppTheme(mode = "light") {
       },
       secondary: { main: isDark ? "#6aa8ff" : "#4b83d4" },
       background: {
-        default: isDark ? "#0e1322" : "#f3f5fb",
+        default: isDark ? "#0a0e18" : "#f3f5fb",
         paper: isDark ? "#171e33" : "#ffffff",
       },
       text: {
@@ -53,7 +53,7 @@ export function createAppTheme(mode = "light") {
         styleOverrides: {
           body: {
             backgroundImage: isDark
-              ? "radial-gradient(circle at 75% -10%, rgba(108,99,255,0.18), transparent 40%)"
+              ? "radial-gradient(circle at 75% -10%, rgba(108,99,255,0.12), #0a0e18 45%)"
               : "radial-gradient(circle at 70% 0, #e9edff 0, transparent 35%)",
             backgroundAttachment: "fixed",
           },

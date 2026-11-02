@@ -89,3 +89,19 @@
 .activity-card{border-radius:16px}
 .composer{padding:18px 22px}
 .workflow-status{border-radius:14px}
+
+.app[data-color-mode="dark"] main,
+.app[data-color-mode="dark"] .page{
+  background:#0a0e18;
+  color:#e8ecf8;
+}
+.app[data-color-mode="dark"] .page-title h1{
+  color:#f2f5ff;
+}
+.app[data-color-mode="dark"] .page-title .muted,
+.app[data-color-mode="dark"] .welcome p{
+  color:#9aa6c4;
+}
+.app[data-color-mode="dark"] .chat-workspace{
+  background:transparent;
+}
