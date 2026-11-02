@@ -263,7 +263,25 @@ errors.
 | `DATABASE_URL` | Travel history DB. Default SQLite: `sqlite:///./data/travel_history.sqlite`. Local Docker Postgres: `postgresql://trip:trip@localhost:5432/travel_history` (`pip install ".[db]"`, `docker compose up -d postgres`). Neon: pooled URL from `.env` after `neon init` / `neon deploy` (refresh with `neon env pull`). Chat stays on SQLite. `GET /health` → `agents.travel_history.storage` = `sqlite` \| `postgres`. |
 | `DATABASE_URL_UNPOOLED` | Optional Neon direct URL (migrations/admin). App runtime uses pooled `DATABASE_URL`. |
 | `NEON_BRANCH` | Optional Neon branch name (e.g. `production`) when using Neon. |
-| `LANGFUSE_*` | Optional observability (`LANGFUSE_ENABLED=1`) |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST` | Langfuse 5.x credentials and host |
+| `LANGFUSE_ENABLED` | Set to `1` to emit flushed model-generation traces |
+
+Install the Langfuse extra before starting the backend:
+
+```powershell
+pip install -e ".[langfuse]"
+```
+
+Each chat turn creates one Langfuse trace (`chat.turn`, or `chat.question` for
+a resumed clarification) with the Qwen requests recorded as child generations.
+Tool-call rounds stay in the same trace and record the requested tool names and
+arguments as their output, so multi-step turns no longer appear as separate
+traces. `/plan` requests create a `plan.request` trace around the coordinator
+workflow. Chat traces use the application `conversation_id` as their Langfuse
+session ID, so all turns in one conversation can be reviewed together.
+Standalone `/plan` requests receive a generated session ID. Streaming requests
+record the final answer text, while private reasoning content is not sent to
+Langfuse. Tracking errors are logged without changing the model request result.
 
 UI is not hosted on TACC; only the backend calls the course model-serving endpoint (request → queue → worker).
 

@@ -12,11 +12,18 @@ from agents.travel_history import run as travel_history
 from config.settings import get_settings
 from shared.schemas import DayPlan, Itinerary, TripRequest
 from shared.prompts import TRIP_PLANNING_SYSTEM_PROMPT
+from trip_planning_agent.observability import (
+    end_trace,
+    start_trace,
+    trace_context_for,
+)
 from trip_planning_agent.tacc_client import TACCClient
 
 
 class CoordinatorState(TypedDict, total=False):
     request: TripRequest
+    session_id: str
+    trace_context: dict[str, str] | None
     visited: list[str]
     stays: list[Any]
     itinerary: Itinerary
@@ -53,6 +60,8 @@ def _coordinate_node(state: CoordinatorState) -> CoordinatorState:
         f"budget={request.budget} interests={request.interests} "
         f"avoid={visited if request.avoid_visited else []}",
         system=TRIP_PLANNING_SYSTEM_PROMPT,
+        session_id=state.get("session_id"),
+        trace_context=state.get("trace_context"),
     )
 
     day = DayPlan(
@@ -93,9 +102,27 @@ _graph.add_edge("coordinate", END)
 _coordinator_graph = _graph.compile()
 
 
-def run(request: TripRequest) -> Itinerary:
+def run(request: TripRequest, *, session_id: str | None = None) -> Itinerary:
     """Run the current coordinator through the LangGraph boundary."""
-    return _coordinator_graph.invoke({"request": request})["itinerary"]
+    trace = start_trace(
+        name="plan.request",
+        input=request.model_dump(mode="json"),
+        session_id=session_id,
+        metadata={"workflow": "plan"},
+    )
+    try:
+        itinerary = _coordinator_graph.invoke(
+            {
+                "request": request,
+                "session_id": session_id,
+                "trace_context": trace_context_for(trace),
+            }
+        )["itinerary"]
+    except Exception as error:
+        end_trace(trace, output={"error": str(error)}, error=error)
+        raise
+    end_trace(trace, output=itinerary.model_dump(mode="json"))
+    return itinerary
 
 
 def health() -> dict[str, Any]:
