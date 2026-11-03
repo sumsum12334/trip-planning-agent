@@ -225,50 +225,114 @@ function buildPlanHtml(plan) {
   const currency = plan.currency || "";
   const items = planBudgetItems(plan);
   const estimate = plan.budget ?? null;
-  const budget = estimate == null ? "Not specified" : formatBudget(estimate, currency);
-  const breakdown = items.length
-    ? `<ul>${items.map((item) => `<li>${escapeHtml(item.category)} — ${escapeHtml(formatBudget(item.amount, item.currency || currency))}</li>`).join("")}</ul>`
+  const days = plan.days || [];
+  const points = routePoints(plan);
+  const itemsTotal = items.length
+    ? Math.round(items.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) * 100) / 100
+    : null;
+  const markerForPlace = (dayNumber, name) => {
+    const index = points.findIndex((point) => point.kind === "place" && point.day === dayNumber && point.label === name);
+    return index >= 0 ? index + 1 : null;
+  };
+  const generated = new Date().toLocaleDateString();
+  const budgetText = estimate == null ? "Not specified" : formatBudget(estimate, currency);
+
+  const daySections = days.map((day) => {
+    const dayItems = Array.isArray(day.budget_items) ? day.budget_items : [];
+    const dayItemsTotal = dayItems.length
+      ? Math.round(dayItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) * 100) / 100
+      : null;
+    const dayTotal = day.budget ?? dayItemsTotal;
+    return `<section class="day">
+      <header class="day-head">
+        <span class="day-num">Day ${escapeHtml(day.day)}</span>
+        <h3>${escapeHtml(day.title)}</h3>
+        ${dayTotal != null ? `<span class="day-total">${escapeHtml(formatBudget(dayTotal, currency))}</span>` : ""}
+      </header>
+      <ul class="activities">${(day.activities || []).map((activity) => `<li>${escapeHtml(activity)}</li>`).join("")}</ul>
+      ${(day.places || []).length ? `<p class="route"><span class="label">Route</span> ${day.places.map((place) => {
+        const marker = markerForPlace(day.day, place.name);
+        return `${marker ? `<span class="mk">${marker}</span>` : ""}${escapeHtml(place.name)}`;
+      }).join(' <span class="arrow">→</span> ')}</p>` : ""}
+      ${dayItems.length ? `<table class="mini"><tbody>${dayItems.map((item) => `<tr><td>${escapeHtml(item.category)}</td><td class="amt">${escapeHtml(formatBudget(item.amount, item.currency || currency))}</td></tr>`).join("")}</tbody></table>` : ""}
+      ${(day.notes || []).length ? `<p class="notes">${day.notes.map(escapeHtml).join(" · ")}</p>` : ""}
+    </section>`;
+  }).join("");
+
+  const routeRows = [
+    plan.airport?.name ? `<li><span class="mk airport">✈</span><div><strong>${escapeHtml(plan.airport.name)}</strong><br/><span class="muted">Arrival airport</span></div></li>` : "",
+    ...days.map((day) => {
+      const markers = points.map((point, index) => (point.day === day.day ? index + 1 : null)).filter((value) => value != null);
+      return `<li><span class="mk">${escapeHtml(day.day)}</span><div><strong>Day ${escapeHtml(day.day)} · ${escapeHtml(day.title)}</strong><br/><span class="muted">${(day.activities || []).length} activities${markers.length ? ` · map markers ${markers.join(", ")}` : ""}</span></div></li>`;
+    }),
+  ].join("");
+
+  const categoryHtml = items.length
+    ? `<section class="card"><h2>Category budget</h2><table class="budget"><tbody>${items.map((item) => `<tr><td>${escapeHtml(item.category)}</td><td class="amt">${escapeHtml(formatBudget(item.amount, item.currency || currency))}</td></tr>`).join("")}<tr class="total"><td>Items total</td><td class="amt">${escapeHtml(formatBudget(itemsTotal, currency))}</td></tr></tbody></table></section>`
     : "";
-  const days = (plan.days || []).map((day) => `
-      <section class="day">
-        <h2>Day ${escapeHtml(day.day)} · ${escapeHtml(day.title)}</h2>
-        <ul>${(day.activities || []).map((activity) => `<li>${escapeHtml(activity)}</li>`).join("")}</ul>
-        ${(day.notes || []).length ? `<p class="muted"><strong>Notes:</strong> ${day.notes.map(escapeHtml).join(" · ")}</p>` : ""}
-        ${(day.places || []).length ? `<p class="muted"><strong>Places:</strong> ${day.places.map((place) => escapeHtml(place.name)).join(", ")}</p>` : ""}
-      </section>`).join("");
-  const route = routePoints(plan);
-  const routeHtml = route.length
-    ? `<p class="muted"><strong>Route:</strong> ${route.map((point) => escapeHtml(point.label)).join(" → ")}</p>`
+  const notesHtml = (plan.notes || []).length
+    ? `<section class="card"><h2>Notes</h2><ul>${plan.notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}</ul></section>`
     : "";
-  const notes = (plan.notes || []).length
-    ? `<section><h2>Notes</h2><ul>${plan.notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}</ul></section>`
+  const referencesHtml = (plan.references || []).length
+    ? `<section class="card"><h2>References</h2><ul class="refs">${plan.references.map((ref) => `<li><a href="${escapeHtml(ref.url)}">${escapeHtml(ref.title)}</a></li>`).join("")}</ul></section>`
     : "";
-  const references = (plan.references || []).length
-    ? `<section><h2>References</h2><ul>${plan.references.map((ref) => `<li><a href="${escapeHtml(ref.url)}">${escapeHtml(ref.title)}</a></li>`).join("")}</ul></section>`
-    : "";
+
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
     <title>${escapeHtml(plan.destination)} trip plan</title>
     <style>
       *{box-sizing:border-box}
-      body{font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#1f2a44;margin:0;padding:32px 40px}
-      h1{font-size:26px;margin:0 0 4px}
-      h2{font-size:16px;margin:22px 0 8px;color:#334568}
-      .meta{color:#5b6784;margin:0 0 8px}
-      .budget{font-weight:700;color:#3b5ecb}
-      .muted{color:#5b6784;font-size:13px;margin:8px 0 0}
-      ul{margin:6px 0 0;padding-left:20px}
-      li{margin:3px 0}
-      .day{break-inside:avoid;border-top:1px solid #e3e8f2;padding-top:10px;margin-top:14px}
-      a{color:#3b5ecb}
-      footer{margin-top:26px;color:#8a94aa;font-size:11px;border-top:1px solid #e3e8f2;padding-top:10px}
+      :root{--brand:#6c63ff;--ink:#1f2a44;--muted:#6b7793;--line:#e6eaf3}
+      body{font:13px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);margin:0;padding:28px 36px}
+      a{color:#3b5ecb;text-decoration:none}
+      .hero{background:linear-gradient(135deg,#eef2ff,#f7f9ff);border:1px solid var(--line);border-radius:16px;padding:20px 24px;margin-bottom:18px}
+      .hero h1{margin:0;font-size:27px;letter-spacing:-.02em}
+      .hero .sub{color:var(--muted);margin:4px 0 14px}
+      .stats{display:flex;gap:12px;flex-wrap:wrap}
+      .stat{flex:1 1 150px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+      .stat .k{color:var(--muted);font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase}
+      .stat .v{font-size:15px;font-weight:700;margin-top:3px}
+      .card{border:1px solid var(--line);border-radius:14px;padding:14px 18px;margin:16px 0;break-inside:avoid}
+      .card h2{font-size:13px;margin:0 0 10px;color:#334568;text-transform:uppercase;letter-spacing:1px}
+      .timeline{list-style:none;margin:0;padding:0}
+      .timeline li{display:flex;gap:10px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--line)}
+      .timeline li:first-child{border-top:0}
+      .mk{display:inline-grid;place-items:center;min-width:22px;height:22px;padding:0 6px;border-radius:999px;background:var(--brand);color:#fff;font-size:11px;font-weight:700}
+      .mk.airport{background:#2f9e6f;min-width:26px}
+      .muted{color:var(--muted)}
+      .day{break-inside:avoid;border:1px solid var(--line);border-radius:14px;padding:14px 18px;margin:12px 0}
+      .day-head{display:flex;align-items:baseline;gap:10px}
+      .day-num{background:#eef2ff;color:#3b5ecb;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800;letter-spacing:.5px}
+      .day-head h3{margin:0;font-size:16px;flex:1}
+      .day-total{color:#3b5ecb;font-weight:700;font-size:13px}
+      .activities{margin:10px 0 0;padding-left:18px}
+      .activities li{margin:3px 0}
+      .route{color:var(--muted);margin:10px 0 0}
+      .route .label{font-weight:800;color:#334568;margin-right:4px}
+      .arrow{color:#a9b3cc;padding:0 2px}
+      table{width:100%;border-collapse:collapse;margin-top:8px}
+      table td{padding:5px 6px;border-bottom:1px solid var(--line);text-align:left}
+      table .amt{text-align:right;font-variant-numeric:tabular-nums;color:#334568}
+      table .total td{font-weight:800;color:#3b5ecb;border-bottom:0;border-top:2px solid #dbe3f7}
+      .mini{max-width:320px}
+      .notes{color:var(--muted);margin:10px 0 0;font-size:12px}
+      .refs{margin:0;padding-left:18px}
+      footer{margin-top:24px;color:#8a94aa;font-size:11px;border-top:1px solid var(--line);padding-top:10px}
+      @media print{ body{padding:10mm} .hero,.card,.day{break-inside:avoid} }
     </style></head><body>
-    <h1>${escapeHtml(plan.destination)} — Trip plan</h1>
-    <p class="meta">Estimated budget: <span class="budget">${escapeHtml(budget)}</span></p>
-    ${breakdown}
-    ${routeHtml}
-    ${days}
-    ${notes}
-    ${references}
+    <section class="hero">
+      <h1>${escapeHtml(plan.destination)}</h1>
+      <p class="sub">Trip plan · generated ${escapeHtml(generated)}</p>
+      <div class="stats">
+        <div class="stat"><div class="k">Estimated budget</div><div class="v">${escapeHtml(budgetText)}</div></div>
+        <div class="stat"><div class="k">Days</div><div class="v">${escapeHtml(days.length)}</div></div>
+        ${plan.airport?.name ? `<div class="stat"><div class="k">Arrival airport</div><div class="v">${escapeHtml(plan.airport.name)}</div></div>` : ""}
+      </div>
+    </section>
+    ${days.length ? `<section class="card"><h2>Route by day</h2><ul class="timeline">${routeRows}</ul></section>` : ""}
+    ${daySections}
+    ${categoryHtml}
+    ${notesHtml}
+    ${referencesHtml}
     <footer>Generated by Tripwise. Coordinates, prices, and availability are approximate and should be confirmed before booking.</footer>
   </body></html>`;
 }
