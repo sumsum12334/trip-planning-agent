@@ -37,21 +37,36 @@ _PLACE_SCHEMA = {
     "required": ["name"],
 }
 
+_AIRPORT_SCHEMA = {
+    "type": "object",
+    "description": (
+        "Arrival airport for the destination. It is used as the first point of "
+        "the route map, so provide the airport the traveller flies into."
+    ),
+    "properties": {
+        "name": {"type": "string", "description": "Airport name or IATA code."},
+        "coordinates": _COORDINATE_SCHEMA,
+        "url": {"type": "string", "description": "Optional http(s) reference for the airport."},
+    },
+    "required": ["name"],
+}
+
 TRIP_PLAN_TOOL: dict[str, Any] = {
     "type": "function",
     "function": {
         "name": "display_trip_plan",
         "description": (
             "Display a structured trip itinerary after enough planning details are known. "
-            "Include approximate coordinates only for well-known places so the UI can map "
-            "the route, and add reference links (with title and http(s) url) for sources "
-            "that the plan relies on."
+            "Provide the arrival `airport` (the first point of the map), approximate "
+            "coordinates for well-known places so the UI can map the route, and reference "
+            "links (with title and http(s) url) for sources that the plan relies on."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "destination": {"type": "string"},
                 "destination_coordinates": _COORDINATE_SCHEMA,
+                "airport": _AIRPORT_SCHEMA,
                 "days": {
                     "type": "array",
                     "items": {
@@ -63,21 +78,27 @@ TRIP_PLAN_TOOL: dict[str, Any] = {
                             "notes": {"type": "array", "items": {"type": "string"}},
                             "coordinates": _COORDINATE_SCHEMA,
                             "places": {"type": "array", "items": _PLACE_SCHEMA},
+                            "budget": {"type": "number", "minimum": 0, "description": "Estimated cost for this day."},
                         },
                         "required": ["day", "title", "activities"],
                     },
                     "minItems": 1,
                     "maxItems": MAX_DAYS,
                 },
-                "budget": {"type": "number", "description": "Estimated total budget."},
+                "budget": {"type": "number", "description": "Estimated total budget (independent of budget_items)."},
                 "currency": {"type": "string", "description": "Currency code or symbol for the budget."},
                 "budget_items": {
                     "type": "array",
-                    "description": "Optional per-category budget breakdown; amounts should sum to the total.",
+                    "description": (
+                        "Per-category budget breakdown. Use concrete categories "
+                        "(accommodation, transport, food, activities, entrance fees, "
+                        "shopping, buffer). Avoid a vague 'other' bucket unless it is a "
+                        "genuinely small miscellaneous amount."
+                    ),
                     "items": {
                         "type": "object",
                         "properties": {
-                            "category": {"type": "string", "description": "Category such as accommodation, transport, food, or activities."},
+                            "category": {"type": "string", "description": "A concrete spending category."},
                             "amount": {"type": "number", "minimum": 0},
                         },
                         "required": ["category", "amount"],
@@ -172,6 +193,31 @@ def _places(value: Any, *, day_number: int) -> list[dict[str, Any]]:
     return places
 
 
+def _optional_number(value: Any, *, field: str) -> float | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ValueError(f"{field} must be a non-negative number.")
+    return float(value)
+
+
+def _airport(value: Any) -> dict[str, Any] | None:
+    """Normalize the optional arrival airport (the first route point)."""
+    if value in (None, ""):
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("airport must be an object with a name.")
+    name = str(value.get("name", "")).strip()
+    if not name:
+        raise ValueError("airport requires a name.")
+    raw_url = value.get("url")
+    return {
+        "name": name,
+        "coordinates": _coordinate(value.get("coordinates"), field="Airport coordinates"),
+        "url": _url(raw_url, field="Airport URL") if raw_url not in (None, "") else None,
+    }
+
+
 def _budget_items(value: Any, *, currency: str) -> list[dict[str, Any]]:
     """Normalize an optional per-category budget breakdown."""
     if value in (None, ""):
@@ -249,18 +295,14 @@ def normalize_trip_plan(arguments: dict[str, Any]) -> dict[str, Any]:
                     item.get("coordinates"), field=f"Day {day_number} coordinates"
                 ),
                 "places": _places(item.get("places"), day_number=day_number),
+                "budget": _optional_number(
+                    item.get("budget"), field=f"Day {day_number} budget"
+                ),
             }
         )
 
     currency = str(arguments.get("currency", "")).strip()[:MAX_CURRENCY_CHARS]
     budget_items = _budget_items(arguments.get("budget_items"), currency=currency)
-    budget = arguments.get("budget")
-    if budget in (None, ""):
-        budget = round(sum(item["amount"] for item in budget_items), 2) if budget_items else None
-    elif isinstance(budget, bool) or not isinstance(budget, (int, float)) or budget < 0:
-        raise ValueError("display_trip_plan budget must be a non-negative number.")
-    else:
-        budget = float(budget)
 
     return {
         "destination": destination,
@@ -268,8 +310,10 @@ def normalize_trip_plan(arguments: dict[str, Any]) -> dict[str, Any]:
             arguments.get("destination_coordinates"),
             field="Destination coordinates",
         ),
+        "airport": _airport(arguments.get("airport")),
         "days": normalized_days,
-        "budget": budget,
+        # The estimated total is independent of the item breakdown.
+        "budget": _optional_number(arguments.get("budget"), field="display_trip_plan budget"),
         "currency": currency,
         "budget_items": budget_items,
         "notes": _clean_strings(arguments.get("notes", [])),
@@ -289,8 +333,10 @@ def format_plan_context(context: dict[str, Any] | None) -> str:
     destination = str(context.get("destination", "")).strip()
     currency = str(context.get("currency", "")).strip()
     items = context.get("budget_items") if isinstance(context.get("budget_items"), list) else []
+    days = context.get("days") if isinstance(context.get("days"), list) else []
+    airport = context.get("airport") if isinstance(context.get("airport"), dict) else None
     total = context.get("budget")
-    if not destination and total in (None, "") and not items:
+    if not destination and total in (None, "") and not items and not days:
         return ""
     lines = [
         "Current trip-plan state (the user may have edited this; treat it as the "
@@ -298,8 +344,15 @@ def format_plan_context(context: dict[str, Any] | None) -> str:
     ]
     if destination:
         lines.append(f"- Destination: {destination}")
+    if airport and str(airport.get("name", "")).strip():
+        lines.append(f"- Arrival airport: {str(airport['name']).strip()}")
     if total not in (None, ""):
         lines.append(f"- Total budget: {currency + ' ' if currency else ''}{total}")
+    for day in days:
+        if isinstance(day, dict) and day.get("budget") not in (None, ""):
+            lines.append(
+                f"- Day {day.get('day', '?')} budget: {currency + ' ' if currency else ''}{day['budget']}"
+            )
     for item in items:
         if not isinstance(item, dict):
             continue

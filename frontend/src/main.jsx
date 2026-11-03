@@ -23,6 +23,8 @@ import {
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import ChatBubbleOutlinedIcon from "@mui/icons-material/ChatBubbleOutlined";
+import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import DarkModeOutlinedIcon from "@mui/icons-material/DarkModeOutlined";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import HistoryEduIcon from "@mui/icons-material/HistoryEdu";
@@ -140,14 +142,6 @@ const eventIcon = (event) => {
 };
 
 const planBudgetItems = (plan) => (Array.isArray(plan?.budget_items) ? plan.budget_items : []);
-const planTotal = (plan) => {
-  const items = planBudgetItems(plan);
-  if (items.length) {
-    return Math.round(items.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) * 100) / 100;
-  }
-  return plan?.budget ?? null;
-};
-
 const planFromEvents = (events, predicate = () => true) =>
   [...(events || [])].reverse().find(
     (event) => event.data?.tool === "display_trip_plan" && event.data?.result && predicate(event.data.result),
@@ -156,7 +150,9 @@ const planFromEvents = (events, predicate = () => true) =>
 function routePoints(plan) {
   if (!plan) return [];
   const points = [];
-  if (plan.destination_coordinates) {
+  if (plan.airport?.coordinates) {
+    points.push({ ...plan.airport.coordinates, label: plan.airport.name, sub: "Arrival airport", kind: "airport" });
+  } else if (plan.destination_coordinates) {
     points.push({ ...plan.destination_coordinates, label: plan.destination, sub: "Destination", kind: "destination" });
   }
   (plan.days || []).forEach((day) => {
@@ -176,10 +172,10 @@ function markerNumbersForDay(points, dayNumber) {
     .filter((number) => number != null);
 }
 
-function numberedIcon(number) {
+function numberedIcon(number, kind) {
   return L.divIcon({
-    className: "trip-map-marker",
-    html: `<span>${number}</span>`,
+    className: kind === "airport" ? "trip-map-marker airport" : "trip-map-marker",
+    html: `<span>${kind === "airport" ? "✈" : number}</span>`,
     iconSize: [28, 28],
     iconAnchor: [14, 14],
     popupAnchor: [0, -14],
@@ -190,8 +186,14 @@ function buildPlanMarkdown(plan) {
   const currency = plan.currency || "";
   const items = planBudgetItems(plan);
   const lines = [`# ${plan.destination} — Trip plan`, ""];
-  const total = planTotal(plan);
-  if (total != null) lines.push(`**Estimated budget:** ${formatBudget(total, currency)}`, "");
+  const estimate = plan.budget ?? null;
+  if (estimate != null) lines.push(`**Estimated budget:** ${formatBudget(estimate, currency)}`, "");
+  const dayBudgets = (plan.days || []).filter((day) => day.budget != null);
+  if (dayBudgets.length) {
+    lines.push("**Per-day estimate:**", "");
+    dayBudgets.forEach((day) => lines.push(`- Day ${day.day}: ${formatBudget(day.budget, currency)}`));
+    lines.push("");
+  }
   if (items.length) {
     lines.push("**Budget breakdown:**", "");
     items.forEach((item) => lines.push(`- ${item.category}: ${formatBudget(item.amount, item.currency || currency)}`));
@@ -217,8 +219,8 @@ function buildPlanMarkdown(plan) {
 function buildPlanHtml(plan) {
   const currency = plan.currency || "";
   const items = planBudgetItems(plan);
-  const total = planTotal(plan);
-  const budget = total == null ? "Not specified" : formatBudget(total, currency);
+  const estimate = plan.budget ?? null;
+  const budget = estimate == null ? "Not specified" : formatBudget(estimate, currency);
   const breakdown = items.length
     ? `<ul>${items.map((item) => `<li>${escapeHtml(item.category)} — ${escapeHtml(formatBudget(item.amount, item.currency || currency))}</li>`).join("")}</ul>`
     : "";
@@ -317,7 +319,7 @@ function TripMap({ plan }) {
     }).addTo(map);
     const latlngs = points.map((point) => [point.lat, point.lng]);
     points.forEach((point, index) => {
-      L.marker([point.lat, point.lng], { icon: numberedIcon(index + 1) })
+      L.marker([point.lat, point.lng], { icon: numberedIcon(index + 1, point.kind) })
         .addTo(map)
         .bindPopup(`<strong>${escapeHtml(point.label)}</strong>${point.sub ? `<br/>${escapeHtml(point.sub)}` : ""}`);
     });
@@ -351,69 +353,81 @@ function TripMap({ plan }) {
 
 function BudgetEditor({ plan, currency, onCancel, onSave }) {
   const items = planBudgetItems(plan);
-  const total = planTotal(plan);
-  const [rows, setRows] = useState(items.length
-    ? items.map((item) => ({ category: item.category, amount: String(item.amount) }))
-    : []);
-  const [totalOnly, setTotalOnly] = useState(total != null ? String(total) : "");
-  const [breakdown, setBreakdown] = useState(items.length > 0);
+  const estimate = plan.budget ?? null;
+  const days = plan.days || [];
+  const derivedDay = estimate != null && days.length ? Math.round((estimate / days.length) * 100) / 100 : null;
+  const [estimateInput, setEstimateInput] = useState(estimate != null ? String(estimate) : "");
+  const [dayRows, setDayRows] = useState(days.map((day) => ({
+    day: day.day,
+    amount: day.budget != null ? String(day.budget) : (derivedDay != null ? String(derivedDay) : ""),
+  })));
+  const [rows, setRows] = useState(items.map((item) => ({ category: item.category, amount: String(item.amount) })));
   const [error, setError] = useState("");
 
-  const computedTotal = breakdown
-    ? Math.round(rows.reduce((sum, row) => {
-        const amount = Number(row.amount);
-        return sum + (Number.isFinite(amount) && amount >= 0 ? amount : 0);
-      }, 0) * 100) / 100
-    : null;
+  const sumRows = (list) => Math.round(list.reduce((sum, row) => {
+    const amount = Number(row.amount);
+    return sum + (Number.isFinite(amount) && amount >= 0 ? amount : 0);
+  }, 0) * 100) / 100;
+  const itemsTotal = sumRows(rows);
+  const dayTotal = sumRows(dayRows);
 
   function updateRow(index, field, value) {
     setRows((previous) => previous.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
   }
   function addRow() { setRows((previous) => [...previous, { category: "", amount: "" }]); }
   function removeRow(index) { setRows((previous) => previous.filter((_, i) => i !== index)); }
+  function updateDay(index, value) {
+    setDayRows((previous) => previous.map((row, i) => (i === index ? { ...row, amount: value } : row)));
+  }
 
   function save() {
-    if (breakdown) {
-      const cleaned = rows
-        .map((row) => ({ category: row.category.trim(), amount: Number(row.amount) }))
-        .filter((row) => row.category && Number.isFinite(row.amount) && row.amount >= 0);
-      if (!cleaned.length) { setError("Add at least one item with a category and a non-negative amount."); return; }
-      onSave({
-        budget: Math.round(cleaned.reduce((sum, row) => sum + row.amount, 0) * 100) / 100,
-        currency,
-        budget_items: cleaned.map((row) => ({ category: row.category, amount: row.amount, currency })),
-      });
+    const estimateValue = estimateInput.trim() === "" ? null : Number(estimateInput);
+    if (estimateValue != null && (!Number.isFinite(estimateValue) || estimateValue < 0)) {
+      setError("Enter a non-negative estimated total.");
       return;
     }
-    const value = totalOnly.trim() === "" ? null : Number(totalOnly);
-    if (value != null && (!Number.isFinite(value) || value < 0)) { setError("Enter a non-negative total."); return; }
-    onSave({ budget: value, currency, budget_items: [] });
+    const cleanedItems = rows
+      .map((row) => ({ category: row.category.trim(), amount: Number(row.amount) }))
+      .filter((row) => row.category && Number.isFinite(row.amount) && row.amount >= 0);
+    const dayBudgets = dayRows
+      .map((row) => ({ day: row.day, amount: row.amount.trim() === "" ? null : Number(row.amount) }))
+      .filter((row) => row.amount != null && Number.isFinite(row.amount) && row.amount >= 0);
+    onSave({
+      budget: estimateValue,
+      currency,
+      budget_items: cleanedItems.map((row) => ({ category: row.category, amount: row.amount, currency })),
+      day_budgets: dayBudgets,
+    });
   }
 
   return <div className="budget-editor">
-    {breakdown ? <>
+    <div className="budget-row">
+      <label>Estimated total
+        <input className="budget-amount" type="number" min="0" step="any" value={estimateInput} onChange={(event) => setEstimateInput(event.target.value)} />
+      </label>
+    </div>
+    {dayRows.length > 0 && <>
+      <div className="budget-editor-label">Per-day estimate</div>
       <ul className="budget-editor-rows">
-        {rows.map((row, index) => <li key={index}>
-          <input className="budget-category" placeholder="Category" value={row.category} onChange={(event) => updateRow(index, "category", event.target.value)} />
-          <input className="budget-amount" type="number" min="0" step="any" placeholder="0" value={row.amount} onChange={(event) => updateRow(index, "amount", event.target.value)} />
-          <button type="button" className="icon-button danger" title="Remove item" onClick={() => removeRow(index)}>×</button>
+        {dayRows.map((row, index) => <li key={row.day}>
+          <span className="budget-day-label">Day {row.day}</span>
+          <input className="budget-amount" type="number" min="0" step="any" placeholder="0" value={row.amount} onChange={(event) => updateDay(index, event.target.value)} />
         </li>)}
       </ul>
-      <div className="budget-editor-actions">
-        <button type="button" className="plan-tool" onClick={addRow}>＋ Item</button>
-        <button type="button" className="plan-tool" onClick={() => setBreakdown(false)}>Use single total</button>
-        <span className="budget-editor-total">Total: {formatBudget(computedTotal, currency)}{plan.budget != null ? ` · Estimate: ${formatBudget(plan.budget, currency)}` : ""}</span>
-      </div>
-    </> : <>
-      <div className="budget-row">
-        <label>Total budget
-          <input className="budget-amount" type="number" min="0" step="any" value={totalOnly} onChange={(event) => setTotalOnly(event.target.value)} />
-        </label>
-      </div>
-      <div className="budget-editor-actions">
-        <button type="button" className="plan-tool" onClick={() => { setBreakdown(true); setRows((previous) => previous.length ? previous : [{ category: "", amount: totalOnly }]); }}>Break down into items</button>
-      </div>
+      <div className="budget-editor-actions"><span className="budget-editor-total">Per-day total: {formatBudget(dayTotal, currency)}</span></div>
     </>}
+    <div className="budget-editor-label">Category items</div>
+    <ul className="budget-editor-rows">
+      {rows.map((row, index) => <li key={index}>
+        <input className="budget-category" placeholder="Category" value={row.category} onChange={(event) => updateRow(index, "category", event.target.value)} />
+        <input className="budget-amount" type="number" min="0" step="any" placeholder="0" value={row.amount} onChange={(event) => updateRow(index, "amount", event.target.value)} />
+        <button type="button" className="icon-button danger" title="Remove item" onClick={() => removeRow(index)}>×</button>
+      </li>)}
+    </ul>
+    <div className="budget-editor-actions">
+      <button type="button" className="plan-tool" onClick={addRow}>＋ Item</button>
+      <span className="budget-editor-total">Items total: {formatBudget(itemsTotal, currency)}</span>
+    </div>
     {error && <small className="budget-notice warn">{error}</small>}
     <div className="budget-editor-actions">
       <button type="button" className="plan-tool primary" onClick={save}>Save</button>
@@ -430,7 +444,13 @@ function TripPlanCard({ plan, onSaveBudget }) {
   const itemsTotal = items.length
     ? Math.round(items.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) * 100) / 100
     : null;
-  const headline = estimate ?? itemsTotal;
+  const days = plan.days || [];
+  const derivedDay = estimate != null && days.length ? Math.round((estimate / days.length) * 100) / 100 : null;
+  const dayBudgets = days.map((day) => ({
+    day: day.day,
+    amount: day.budget ?? derivedDay,
+    derived: day.budget == null && derivedDay != null,
+  }));
   const [editing, setEditing] = useState(false);
   const [notice, setNotice] = useState("");
   const [mapOpen, setMapOpen] = useState(points.length > 0);
@@ -487,10 +507,19 @@ function TripPlanCard({ plan, onSaveBudget }) {
     <div className="trip-budget-block">
       <div className="trip-budget-head">
         <span>ESTIMATED BUDGET</span>
-        <strong>{headline == null ? "Not specified" : formatBudget(headline, currency)}</strong>
+        <strong>{estimate == null ? "Not specified" : formatBudget(estimate, currency)}</strong>
         {!editing && <button type="button" className="plan-tool" onClick={() => { setEditing(true); setNotice(""); }}>Edit</button>}
       </div>
+      {!editing && dayBudgets.some((day) => day.amount != null) && <>
+        <div className="budget-subhead">Per-day estimate{dayBudgets.every((day) => day.derived) ? " (split from the total)" : ""}</div>
+        <ul className="budget-items">
+          {dayBudgets.map((day) => <li key={`day-${day.day}`}>
+            <span>Day {day.day}{day.derived ? " (est.)" : ""}</span><b>{day.amount == null ? "—" : formatBudget(day.amount, currency)}</b>
+          </li>)}
+        </ul>
+      </>}
       {!editing && items.length > 0 && <>
+        <div className="budget-subhead">Category items</div>
         <ul className="budget-items">
           {items.map((item, index) => <li key={`${item.category}-${index}`}>
             <span>{item.category}</span><b>{formatBudget(item.amount, item.currency || currency)}</b>
@@ -500,7 +529,7 @@ function TripPlanCard({ plan, onSaveBudget }) {
           <span>Items total</span><b>{formatBudget(itemsTotal, currency)}</b>
         </div>
         {estimate != null && itemsTotal != null && Math.abs(estimate - itemsTotal) > 0.001 && (
-          <small className="budget-notice warn">Items total {formatBudget(itemsTotal, currency)} differs from the estimate {formatBudget(estimate, currency)}.</small>
+          <small className="budget-notice warn">Items total {formatBudget(itemsTotal, currency)} differs from the estimated budget {formatBudget(estimate, currency)}.</small>
         )}
       </>}
       {editing && <BudgetEditor plan={plan} currency={currency} onCancel={() => setEditing(false)} onSave={handleSave} />}
@@ -520,15 +549,40 @@ function TripPlanCard({ plan, onSaveBudget }) {
   </div>;
 }
 
+const AGENT_LABELS = [
+  ["search_stays", "Agent 1 · search_stays"],
+  ["estimate_transport", "Agent 2 · estimate_transport"],
+  ["travel_history", "Agent 4 · travel_history"],
+  ["web_search", "web_search tool"],
+  ["display_trip_plan", "Agent 3 · coordinator"],
+  ["ask_user_question", "Agent 3 · coordinator"],
+  ["coordinator", "Agent 3 · coordinator"],
+  ["model", "Model"],
+];
+
+function currentAgent(events) {
+  const running = [...events].reverse().find((event) => event.status === "running");
+  if (!running) return null;
+  const label = (running.label || "").toLowerCase();
+  const match = AGENT_LABELS.find(([key]) => label.includes(key));
+  return match ? match[1] : running.label;
+}
+
 function Activity({ events }) {
   if (!events.length) return null;
   const activityRef = useRef(null);
   useEffect(() => {
     if (activityRef.current) activityRef.current.scrollTop = activityRef.current.scrollHeight;
   }, [events.length]);
+  const working = currentAgent(events);
   return (
     <details className="activity-card" ref={activityRef}>
-      <summary className="activity-heading"><span>◈</span><strong>Live workflow</strong><small>{events.length} events</small></summary>
+      <summary className="activity-heading">
+        <span>◈</span>
+        <strong>Live workflow</strong>
+        <span className={`agent-chip ${working ? "working" : "idle"}`}>{working ? `▶ ${working}` : "Idle"}</span>
+        <small>{events.length} events</small>
+      </summary>
       <div className="activity-items">
         {events.map((event, index) => (
           <div className={`event ${event.status}`} key={`${event.label}-${index}`}>
@@ -771,8 +825,9 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
     return {
       destination: result.destination,
       currency: result.currency,
-      budget: planTotal(result),
+      budget: result.budget ?? null,
       budget_items: planBudgetItems(result),
+      days: result.days || [],
     };
   }
 
@@ -1064,7 +1119,22 @@ function App() {
   const [page, setPage] = useState("chat");
   const [conversations, setConversations] = useState([]);
   const [current, setCurrent] = useState(emptyConversation);
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return window.localStorage.getItem("trip-sidebar-collapsed") === "1"; } catch { return false; }
+  });
   const userId = getUserId();
+  function toggleSidebar() {
+    setCollapsed((previous) => {
+      const next = !previous;
+      try { window.localStorage.setItem("trip-sidebar-collapsed", next ? "1" : "0"); } catch { /* ignore */ }
+      return next;
+    });
+  }
+  const navItems = [
+    { key: "chat", label: "Chat", icon: <ChatBubbleOutlinedIcon /> },
+    { key: "history", label: "Travel history", icon: <HistoryEduIcon /> },
+    { key: "settings", label: "Settings", icon: <SettingsIcon /> },
+  ];
   async function loadConversations() {
     const response = await fetch("/api/conversations");
     if (response.ok) setConversations(await response.json());
@@ -1092,92 +1162,111 @@ function App() {
       <Box
         component="aside"
         sx={{
-          width: 280,
+          width: collapsed ? 78 : 280,
+          flex: "0 0 auto",
           display: "flex",
           flexDirection: "column",
-          p: 2.5,
+          p: collapsed ? 1.25 : 2.5,
           bgcolor: isDark ? "#0a0f1c" : "#111b35",
           color: "#dfe6fa",
           borderRight: "1px solid",
           borderColor: isDark ? "rgba(255,255,255,0.06)" : "transparent",
+          transition: "width 160ms ease",
+          overflowX: "hidden",
         }}
       >
-        <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mx: 0.5, mb: 3 }}>
-          <Box sx={{ width: 36, height: 36, borderRadius: "12px", bgcolor: "primary.main", color: "#fff", display: "grid", placeItems: "center", boxShadow: "0 8px 18px rgba(80,72,190,0.4)" }}>
-            <TravelExploreIcon fontSize="small" />
-          </Box>
-          <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Stack direction={collapsed ? "column" : "row"} spacing={1.5} alignItems="center" sx={{ mx: collapsed ? 0 : 0.5, mb: 3 }}>
+          <Tooltip title="Tripwise" placement="right">
+            <Box sx={{ width: 36, height: 36, borderRadius: "12px", bgcolor: "primary.main", color: "#fff", display: "grid", placeItems: "center", boxShadow: "0 8px 18px rgba(80,72,190,0.4)", flex: "0 0 auto" }}>
+              <TravelExploreIcon fontSize="small" />
+            </Box>
+          </Tooltip>
+          {!collapsed && <Box sx={{ flex: 1, minWidth: 0 }}>
             <Typography fontWeight={700} color="#fff" fontSize={18}>Tripwise</Typography>
             <Typography variant="caption" sx={{ color: "#8794b7" }}>AI travel planner</Typography>
-          </Box>
-          <Tooltip title={isDark ? "Switch to light mode" : "Switch to dark mode"}>
+          </Box>}
+          <Tooltip title={isDark ? "Switch to light mode" : "Switch to dark mode"} placement={collapsed ? "right" : "top"}>
             <IconButton onClick={colorMode.toggleColorMode} size="small" sx={{ color: "#c5ceea", bgcolor: "rgba(255,255,255,0.06)", "&:hover": { bgcolor: "rgba(255,255,255,0.12)" } }}>
               {isDark ? <LightModeOutlinedIcon fontSize="small" /> : <DarkModeOutlinedIcon fontSize="small" />}
             </IconButton>
           </Tooltip>
+          <Tooltip title={collapsed ? "Expand sidebar" : "Collapse sidebar"} placement={collapsed ? "right" : "top"}>
+            <IconButton onClick={toggleSidebar} size="small" sx={{ color: "#c5ceea", bgcolor: "rgba(255,255,255,0.06)", "&:hover": { bgcolor: "rgba(255,255,255,0.12)" } }}>
+              {collapsed ? <ChevronRightIcon fontSize="small" /> : <ChevronLeftIcon fontSize="small" />}
+            </IconButton>
+          </Tooltip>
         </Stack>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => { setCurrent(emptyConversation()); setPage("chat"); }}
-          sx={{ mb: 1, py: 1.1 }}
-        >
-          New conversation
-        </Button>
+        {collapsed ? (
+          <Tooltip title="New conversation" placement="right">
+            <IconButton onClick={() => { setCurrent(emptyConversation()); setPage("chat"); }} sx={{ mx: "auto", mb: 1, bgcolor: "primary.main", color: "#fff", borderRadius: "12px", width: 44, height: 44, "&:hover": { bgcolor: "primary.dark" } }}>
+              <AddIcon />
+            </IconButton>
+          </Tooltip>
+        ) : (
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => { setCurrent(emptyConversation()); setPage("chat"); }}
+            sx={{ mb: 1, py: 1.1 }}
+          >
+            New conversation
+          </Button>
+        )}
         <Stack component="nav" spacing={0.5} sx={{ my: 2.5 }}>
-          <Button
-            startIcon={<ChatBubbleOutlinedIcon />}
-            onClick={() => setPage("chat")}
-            sx={{
-              justifyContent: "flex-start",
-              color: page === "chat" ? "#fff" : "#9daaca",
-              bgcolor: page === "chat" ? "#242f52" : "transparent",
-              "&:hover": { bgcolor: "#242f52", color: "#fff" },
-            }}
-          >
-            Chat
-          </Button>
-          <Button
-            startIcon={<HistoryEduIcon />}
-            onClick={() => setPage("history")}
-            sx={{
-              justifyContent: "flex-start",
-              color: page === "history" ? "#fff" : "#9daaca",
-              bgcolor: page === "history" ? "#242f52" : "transparent",
-              "&:hover": { bgcolor: "#242f52", color: "#fff" },
-            }}
-          >
-            Travel history
-          </Button>
-          <Button
-            startIcon={<SettingsIcon />}
-            onClick={() => setPage("settings")}
-            sx={{
-              justifyContent: "flex-start",
-              color: page === "settings" ? "#fff" : "#9daaca",
-              bgcolor: page === "settings" ? "#242f52" : "transparent",
-              "&:hover": { bgcolor: "#242f52", color: "#fff" },
-            }}
-          >
-            Settings
-          </Button>
+          {navItems.map((item) => collapsed ? (
+            <Tooltip key={item.key} title={item.label} placement="right">
+              <IconButton
+                onClick={() => setPage(item.key)}
+                sx={{
+                  mx: "auto",
+                  color: page === item.key ? "#fff" : "#9daaca",
+                  bgcolor: page === item.key ? "#242f52" : "transparent",
+                  "&:hover": { bgcolor: "#242f52", color: "#fff" },
+                }}
+              >
+                {item.icon}
+              </IconButton>
+            </Tooltip>
+          ) : (
+            <Button
+              key={item.key}
+              startIcon={item.icon}
+              onClick={() => setPage(item.key)}
+              sx={{
+                justifyContent: "flex-start",
+                color: page === item.key ? "#fff" : "#9daaca",
+                bgcolor: page === item.key ? "#242f52" : "transparent",
+                "&:hover": { bgcolor: "#242f52", color: "#fff" },
+              }}
+            >
+              {item.label}
+            </Button>
+          ))}
         </Stack>
-        <Typography sx={{ mx: 1, mb: 1, color: "#6e7c9f", fontSize: 10, letterSpacing: 1.5, fontWeight: 700 }}>
-          RECENT CHATS
-        </Typography>
-        <ConversationList
-          conversations={conversations}
-          activeId={current.id}
-          onSelect={(id) => {
-            setPage("chat");
-            fetch(`/api/conversations/${id}`).then((r) => r.json()).then((item) => setCurrent({ id: item.id, messages: item.messages, events: item.events || [] }));
-          }}
-          onDelete={deleteConversation}
-        />
+        {!collapsed && <>
+          <Typography sx={{ mx: 1, mb: 1, color: "#6e7c9f", fontSize: 10, letterSpacing: 1.5, fontWeight: 700 }}>
+            RECENT CHATS
+          </Typography>
+          <ConversationList
+            conversations={conversations}
+            activeId={current.id}
+            onSelect={(id) => {
+              setPage("chat");
+              fetch(`/api/conversations/${id}`).then((r) => r.json()).then((item) => setCurrent({ id: item.id, messages: item.messages, events: item.events || [] }));
+            }}
+            onDelete={deleteConversation}
+          />
+        </>}
         <Divider sx={{ borderColor: "#293556", mt: "auto", pt: 2 }} />
-        <Typography sx={{ pt: 2, px: 1, color: "#7380a1", fontSize: 12 }}>
-          Agent 1–4 <Box component="span" sx={{ float: "right", color: "#5fd39a" }}>online</Box>
-        </Typography>
+        {collapsed ? (
+          <Tooltip title="Agent 1–4 online" placement="right">
+            <Box sx={{ pt: 2, textAlign: "center", color: "#5fd39a", fontSize: 16 }}>●</Box>
+          </Tooltip>
+        ) : (
+          <Typography sx={{ pt: 2, px: 1, color: "#7380a1", fontSize: 12 }}>
+            Agent 1–4 <Box component="span" sx={{ float: "right", color: "#5fd39a" }}>online</Box>
+          </Typography>
+        )}
       </Box>
       <Box component="main" sx={{ flex: 1, minWidth: 0, bgcolor: "background.default", color: "text.primary" }}>
         {page === "history"

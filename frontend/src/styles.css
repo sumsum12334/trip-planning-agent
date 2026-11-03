@@ -280,3 +280,34 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .app[data-color-mode="dark"] .budget-total-row{background:#1b2540;border-color:rgba(106,168,255,0.28);color:#dbe3ff}
 .app[data-color-mode="dark"] .budget-total-row b{color:#9db8ff}
 .app[data-color-mode="dark"] .day-map-ref{background:rgba(106,168,255,0.18);color:#9db8ff}
+
+/* Live workflow text + current-agent chip (light) */
+.activity-card{background:#f8fafc}
+.activity-heading strong{color:#2f3d5c}
+.activity-heading small{color:#8a95aa}
+.event{color:#5d6983}
+.event strong{color:#2f3d5c}
+.event small{color:#8a95aa}
+.event-icon{background:#eef0ff;color:#6c63ff}
+.agent-chip{padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700;white-space:nowrap}
+.agent-chip.working{background:#e8f0ff;color:#3f6fc4}
+.agent-chip.idle{background:#eef0f5;color:#8a95aa}
+
+/* Live workflow text + current-agent chip (dark) */
+.app[data-color-mode="dark"] .activity-card{background:#141b2e}
+.app[data-color-mode="dark"] .activity-heading strong{color:#e8ecf8}
+.app[data-color-mode="dark"] .event{color:#9aa6c4}
+.app[data-color-mode="dark"] .event strong{color:#dbe3ff}
+.app[data-color-mode="dark"] .event small{color:#9aa6c4}
+.app[data-color-mode="dark"] .agent-chip.working{background:rgba(106,168,255,0.18);color:#9db8ff}
+.app[data-color-mode="dark"] .agent-chip.idle{background:rgba(255,255,255,0.06);color:#9aa6c4}
+
+/* Budget sub-sections + airport marker */
+.budget-subhead{margin-top:12px;font-size:10px;font-weight:800;letter-spacing:1px;color:#7a83a0;text-transform:uppercase}
+.budget-editor-label{margin:10px 0 6px;font-size:11px;font-weight:700;color:#43506d}
+.budget-day-label{flex:0 0 58px;font-size:12px;color:#5f6d8c}
+.trip-map-marker.airport span{background:#2f9e6f}
+.app[data-color-mode="dark"] .budget-subhead{color:#9aa6c4}
+.app[data-color-mode="dark"] .budget-editor-label{color:#c5cee6}
+.app[data-color-mode="dark"] .budget-day-label{color:#aab5d0}
+.app[data-color-mode="dark"] .trip-map-marker.airport span{background:#37b37e}

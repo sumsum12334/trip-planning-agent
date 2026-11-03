@@ -79,6 +79,7 @@ class TripPlanUpdate(BaseModel):
     budget: Optional[float] = Field(default=None, ge=0)
     currency: Optional[str] = Field(default=None, max_length=12)
     budget_items: list[dict[str, Any]] = Field(default_factory=list)
+    day_budgets: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ChatEvent(BaseModel):

@@ -50,6 +50,7 @@ def test_normalize_defaults_optional_fields():
     )
     assert plan["budget"] is None
     assert plan["currency"] == ""
+    assert plan["airport"] is None
     assert plan["destination_coordinates"] is None
     assert plan["days"][0]["coordinates"] is None
     assert plan["days"][0]["places"] == []
@@ -83,7 +84,7 @@ def test_tool_schema_requires_destination_and_days():
     assert "budget_items" in parameters["properties"]
 
 
-def test_budget_items_compute_total_and_carry_currency():
+def test_budget_items_do_not_affect_estimated_total():
     plan = normalize_trip_plan(
         {
             "destination": "Rome",
@@ -96,9 +97,23 @@ def test_budget_items_compute_total_and_carry_currency():
             ],
         }
     )
-    assert plan["budget"] == 420.0
+    # The estimated total stays independent of the item breakdown.
+    assert plan["budget"] is None
     assert [item["category"] for item in plan["budget_items"]] == ["Accommodation", "transport"]
     assert plan["budget_items"][0]["currency"] == "EUR"
+
+
+def test_airport_and_per_day_budget_are_normalized():
+    plan = normalize_trip_plan(
+        {
+            "destination": "Hong Kong",
+            "airport": {"name": "Hong Kong International Airport", "coordinates": {"lat": 22.308, "lng": 113.9185}},
+            "days": [{"day": 1, "title": "Arrival", "activities": ["Land"], "budget": 1200}],
+        }
+    )
+    assert plan["airport"]["name"] == "Hong Kong International Airport"
+    assert plan["airport"]["coordinates"] == {"lat": 22.308, "lng": 113.9185}
+    assert plan["days"][0]["budget"] == 1200.0
 
 
 def test_budget_items_reject_bad_amounts():

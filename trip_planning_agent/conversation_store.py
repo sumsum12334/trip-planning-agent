@@ -227,6 +227,16 @@ class ConversationStore:
                     if updates.get("currency") is not None:
                         result["currency"] = updates["currency"]
                     result["budget_items"] = updates.get("budget_items", [])
+                    day_budgets = {
+                        int(item["day"]): item.get("amount")
+                        for item in updates.get("day_budgets", [])
+                        if isinstance(item, dict)
+                        and isinstance(item.get("day"), (int, float))
+                        and not isinstance(item.get("day"), bool)
+                    }
+                    for day in result.get("days", []):
+                        if isinstance(day, dict) and day.get("day") in day_budgets:
+                            day["budget"] = day_budgets[day["day"]]
                     event["data"] = data
                     connection.execute(
                         "UPDATE conversations SET events = ?, updated_at = ? WHERE id = ?",

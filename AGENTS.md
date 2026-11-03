@@ -12,6 +12,14 @@
 - Reuse `shared/prompts.py` for model system prompts; keep trip-planning
   behavior, uncertainty handling, clarification guidance, Markdown formatting,
   and hidden chain-of-thought boundaries consistent across chat and agents.
+- Keep the trip plan as the focal browser UI: a wide panel beside a smaller chat
+  pane, a collapsible sidebar, and a separate Live workflow panel that names the
+  agent currently working. Keep it theme-aware (light/dark) and responsive.
+- Keep the `display_trip_plan` contract consistent: the arrival `airport` is the
+  first point of the map route, each day carries a per-day `budget`, the
+  estimated total `budget` is independent of the `budget_items` breakdown, and
+  budget categories should be concrete rather than a vague "other". Validate
+  these fields in `shared/trip_plan.py`.
 
 ## Engineering standards
 
@@ -30,8 +38,9 @@
   retryable pending state after continuation failures, and mark the question
   answered only after successful model continuation.
 - Structured UI tools such as `display_trip_plan` must validate their payloads
-  before emitting events. Render structured data in dedicated components rather
-  than relying on model-formatted prose.
+  in `shared/trip_plan.py` before emitting events. Render structured data in
+  dedicated components rather than relying on model-formatted prose, and never
+  derive the estimated budget from the item breakdown.
 - Keep streaming behavior observable without exposing private chain-of-thought.
   Emit concise lifecycle, tool, retry, and failure events; label local stubs,
   estimates, and unavailable integrations explicitly.

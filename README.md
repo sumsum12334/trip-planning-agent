@@ -117,19 +117,26 @@ Selecting an option resumes the same model tool session through
 `POST /api/chat/question`; it is not sent as an ordinary chat message.
 The question is shown above the chat while waiting, and a failed continuation
 keeps the pending choice available for retry instead of marking it answered.
-The `display_trip_plan` tool provides structured destination, day, activity,
-budget, `budget_items` (category breakdown), currency, note, coordinate, place,
-and reference data that the UI renders as the focal, wide trip-plan panel to the
-right of the conversation. The chat pane is intentionally smaller, and the Live
-workflow is a separate collapsible panel in the chat pane rather than part of
-the plan. The card is theme-aware (light/dark) and its map and day cards reflow
-across the available width. It can draw the route on an interactive
-OpenStreetMap/Leaflet map (points are
-labeled approximate and a map link is shown when no coordinates are provided),
-export the plan as a day-by-day Markdown file, print or save a PDF report, edit
-the total budget and each breakdown item, and list the reference links the plan
-relies on. Payloads are validated in `shared/trip_plan.py` before events are
-emitted, and only `http(s)` reference URLs are accepted.
+The `display_trip_plan` tool provides structured destination, arrival `airport`,
+day, activity, per-day `budget`, total `budget`, `budget_items` (category
+breakdown), currency, note, coordinate, place, and reference data that the UI
+renders as the focal, wide trip-plan panel to the right of the conversation. The
+chat pane is intentionally smaller, the live workflow shows the agent that is
+currently working, and the sidebar is collapsible. The card is theme-aware
+(light/dark) and its map and day cards reflow across the available width. It can
+draw the route on an interactive OpenStreetMap/Leaflet map: the **arrival
+airport is the first point** of the route (shown with a distinct marker), and a
+map link is shown when no coordinates are provided. Payloads are validated in
+`shared/trip_plan.py` before events are emitted, and only `http(s)` reference
+URLs are accepted.
+
+The panel also shows a **per-day estimated budget**, an independent
+**estimated total** (never derived from the item breakdown), the **items total**
+with a note when it differs from the estimate, externally linked references, and
+numbered day/place labels that reference the map markers. It can export the plan
+as a day-by-day Markdown file or a printable PDF report, and the Budget editor
+updates the estimated total, the per-day amounts, and the category items (which
+are expected to use concrete categories rather than a vague "other" bucket).
 
 Edited budgets are persisted with `PUT /api/conversations/{id}/trip-plan` and
 are sent to the model on the next turn as a `plan_context` block, so the agent
