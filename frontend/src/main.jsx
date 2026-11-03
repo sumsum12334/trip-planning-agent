@@ -157,17 +157,23 @@ function routePoints(plan) {
   if (!plan) return [];
   const points = [];
   if (plan.destination_coordinates) {
-    points.push({ ...plan.destination_coordinates, label: plan.destination, sub: "Destination" });
+    points.push({ ...plan.destination_coordinates, label: plan.destination, sub: "Destination", kind: "destination" });
   }
   (plan.days || []).forEach((day) => {
     const placePoints = (day.places || []).filter((place) => place.coordinates);
     if (placePoints.length) {
-      placePoints.forEach((place) => points.push({ ...place.coordinates, label: place.name, sub: `Day ${day.day}` }));
+      placePoints.forEach((place) => points.push({ ...place.coordinates, label: place.name, sub: `Day ${day.day}`, kind: "place", day: day.day }));
     } else if (day.coordinates) {
-      points.push({ ...day.coordinates, label: `Day ${day.day}: ${day.title}`, sub: "Day stop (approximate)" });
+      points.push({ ...day.coordinates, label: `Day ${day.day}: ${day.title}`, sub: "Day stop (approximate)", kind: "day", day: day.day });
     }
   });
   return points.filter((point) => typeof point.lat === "number" && typeof point.lng === "number");
+}
+
+function markerNumbersForDay(points, dayNumber) {
+  return points
+    .map((point, index) => (point.day === dayNumber ? index + 1 : null))
+    .filter((number) => number != null);
 }
 
 function numberedIcon(number) {
@@ -396,7 +402,7 @@ function BudgetEditor({ plan, currency, onCancel, onSave }) {
       <div className="budget-editor-actions">
         <button type="button" className="plan-tool" onClick={addRow}>＋ Item</button>
         <button type="button" className="plan-tool" onClick={() => setBreakdown(false)}>Use single total</button>
-        <span className="budget-editor-total">Total: {formatBudget(computedTotal, currency)}</span>
+        <span className="budget-editor-total">Total: {formatBudget(computedTotal, currency)}{plan.budget != null ? ` · Estimate: ${formatBudget(plan.budget, currency)}` : ""}</span>
       </div>
     </> : <>
       <div className="budget-row">
@@ -420,7 +426,11 @@ function TripPlanCard({ plan, onSaveBudget }) {
   const points = useMemo(() => routePoints(plan), [plan]);
   const currency = plan.currency || "";
   const items = planBudgetItems(plan);
-  const total = planTotal(plan);
+  const estimate = plan.budget ?? null;
+  const itemsTotal = items.length
+    ? Math.round(items.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) * 100) / 100
+    : null;
+  const headline = estimate ?? itemsTotal;
   const [editing, setEditing] = useState(false);
   const [notice, setNotice] = useState("");
   const [mapOpen, setMapOpen] = useState(points.length > 0);
@@ -448,29 +458,51 @@ function TripPlanCard({ plan, onSaveBudget }) {
     <div className="trip-plan-content">
       {mapOpen && <TripMap plan={plan} />}
       <div className="trip-days">
-      {plan.days.map((day) => <article className="trip-day" key={`${day.day}-${day.title}`}>
-        <div className="day-number">DAY {day.day}</div><strong>{day.title}</strong>
-        <ul>{day.activities.map((activity) => <li key={activity}>{activity}</li>)}</ul>
-        {day.places?.length > 0 && <div className="trip-places">
-          {day.places.map((place, index) => place.url
-            ? <a key={`${place.name}-${index}`} href={place.url} target="_blank" rel="noopener noreferrer">📍 {place.name}</a>
-            : <span key={`${place.name}-${index}`}>📍 {place.name}</span>)}
-        </div>}
-        {day.notes?.length > 0 && <small>{day.notes.join(" · ")}</small>}
-      </article>)}
+      {plan.days.map((day) => {
+        const dayMarkers = markerNumbersForDay(points, day.day);
+        const markerFor = (name) => {
+          const index = points.findIndex((point) => point.kind === "place" && point.day === day.day && point.label === name);
+          return index >= 0 ? index + 1 : null;
+        };
+        return <article className="trip-day" key={`${day.day}-${day.title}`}>
+          <div className="trip-day-head">
+            <div><div className="day-number">DAY {day.day}</div><strong>{day.title}</strong></div>
+            {dayMarkers.length > 0 && <span className="day-map-ref" title="Map reference">🗺 {dayMarkers.join(" · ")}</span>}
+          </div>
+          <ul>{day.activities.map((activity) => <li key={activity}>{activity}</li>)}</ul>
+          {day.places?.length > 0 && <div className="trip-places">
+            {day.places.map((place, index) => {
+              const marker = markerFor(place.name);
+              const label = <>{marker ? <span className="place-marker-ref">{marker}</span> : null}📍 {place.name}</>;
+              return place.url
+                ? <a key={`${place.name}-${index}`} href={place.url} target="_blank" rel="noopener noreferrer">{label}</a>
+                : <span key={`${place.name}-${index}`}>{label}</span>;
+            })}
+          </div>}
+          {day.notes?.length > 0 && <small>{day.notes.join(" · ")}</small>}
+        </article>;
+      })}
       </div>
     </div>
     <div className="trip-budget-block">
       <div className="trip-budget-head">
         <span>ESTIMATED BUDGET</span>
-        <strong>{total == null ? "Not specified" : formatBudget(total, currency)}</strong>
+        <strong>{headline == null ? "Not specified" : formatBudget(headline, currency)}</strong>
         {!editing && <button type="button" className="plan-tool" onClick={() => { setEditing(true); setNotice(""); }}>Edit</button>}
       </div>
-      {!editing && items.length > 0 && <ul className="budget-items">
-        {items.map((item, index) => <li key={`${item.category}-${index}`}>
-          <span>{item.category}</span><b>{formatBudget(item.amount, item.currency || currency)}</b>
-        </li>)}
-      </ul>}
+      {!editing && items.length > 0 && <>
+        <ul className="budget-items">
+          {items.map((item, index) => <li key={`${item.category}-${index}`}>
+            <span>{item.category}</span><b>{formatBudget(item.amount, item.currency || currency)}</b>
+          </li>)}
+        </ul>
+        <div className="budget-total-row">
+          <span>Items total</span><b>{formatBudget(itemsTotal, currency)}</b>
+        </div>
+        {estimate != null && itemsTotal != null && Math.abs(estimate - itemsTotal) > 0.001 && (
+          <small className="budget-notice warn">Items total {formatBudget(itemsTotal, currency)} differs from the estimate {formatBudget(estimate, currency)}.</small>
+        )}
+      </>}
       {editing && <BudgetEditor plan={plan} currency={currency} onCancel={() => setEditing(false)} onSave={handleSave} />}
       {notice && <small className="budget-notice">{notice}</small>}
     </div>
