@@ -534,6 +534,19 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                     f"data: {json.dumps({'kind': 'done', 'stopped': True, 'text': ''.join(text_parts), 'reasoning': ''.join(reasoning_parts), 'model': client.model, 'stub': not client.configured, 'conversation_id': conversation_id, 'pending_question': pending_question, 'events': [event.model_dump() for event in activity]})}\n\n"
                 )
                 return
+            if not "".join(text_parts).strip() and pending_question is None:
+                yield emit(
+                    ChatEvent(
+                        type="model",
+                        label="Model returned an empty response",
+                        detail="The model finished without content. Please retry or rephrase.",
+                        status="error",
+                    )
+                )
+                text_parts = [
+                    "[The model returned an empty response. Please retry or rephrase "
+                    "your request.]"
+                ]
             yield emit(
                 ChatEvent(
                     type="agent",
@@ -623,7 +636,9 @@ def answer_chat_question(request: ChatRequest) -> ChatResponse:
     pending = store.get_pending_question(request.conversation_id)
     if pending is None:
         raise HTTPException(status_code=404, detail="No question is waiting for this conversation.")
-    if pending["user_id"] != request.user_id or request.message not in pending["options"]:
+    if pending["user_id"] != request.user_id:
+        raise HTTPException(status_code=422, detail="Choose one of the displayed question options.")
+    if not request.custom and request.message not in pending["options"]:
         raise HTTPException(status_code=422, detail="Choose one of the displayed question options.")
 
     history_store = TravelHistoryStore(get_settings().database_url)

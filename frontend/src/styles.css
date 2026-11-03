@@ -375,3 +375,13 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .app[data-color-mode="dark"] .day-editor-field{color:#c5cee6}
 .app[data-color-mode="dark"] .day-editor-field input,.app[data-color-mode="dark"] .day-editor-field textarea{background:#12192c;border-color:rgba(154,166,196,0.2);color:#e8ecf8}
 .app[data-color-mode="dark"] .trip-day-head-actions .plan-tool{background:#1c2740;border-color:rgba(154,166,196,0.2);color:#cfd8f5}
+
+/* Chat header (hero moved into the chat panel) */
+.chat-header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:18px 22px 12px;border-bottom:1px solid #eef1f7}
+.chat-header .eyebrow{margin:0 0 4px}
+.chat-title{margin:0;font-size:clamp(19px,1.8vw,24px);font-weight:700;letter-spacing:-0.02em;color:#17233d}
+.chat-summary{margin:4px 0 0;color:#74809b;font-size:13px;max-width:70ch}
+.chat-header .hero-icon{width:44px;height:44px;font-size:22px;border-radius:14px;flex:0 0 auto}
+.app[data-color-mode="dark"] .chat-header{border-bottom-color:rgba(154,166,196,0.12)}
+.app[data-color-mode="dark"] .chat-title{color:#f2f5ff}
+.app[data-color-mode="dark"] .chat-summary{color:#9aa6c4}

@@ -65,6 +65,7 @@ class ChatRequest(BaseModel):
     user_id: str = Field(default="local-user", min_length=1, max_length=200)
     request_id: Optional[str] = Field(default=None, max_length=100)
     plan_context: Optional[dict[str, Any]] = None
+    custom: Optional[bool] = None
 
 
 class ChatStopRequest(BaseModel):

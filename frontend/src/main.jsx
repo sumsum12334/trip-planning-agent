@@ -698,12 +698,15 @@ function Activity({ events }) {
 }
 
 function QuestionBox({ event, onOption, disabled, retryOption, selectedOption }) {
+  const [showCustom, setShowCustom] = useState(false);
+  const [customText, setCustomText] = useState("");
   if (!event?.data?.result?.question) return null;
   const options = event.data.result.options || [];
   const selected = selectedOption || event.data.selected;
+  const locked = disabled || Boolean(selected);
   return <section className="question-box">
     <div className="question-box-header"><span className="question-box-icon">?</span><div><div className="question-kicker">YOUR INPUT NEEDED</div><strong>{event.data.result.question}</strong></div></div>
-    <p>Choose an option to continue planning.</p>
+    <p>Choose an option to continue planning, or write your own.</p>
     <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1} className="question-options" sx={{ mt: 1.5, ml: "39px" }}>
       {options.map((option) => (
         <Button
@@ -711,13 +714,33 @@ function QuestionBox({ event, onOption, disabled, retryOption, selectedOption })
           type="button"
           size="small"
           variant={selected === option ? "contained" : "outlined"}
-          disabled={disabled || Boolean(selected)}
+          disabled={locked}
           onClick={() => onOption(option)}
         >
           {selected === option ? "Selected" : option}
         </Button>
       ))}
+      {!showCustom && (
+        <Button type="button" size="small" variant="outlined" disabled={locked} onClick={() => setShowCustom(true)}>
+          Other…
+        </Button>
+      )}
     </Stack>
+    {showCustom && (
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1.5, ml: "39px" }}>
+        <TextField
+          size="small"
+          variant="filled"
+          placeholder="Type your own answer"
+          value={customText}
+          onChange={(e) => setCustomText(e.target.value)}
+          sx={{ maxWidth: 360 }}
+        />
+        <Button type="button" size="small" variant="contained" disabled={locked || !customText.trim()} onClick={() => onOption(customText.trim(), true)}>
+          Send
+        </Button>
+      </Stack>
+    )}
     {retryOption && (
       <Button className="question-retry" type="button" size="small" color="error" variant="outlined" onClick={() => onOption(retryOption)} sx={{ mt: 1.5, ml: "39px" }}>
         Retry sending "{retryOption}"
@@ -1033,7 +1056,9 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
         const completedMessages = result.pending_question
           ? optimisticMessages
           : [...optimisticMessages, { role: "assistant", content: result.text, reasoning: result.reasoning || streamedReasoning }];
-        setCurrent({ id: result.conversation_id, messages: completedMessages, events: result.events });
+        // Keep earlier turns' events (including the trip plan) and append this turn's.
+        const mergedEvents = [...current.events, ...(result.events || [])];
+        setCurrent({ id: result.conversation_id || current.id, messages: completedMessages, events: mergedEvents });
         setStatus(
           result.pending_question
             ? "The assistant is waiting for your choice."
@@ -1041,6 +1066,14 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
               ? "Stopped. Edit your message or ask something else."
               : result.stub ? "Local stub response" : `Model: ${result.model}`
         );
+      } else {
+        setRetryText(text);
+        setStatus("The model stream ended without a response. You can retry.");
+        setCurrent((previous) => ({
+          ...previous,
+          messages: [...workingMessages.slice(0, -1), { role: "assistant", content: streamedText || "[No response received. Please retry.]", reasoning: streamedReasoning }],
+          events: streamEvents,
+        }));
       }
     } catch (error) {
       if (error?.name === "AbortError") {
@@ -1143,7 +1176,7 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
   const workflow = workflowState(current.events, selectedOption ? null : pendingEvent, status);
   const suggestions = nextStepSuggestions(latestPlan, current.messages, Boolean(pendingEvent), streaming || answering);
 
-  async function answerQuestion(option) {
+  async function answerQuestion(option, custom = false) {
     if (answerLockRef.current) return;
     answerLockRef.current = true;
     setAnswering(true);
@@ -1166,6 +1199,7 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
         message: option,
         conversation_id: current.id,
         user_id: userId,
+        custom,
         plan_context: planContextFromEvents(current.events),
       }),
     });
@@ -1200,9 +1234,16 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
   }
 
   return <section className="page chat-page">
-    <div className="page-title"><div><p className="eyebrow">AI TRIP COMPANION</p><h1>Plan something memorable.</h1><p className="muted">Your coordinator connects stays, transport, and travel memory in one workflow.</p></div><span className="hero-icon">✦</span></div>
     <div className={`chat-workspace ${latestPlan ? "has-plan" : ""}`}>
       <section className="panel chat-panel">
+        <header className="chat-header">
+          <div>
+            <p className="eyebrow">AI TRIP COMPANION</p>
+            <h1 className="chat-title">Plan something memorable.</h1>
+            <p className="chat-summary">Your coordinator connects stays, transport, and travel memory in one workflow.</p>
+          </div>
+          <span className="hero-icon">✦</span>
+        </header>
         <Activity events={current.events} />
         <Box className="messages" ref={messagesRef} sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
       {!current.messages.length && <div className="welcome"><span>✦</span><h2>Where will you go next?</h2><p>Ask for an itinerary, compare options, or tell me about somewhere you have visited.</p></div>}
@@ -1254,7 +1295,7 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
       <div className={`workflow-status ${workflow.className}`}><span>{workflow.icon}</span><strong>{workflow.label}</strong><small>{workflow.className === "waiting" ? "Choose an option below." : workflow.className === "working" ? "The assistant is processing your request." : ""}</small></div>
       {(pendingEvent || retryOption) && <QuestionBox event={activeQuestionEvent} onOption={answerQuestion} disabled={answering} retryOption={retryOption} selectedOption={selectedOption} />}
       <NextSteps suggestions={suggestions} onSelect={(text) => sendMessage(null, false, text)} disabled={streaming || answering} />
-      <Box className="composer" component="form" onSubmit={sendMessage} sx={{ display: "flex", gap: 1.5, alignItems: "flex-end", p: 2.5, borderTop: "1px solid #edf0f6" }}>
+      <Box className="composer" component="form" onSubmit={sendMessage} sx={{ display: "flex", flexDirection: "column", gap: 1.25, alignItems: "stretch", p: 2.5, borderTop: "1px solid #edf0f6" }}>
         <TextField
           multiline
           minRows={2}
@@ -1262,11 +1303,12 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           placeholder="Plan a 3-day trip to Kyoto for $800..."
-          sx={{ flex: 1 }}
         />
-        {streaming
-          ? <Button className="stop-button" type="button" variant="contained" color="error" onClick={stopStreaming}>Stop</Button>
-          : <Button className="send-button" type="submit" variant="contained" endIcon={<SendIcon />} disabled={answering}>Send</Button>}
+        <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
+          {streaming
+            ? <Button className="stop-button" type="button" variant="contained" color="error" onClick={stopStreaming}>Stop</Button>
+            : <Button className="send-button" type="submit" variant="contained" endIcon={<SendIcon />} disabled={answering}>Send</Button>}
+        </Box>
       </Box>
       <div className="composer-footer"><span>{status || "Markdown supported"}</span>{retryText && <Button className="retry" size="small" color="warning" variant="outlined" disabled={streaming} onClick={(event) => sendMessage(event, true)}>Retry</Button>}</div>
       </section>
