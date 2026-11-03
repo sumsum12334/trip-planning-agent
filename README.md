@@ -103,9 +103,11 @@ chain-of-thought. "Thinking" is represented by safe execution status rather
 than hidden model reasoning.
 
 The UI also includes a Travel history page. Entries store country, city, and
-visited location, and can be added or removed manually. Chat activity renders
-safe workflow/tool events such as travel-history lookup and memory updates;
-private chain-of-thought is never used as an activity event.
+visited location, and can be added or removed manually. The page is organized by
+**country**, with cities nested inside each country and a place count, so the
+memory reads as a country-oriented list. Chat activity renders safe
+workflow/tool events such as travel-history lookup and memory updates; private
+chain-of-thought is never used as an activity event.
 
 The chat workflow also provides an `ask_user_question` tool. When the model
 needs a planning decision, it can return a structured question with two to six
@@ -117,31 +119,32 @@ Selecting an option resumes the same model tool session through
 `POST /api/chat/question`; it is not sent as an ordinary chat message.
 The question is shown above the chat while waiting, and a failed continuation
 keeps the pending choice available for retry instead of marking it answered.
-The `display_trip_plan` tool provides structured destination, arrival `airport`,
-day, activity, per-day `budget`, total `budget`, `budget_items` (category
-breakdown), currency, note, coordinate, place, and reference data that the UI
-renders as the focal, wide trip-plan panel to the right of the conversation. The
-chat pane is intentionally smaller, the live workflow shows the agent that is
-currently working, and the sidebar is collapsible. The card is theme-aware
-(light/dark) and its map and day cards reflow across the available width. It can
-draw the route on an interactive OpenStreetMap/Leaflet map: the **arrival
-airport is the first point** of the route (shown with a distinct marker), and a
-map link is shown when no coordinates are provided. Payloads are validated in
-`shared/trip_plan.py` before events are emitted, and only `http(s)` reference
-URLs are accepted.
+The trip plan is built with several small tools instead of one large payload, so
+the UI renders it part by part and follow-up edits stay small (fewer tokens):
+`start_trip_plan` (destination, arrival `airport`, coordinates, currency,
+estimated total, notes), `set_trip_day` (one day at a time), `set_trip_budget`
+(the overall total or a single day's budget and/or items), `set_trip_references`,
+`remove_trip_day`, and `get_trip_plan` (read the current plan). The assembled
+plan is stored per conversation and rendered as the focal, wide trip-plan panel
+to the right of the conversation. The chat pane is intentionally smaller, the
+sidebar is collapsible, and the card is theme-aware (light/dark). It draws the
+route on an interactive OpenStreetMap/Leaflet map: the **arrival airport is the
+first point** of the route (shown with a distinct marker), and a map link is
+shown when no coordinates are provided. Tool payloads are validated in
+`shared/trip_plan.py`, invalid tool arguments come back as labeled errors (they do
+not abort the turn), and only `http(s)` reference URLs are accepted.
 
-The panel also shows an independent **estimated total** (never derived from the
-item breakdown) and a budget view you can switch between **By day** and
-**By category**: the per-day view lists each day's estimate and its own item
-breakdown, and the category view lists the global items with an **items total**
-and a note when it differs from the estimate. It also renders externally linked
-references and numbered day/place labels that reference the map markers. The
-Live workflow panel scrolls to the latest event and names the agent currently
+Each day card **merges the route with its own itemized budget**, so the day's
+activities/places and its budget are viewed and edited together (the day **Edit**
+saves both). The panel also shows an independent **estimated total** (never
+derived from the item breakdown) and the global category items with an **items
+total** and a note when it differs from the estimate; the estimated total and the
+category items are edited via their own **Edit**. It also renders externally
+linked references and numbered day/place labels that reference the map markers.
+The Live workflow panel scrolls to the latest event and names the agent currently
 working. The plan can be exported as a day-by-day Markdown file or a printable
-PDF report. The **Edit** action follows the active budget view: in **By day** it
-edits each day's estimate and item breakdown, and in **By category** it edits the
-category items; both also edit the estimated total. Categories are expected to
-use concrete labels rather than a vague "other" bucket.
+PDF report. Categories are expected to use concrete labels rather than a vague
+"other" bucket.
 
 Edited budgets are persisted with `PUT /api/conversations/{id}/trip-plan` and
 are sent to the model on the next turn as a `plan_context` block, so the agent

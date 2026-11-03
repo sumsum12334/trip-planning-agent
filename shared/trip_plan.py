@@ -1,8 +1,19 @@
-"""Shared schema and validation for the `display_trip_plan` UI tool.
+"""Shared schema, validation, and assembly for the trip-plan UI tools.
 
-The chat endpoints expose this tool so the model can render a structured
-itinerary. Keeping the JSON schema and the payload validation in one module
-keeps the streaming and continuation endpoints consistent.
+The plan is built with several small tools instead of one large
+`display_trip_plan` payload so the model only sends the part it changes and the
+UI can render the plan part by part:
+
+- ``start_trip_plan``      overview (destination, arrival airport, currency, total, notes)
+- ``set_trip_day``         one day (call once per day)
+- ``set_trip_budget``      the total or one day's budget and/or item breakdown
+- ``set_trip_references``  reference links
+- ``remove_trip_day``      drop a day
+- ``get_trip_plan``        read the current plan before adjusting it
+
+The assembled plan is stored per conversation and rendered by the browser.
+Keeping the JSON schema and validation in one module keeps the streaming and
+continuation endpoints consistent.
 """
 
 from __future__ import annotations
@@ -16,6 +27,9 @@ MAX_REFERENCES = 20
 MAX_BUDGET_ITEMS = 12
 MAX_CURRENCY_CHARS = 12
 ALLOWED_URL_SCHEMES = {"http", "https"}
+
+# The UI renders any event whose data.tool is this marker and data.result is a plan.
+TRIP_PLAN_UI_TOOL = "display_trip_plan"
 
 _COORDINATE_SCHEMA = {
     "type": "object",
@@ -70,61 +84,125 @@ _BUDGET_ITEMS_SCHEMA = {
     "maxItems": MAX_BUDGET_ITEMS,
 }
 
-TRIP_PLAN_TOOL: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "display_trip_plan",
-        "description": (
-            "Display a structured trip itinerary after enough planning details are known. "
-            "Provide the arrival `airport` (the first point of the map), approximate "
-            "coordinates for well-known places so the UI can map the route, and reference "
-            "links (with title and http(s) url) for sources that the plan relies on."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "destination": {"type": "string"},
-                "destination_coordinates": _COORDINATE_SCHEMA,
-                "airport": _AIRPORT_SCHEMA,
-                "days": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "day": {"type": "integer", "minimum": 1},
-                            "title": {"type": "string"},
-                            "activities": {"type": "array", "items": {"type": "string"}},
-                            "notes": {"type": "array", "items": {"type": "string"}},
-                            "coordinates": _COORDINATE_SCHEMA,
-                            "places": {"type": "array", "items": _PLACE_SCHEMA},
-                            "budget": {"type": "number", "minimum": 0, "description": "Estimated cost for this day."},
-                            "budget_items": _BUDGET_ITEMS_SCHEMA,
-                        },
-                        "required": ["day", "title", "activities"],
-                    },
-                    "minItems": 1,
-                    "maxItems": MAX_DAYS,
+_REFERENCES_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "url": {"type": "string"},
+        },
+        "required": ["title", "url"],
+    },
+    "maxItems": MAX_REFERENCES,
+}
+
+TRIP_PLAN_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "start_trip_plan",
+            "description": (
+                "Create or update the trip-plan overview: destination, arrival "
+                "airport, currency, estimated total budget, and notes. Call this "
+                "once before adding days."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "destination": {"type": "string"},
+                    "destination_coordinates": _COORDINATE_SCHEMA,
+                    "airport": _AIRPORT_SCHEMA,
+                    "currency": {"type": "string"},
+                    "budget": {"type": "number", "minimum": 0, "description": "Estimated total budget (independent of item breakdowns)."},
+                    "notes": {"type": "array", "items": {"type": "string"}},
                 },
-                "budget": {"type": "number", "description": "Estimated total budget (independent of budget_items)."},
-                "currency": {"type": "string", "description": "Currency code or symbol for the budget."},
-                "budget_items": _BUDGET_ITEMS_SCHEMA,
-                "notes": {"type": "array", "items": {"type": "string"}},
-                "references": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "title": {"type": "string"},
-                            "url": {"type": "string"},
-                        },
-                        "required": ["title", "url"],
-                    },
-                },
+                "required": ["destination"],
             },
-            "required": ["destination", "days"],
         },
     },
-}
+    {
+        "type": "function",
+        "function": {
+            "name": "set_trip_day",
+            "description": (
+                "Add or replace a single day of the plan. Call once per day and "
+                "send only that day's fields; re-call it to change one day."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "day": {"type": "integer", "minimum": 1},
+                    "title": {"type": "string"},
+                    "activities": {"type": "array", "items": {"type": "string"}},
+                    "notes": {"type": "array", "items": {"type": "string"}},
+                    "coordinates": _COORDINATE_SCHEMA,
+                    "places": {"type": "array", "items": _PLACE_SCHEMA},
+                    "budget": {"type": "number", "minimum": 0, "description": "Estimated cost for this day."},
+                    "budget_items": _BUDGET_ITEMS_SCHEMA,
+                },
+                "required": ["day", "title", "activities"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_trip_budget",
+            "description": (
+                "Set the estimated budget. Pass `day` to set that day's estimate "
+                "and/or its item breakdown, or omit `day` for the overall total "
+                "and/or the global item breakdown. Send only the parts that changed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "day": {"type": "integer", "minimum": 1},
+                    "budget": {"type": "number", "minimum": 0},
+                    "currency": {"type": "string"},
+                    "items": _BUDGET_ITEMS_SCHEMA,
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_trip_references",
+            "description": "Set the reference links for the plan.",
+            "parameters": {
+                "type": "object",
+                "properties": {"references": _REFERENCES_SCHEMA},
+                "required": ["references"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remove_trip_day",
+            "description": "Remove a day from the plan by its number.",
+            "parameters": {
+                "type": "object",
+                "properties": {"day": {"type": "integer", "minimum": 1}},
+                "required": ["day"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_trip_plan",
+            "description": (
+                "Return the current trip plan so you can read it before an "
+                "adjustment. Do not use it to display the plan."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+]
+
+TRIP_PLAN_TOOL_NAMES = {tool["function"]["name"] for tool in TRIP_PLAN_TOOLS}
 
 
 def _coordinate(value: Any, *, field: str) -> dict[str, float] | None:
@@ -162,6 +240,20 @@ def _clean_strings(value: Any) -> list[str]:
     return [text for item in value if (text := str(item).strip())]
 
 
+def _optional_number(value: Any, *, field: str) -> float | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ValueError(f"{field} must be a non-negative number.")
+    return float(value)
+
+
+def _number_or_none(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
 def _places(value: Any, *, day_number: int) -> list[dict[str, Any]]:
     """Normalize an optional list of per-day places with coordinates and links."""
     if value in (None, ""):
@@ -194,14 +286,6 @@ def _places(value: Any, *, day_number: int) -> list[dict[str, Any]]:
             }
         )
     return places
-
-
-def _optional_number(value: Any, *, field: str) -> float | None:
-    if value in (None, ""):
-        return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
-        raise ValueError(f"{field} must be a non-negative number.")
-    return float(value)
 
 
 def _airport(value: Any) -> dict[str, Any] | None:
@@ -265,67 +349,192 @@ def _references(value: Any) -> list[dict[str, str]]:
     return references
 
 
-def normalize_trip_plan(arguments: dict[str, Any]) -> dict[str, Any]:
-    """Validate and normalize a `display_trip_plan` tool payload.
+def empty_trip_plan() -> dict[str, Any]:
+    """Return a blank plan used before the model has called any tool."""
+    return {
+        "destination": "",
+        "destination_coordinates": None,
+        "airport": None,
+        "currency": "",
+        "budget": None,
+        "budget_items": [],
+        "days": [],
+        "notes": [],
+        "references": [],
+        "status": "draft",
+    }
 
-    Raises ``ValueError`` with a user-safe message when the payload is invalid.
-    """
-    if not isinstance(arguments, dict):
-        raise ValueError("display_trip_plan requires an object of arguments.")
-    destination = str(arguments.get("destination", "")).strip()
-    days = arguments.get("days", [])
-    if not destination or not isinstance(days, list) or not 1 <= len(days) <= MAX_DAYS:
-        raise ValueError(
-            "display_trip_plan requires a destination and one to fourteen days."
-        )
 
-    currency = str(arguments.get("currency", "")).strip()[:MAX_CURRENCY_CHARS]
-    normalized_days: list[dict[str, Any]] = []
-    for item in days:
-        if not isinstance(item, dict):
-            raise ValueError("Each trip day must be an object.")
-        activities = _clean_strings(item.get("activities", []))
-        title = str(item.get("title", "")).strip()
-        if not title or not activities:
-            raise ValueError("Each trip day requires a title and activities.")
-        day_number = int(item.get("day", len(normalized_days) + 1))
-        normalized_days.append(
+def assemble_trip_plan(plan: dict[str, Any] | None) -> dict[str, Any]:
+    """Return a UI-safe, sorted copy of the plan."""
+    source = plan if isinstance(plan, dict) else {}
+    days: list[dict[str, Any]] = []
+    for index, day in enumerate(source.get("days", []) or []):
+        if not isinstance(day, dict):
+            continue
+        number = day.get("day")
+        number = int(number) if isinstance(number, (int, float)) and not isinstance(number, bool) else index + 1
+        days.append(
             {
-                "day": day_number,
-                "title": title,
-                "activities": activities,
-                "notes": _clean_strings(item.get("notes", [])),
-                "coordinates": _coordinate(
-                    item.get("coordinates"), field=f"Day {day_number} coordinates"
-                ),
-                "places": _places(item.get("places"), day_number=day_number),
-                "budget": _optional_number(
-                    item.get("budget"), field=f"Day {day_number} budget"
-                ),
-                "budget_items": _budget_items(
-                    item.get("budget_items"), currency=currency
-                ),
+                "day": number,
+                "title": str(day.get("title", "")).strip() or f"Day {number}",
+                "activities": _clean_strings(day.get("activities", [])),
+                "notes": _clean_strings(day.get("notes", [])),
+                "coordinates": day.get("coordinates") if isinstance(day.get("coordinates"), dict) else None,
+                "places": day.get("places") if isinstance(day.get("places"), list) else [],
+                "budget": _number_or_none(day.get("budget")),
+                "budget_items": day.get("budget_items") if isinstance(day.get("budget_items"), list) else [],
             }
         )
-
-    budget_items = _budget_items(arguments.get("budget_items"), currency=currency)
-
+    days.sort(key=lambda day: day["day"])
     return {
-        "destination": destination,
-        "destination_coordinates": _coordinate(
-            arguments.get("destination_coordinates"),
-            field="Destination coordinates",
-        ),
-        "airport": _airport(arguments.get("airport")),
-        "days": normalized_days,
-        # The estimated total is independent of the item breakdown.
-        "budget": _optional_number(arguments.get("budget"), field="display_trip_plan budget"),
-        "currency": currency,
-        "budget_items": budget_items,
-        "notes": _clean_strings(arguments.get("notes", [])),
-        "references": _references(arguments.get("references")),
+        "destination": str(source.get("destination", "")).strip(),
+        "destination_coordinates": source.get("destination_coordinates") or None,
+        "airport": source.get("airport") or None,
+        "currency": str(source.get("currency", "")).strip()[:MAX_CURRENCY_CHARS],
+        "budget": _number_or_none(source.get("budget")),
+        "budget_items": source.get("budget_items") if isinstance(source.get("budget_items"), list) else [],
+        "days": days,
+        "notes": _clean_strings(source.get("notes", [])),
+        "references": source.get("references") if isinstance(source.get("references"), list) else [],
         "status": "displayed",
     }
+
+
+def _day_numbers(days: list[dict[str, Any]]) -> list[int]:
+    return [day["day"] for day in days]
+
+
+def _find_day(days: list[dict[str, Any]], number: int) -> dict[str, Any] | None:
+    return next((day for day in days if day.get("day") == number), None)
+
+
+def apply_trip_plan_tool(
+    name: str, arguments: Any, plan: dict[str, Any] | None
+) -> tuple[dict[str, Any], Any]:
+    """Apply one trip-plan tool to ``plan``.
+
+    Returns ``(new_plan, model_result)``. ``model_result`` is a compact summary
+    for the model (except ``get_trip_plan``, which returns the assembled plan)
+    so re-sending the whole plan is unnecessary.
+    """
+    if not isinstance(arguments, dict):
+        raise ValueError(f"{name} requires an object of arguments.")
+    current = dict(plan) if isinstance(plan, dict) else empty_trip_plan()
+    current.setdefault("days", [])
+    current.setdefault("budget_items", [])
+    current.setdefault("references", [])
+    current.setdefault("notes", [])
+    currency = str(current.get("currency", "")).strip()[:MAX_CURRENCY_CHARS]
+
+    if name == "start_trip_plan":
+        destination = str(arguments.get("destination", "")).strip()
+        if not destination:
+            raise ValueError("start_trip_plan requires a destination.")
+        current["destination"] = destination
+        if "destination_coordinates" in arguments:
+            current["destination_coordinates"] = _coordinate(
+                arguments.get("destination_coordinates"), field="Destination coordinates"
+            )
+        if "airport" in arguments:
+            current["airport"] = _airport(arguments.get("airport"))
+        if "currency" in arguments:
+            currency = str(arguments.get("currency", "")).strip()[:MAX_CURRENCY_CHARS]
+            current["currency"] = currency
+        if "budget" in arguments:
+            current["budget"] = _optional_number(arguments.get("budget"), field="budget")
+        if "notes" in arguments:
+            current["notes"] = _clean_strings(arguments.get("notes"))
+        result: Any = {"ok": True, "tool": name, "destination": destination, "days": _day_numbers(current["days"])}
+
+    elif name == "set_trip_day":
+        number = arguments.get("day")
+        if isinstance(number, bool) or not isinstance(number, (int, float)) or int(number) < 1:
+            raise ValueError("set_trip_day requires a positive day number.")
+        number = int(number)
+        title = str(arguments.get("title", "")).strip()
+        activities = _clean_strings(arguments.get("activities", []))
+        if not title or not activities:
+            raise ValueError("set_trip_day requires a title and activities.")
+        day = {
+            "day": number,
+            "title": title,
+            "activities": activities,
+            "notes": _clean_strings(arguments.get("notes", [])),
+            "coordinates": _coordinate(arguments.get("coordinates"), field=f"Day {number} coordinates"),
+            "places": _places(arguments.get("places"), day_number=number),
+            "budget": _optional_number(arguments.get("budget"), field=f"Day {number} budget"),
+            "budget_items": _budget_items(arguments.get("budget_items"), currency=currency),
+        }
+        current["days"] = [d for d in current["days"] if d.get("day") != number] + [day]
+        current["days"].sort(key=lambda d: d.get("day", 0))
+        result = {"ok": True, "tool": name, "day": number, "days": _day_numbers(current["days"])}
+
+    elif name == "set_trip_budget":
+        if "currency" in arguments:
+            currency = str(arguments.get("currency", "")).strip()[:MAX_CURRENCY_CHARS]
+            current["currency"] = currency
+        budget = _optional_number(arguments.get("budget"), field="budget") if "budget" in arguments else None
+        items = _budget_items(arguments.get("items"), currency=currency) if "items" in arguments else None
+        number = arguments.get("day")
+        if number not in (None, ""):
+            if isinstance(number, bool) or not isinstance(number, (int, float)) or int(number) < 1:
+                raise ValueError("set_trip_budget day must be a positive integer.")
+            number = int(number)
+            target = _find_day(current["days"], number)
+            if target is None:
+                target = {
+                    "day": number,
+                    "title": f"Day {number}",
+                    "activities": [],
+                    "notes": [],
+                    "coordinates": None,
+                    "places": [],
+                    "budget": None,
+                    "budget_items": [],
+                }
+                current["days"].append(target)
+                current["days"].sort(key=lambda d: d.get("day", 0))
+            if budget is not None:
+                target["budget"] = budget
+            if items is not None:
+                target["budget_items"] = items
+            result = {"ok": True, "tool": name, "scope": f"day {number}", "budget": target.get("budget")}
+        else:
+            if budget is not None:
+                current["budget"] = budget
+            if items is not None:
+                current["budget_items"] = items
+            result = {"ok": True, "tool": name, "scope": "total", "budget": current.get("budget")}
+
+    elif name == "set_trip_references":
+        references = _references(arguments.get("references"))
+        current["references"] = references
+        result = {"ok": True, "tool": name, "references": len(references)}
+
+    elif name == "remove_trip_day":
+        number = arguments.get("day")
+        if isinstance(number, bool) or not isinstance(number, (int, float)) or int(number) < 1:
+            raise ValueError("remove_trip_day requires a positive day number.")
+        number = int(number)
+        before = len(current["days"])
+        current["days"] = [d for d in current["days"] if d.get("day") != number]
+        result = {
+            "ok": True,
+            "tool": name,
+            "removed": number if len(current["days"]) < before else None,
+            "days": _day_numbers(current["days"]),
+        }
+
+    elif name == "get_trip_plan":
+        assembled = assemble_trip_plan(current)
+        return current, assembled
+
+    else:
+        raise ValueError(f"Unknown trip-plan tool: {name}")
+
+    current["status"] = "displayed"
+    return current, result
 
 
 def format_plan_context(context: dict[str, Any] | None) -> str:

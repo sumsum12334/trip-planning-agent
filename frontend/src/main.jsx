@@ -3,10 +3,14 @@ import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Alert,
   Avatar,
   Box,
   Button,
+  Chip,
   CssBaseline,
   Divider,
   IconButton,
@@ -27,6 +31,7 @@ import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import DarkModeOutlinedIcon from "@mui/icons-material/DarkModeOutlined";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import HistoryEduIcon from "@mui/icons-material/HistoryEdu";
 import LightModeOutlinedIcon from "@mui/icons-material/LightModeOutlined";
 import PlaceIcon from "@mui/icons-material/Place";
@@ -351,53 +356,26 @@ function TripMap({ plan }) {
   </div>;
 }
 
-function BudgetEditor({ plan, currency, mode, onCancel, onSave }) {
+function splitLines(value) {
+  return String(value || "").split("\n").map((line) => line.trim()).filter(Boolean);
+}
+
+function CategoryBudgetEditor({ plan, currency, onCancel, onSave }) {
   const items = planBudgetItems(plan);
   const estimate = plan.budget ?? null;
-  const days = plan.days || [];
-  const derivedDay = estimate != null && days.length ? Math.round((estimate / days.length) * 100) / 100 : null;
-  const dayMode = mode !== "category";
   const [estimateInput, setEstimateInput] = useState(estimate != null ? String(estimate) : "");
   const [rows, setRows] = useState(items.map((item) => ({ category: item.category, amount: String(item.amount) })));
-  const [dayRows, setDayRows] = useState(days.map((day) => {
-    const dayItems = Array.isArray(day.budget_items) ? day.budget_items : [];
-    const dayItemsTotal = dayItems.length
-      ? Math.round(dayItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) * 100) / 100
-      : null;
-    return {
-      day: day.day,
-      amount: String(day.budget ?? dayItemsTotal ?? derivedDay ?? ""),
-      items: dayItems.map((item) => ({ category: item.category, amount: String(item.amount) })),
-    };
-  }));
   const [error, setError] = useState("");
-
-  const sumRows = (list) => Math.round(list.reduce((sum, row) => {
+  const itemsTotal = Math.round(rows.reduce((sum, row) => {
     const amount = Number(row.amount);
     return sum + (Number.isFinite(amount) && amount >= 0 ? amount : 0);
   }, 0) * 100) / 100;
-  const itemsTotal = sumRows(rows);
 
   function updateRow(index, field, value) {
     setRows((previous) => previous.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
   }
   function addRow() { setRows((previous) => [...previous, { category: "", amount: "" }]); }
   function removeRow(index) { setRows((previous) => previous.filter((_, i) => i !== index)); }
-
-  function updateDayAmount(index, value) {
-    setDayRows((previous) => previous.map((row, i) => (i === index ? { ...row, amount: value } : row)));
-  }
-  function updateDayItem(dayIndex, itemIndex, field, value) {
-    setDayRows((previous) => previous.map((row, i) => (i === dayIndex
-      ? { ...row, items: row.items.map((item, j) => (j === itemIndex ? { ...item, [field]: value } : item)) }
-      : row)));
-  }
-  function addDayItem(dayIndex) {
-    setDayRows((previous) => previous.map((row, i) => (i === dayIndex ? { ...row, items: [...row.items, { category: "", amount: "" }] } : row)));
-  }
-  function removeDayItem(dayIndex, itemIndex) {
-    setDayRows((previous) => previous.map((row, i) => (i === dayIndex ? { ...row, items: row.items.filter((_, j) => j !== itemIndex) } : row)));
-  }
 
   function save() {
     const estimateValue = estimateInput.trim() === "" ? null : Number(estimateInput);
@@ -408,70 +386,107 @@ function BudgetEditor({ plan, currency, mode, onCancel, onSave }) {
     const cleanedItems = rows
       .map((row) => ({ category: row.category.trim(), amount: Number(row.amount) }))
       .filter((row) => row.category && Number.isFinite(row.amount) && row.amount >= 0);
-    const dayBudgets = dayRows
-      .map((row) => ({ day: row.day, amount: row.amount.trim() === "" ? null : Number(row.amount) }))
-      .filter((row) => row.amount != null && Number.isFinite(row.amount) && row.amount >= 0);
-    const dayItems = [];
-    dayRows.forEach((row) => row.items.forEach((item) => {
-      const category = item.category.trim();
-      const amount = Number(item.amount);
-      if (category && Number.isFinite(amount) && amount >= 0) dayItems.push({ day: row.day, category, amount });
-    }));
     onSave({
+      mode: "category",
       budget: estimateValue,
       currency,
       budget_items: cleanedItems.map((row) => ({ category: row.category, amount: row.amount, currency })),
-      day_budgets: dayBudgets,
-      day_items: dayItems,
     });
   }
 
   return <div className="budget-editor">
-    <div className="budget-editor-label">{dayMode ? "Editing: by day" : "Editing: by category"}</div>
+    <div className="budget-editor-label">Editing: category items</div>
     <div className="budget-row">
       <label>Estimated total
         <input className="budget-amount" type="number" min="0" step="any" value={estimateInput} onChange={(event) => setEstimateInput(event.target.value)} />
       </label>
     </div>
-    {dayMode ? (
-      dayRows.length > 0 ? <div className="budget-days-editor">
-        {dayRows.map((row, dayIndex) => <div className="budget-day-editor" key={row.day}>
-          <div className="budget-day-editor-head">
-            <span className="budget-day-label">Day {row.day}</span>
-            <input className="budget-amount" type="number" min="0" step="any" placeholder="0" value={row.amount} onChange={(event) => updateDayAmount(dayIndex, event.target.value)} />
-          </div>
-          <ul className="budget-editor-rows">
-            {row.items.map((item, itemIndex) => <li key={itemIndex}>
-              <input className="budget-category" placeholder="Category" value={item.category} onChange={(event) => updateDayItem(dayIndex, itemIndex, "category", event.target.value)} />
-              <input className="budget-amount" type="number" min="0" step="any" placeholder="0" value={item.amount} onChange={(event) => updateDayItem(dayIndex, itemIndex, "amount", event.target.value)} />
-              <button type="button" className="icon-button danger" title="Remove item" onClick={() => removeDayItem(dayIndex, itemIndex)}>×</button>
-            </li>)}
-          </ul>
-          <div className="budget-editor-actions">
-            <button type="button" className="plan-tool" onClick={() => addDayItem(dayIndex)}>＋ Item</button>
-            <span className="budget-editor-total">Day items: {formatBudget(sumRows(row.items), currency)}</span>
-          </div>
-        </div>)}
-      </div> : <small className="budget-notice">This plan has no days to break down.</small>
-    ) : (
-      <>
-        <div className="budget-editor-label">Category items</div>
-        <ul className="budget-editor-rows">
-          {rows.map((row, index) => <li key={index}>
-            <input className="budget-category" placeholder="Category" value={row.category} onChange={(event) => updateRow(index, "category", event.target.value)} />
-            <input className="budget-amount" type="number" min="0" step="any" placeholder="0" value={row.amount} onChange={(event) => updateRow(index, "amount", event.target.value)} />
-            <button type="button" className="icon-button danger" title="Remove item" onClick={() => removeRow(index)}>×</button>
-          </li>)}
-        </ul>
-        <div className="budget-editor-actions">
-          <button type="button" className="plan-tool" onClick={addRow}>＋ Item</button>
-          <span className="budget-editor-total">Items total: {formatBudget(itemsTotal, currency)}</span>
-        </div>
-      </>
-    )}
+    <ul className="budget-editor-rows">
+      {rows.map((row, index) => <li key={index}>
+        <input className="budget-category" placeholder="Category" value={row.category} onChange={(event) => updateRow(index, "category", event.target.value)} />
+        <input className="budget-amount" type="number" min="0" step="any" placeholder="0" value={row.amount} onChange={(event) => updateRow(index, "amount", event.target.value)} />
+        <button type="button" className="icon-button danger" title="Remove item" onClick={() => removeRow(index)}>×</button>
+      </li>)}
+    </ul>
+    <div className="budget-editor-actions">
+      <button type="button" className="plan-tool" onClick={addRow}>＋ Item</button>
+      <span className="budget-editor-total">Items total: {formatBudget(itemsTotal, currency)}</span>
+    </div>
     {error && <small className="budget-notice warn">{error}</small>}
     <div className="budget-editor-actions">
       <button type="button" className="plan-tool primary" onClick={save}>Save</button>
+      <button type="button" className="plan-tool" onClick={onCancel}>Cancel</button>
+    </div>
+  </div>;
+}
+
+function DayEditor({ day, dayBudget, currency, onCancel, onSave }) {
+  const [title, setTitle] = useState(day.title || "");
+  const [activities, setActivities] = useState((day.activities || []).join("\n"));
+  const [notes, setNotes] = useState((day.notes || []).join("\n"));
+  const [places, setPlaces] = useState((day.places || []).map((place) => (place.url ? `${place.name} | ${place.url}` : place.name)).join("\n"));
+  const [amount, setAmount] = useState(dayBudget && dayBudget.amount != null ? String(dayBudget.amount) : "");
+  const [items, setItems] = useState((dayBudget?.items || []).map((item) => ({ category: item.category, amount: String(item.amount) })));
+  const [error, setError] = useState("");
+
+  function updateItem(index, field, value) {
+    setItems((previous) => previous.map((item, i) => (i === index ? { ...item, [field]: value } : item)));
+  }
+  function addItem() { setItems((previous) => [...previous, { category: "", amount: "" }]); }
+  function removeItem(index) { setItems((previous) => previous.filter((_, i) => i !== index)); }
+
+  function save() {
+    const activityList = splitLines(activities);
+    if (!title.trim() || !activityList.length) {
+      setError("A day needs a title and at least one activity.");
+      return;
+    }
+    const amountValue = amount.trim() === "" ? null : Number(amount);
+    if (amountValue != null && (!Number.isFinite(amountValue) || amountValue < 0)) {
+      setError("Enter a non-negative day budget.");
+      return;
+    }
+    const cleanedItems = items
+      .map((item) => ({ category: item.category.trim(), amount: Number(item.amount) }))
+      .filter((item) => item.category && Number.isFinite(item.amount) && item.amount >= 0);
+    const parsedPlaces = splitLines(places)
+      .map((line) => {
+        const [name, url] = line.split("|").map((part) => part.trim());
+        return url ? { name, url } : { name };
+      })
+      .filter((place) => place.name);
+    onSave({
+      day: day.day,
+      title: title.trim(),
+      activities: activityList,
+      notes: splitLines(notes),
+      places: parsedPlaces,
+      coordinates: day.coordinates || null,
+      budget: amountValue,
+      budget_items: cleanedItems.map((item) => ({ ...item, currency })),
+    });
+  }
+
+  return <div className="day-editor">
+    <label className="day-editor-field">Title<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
+    <label className="day-editor-field">Activities (one per line)<textarea rows={4} value={activities} onChange={(event) => setActivities(event.target.value)} /></label>
+    <label className="day-editor-field">Places / route (one per line, optional "Name | url")<textarea rows={2} value={places} onChange={(event) => setPlaces(event.target.value)} /></label>
+    <label className="day-editor-field">Notes (one per line)<textarea rows={2} value={notes} onChange={(event) => setNotes(event.target.value)} /></label>
+    <label className="day-editor-field">Day budget<input className="budget-amount" type="number" min="0" step="any" value={amount} onChange={(event) => setAmount(event.target.value)} /></label>
+    <div className="budget-editor-label">Day budget items</div>
+    <ul className="budget-editor-rows">
+      {items.map((item, index) => <li key={index}>
+        <input className="budget-category" placeholder="Category" value={item.category} onChange={(event) => updateItem(index, "category", event.target.value)} />
+        <input className="budget-amount" type="number" min="0" step="any" placeholder="0" value={item.amount} onChange={(event) => updateItem(index, "amount", event.target.value)} />
+        <button type="button" className="icon-button danger" title="Remove item" onClick={() => removeItem(index)}>×</button>
+      </li>)}
+    </ul>
+    <div className="budget-editor-actions">
+      <button type="button" className="plan-tool" onClick={addItem}>＋ Item</button>
+    </div>
+    {error && <small className="budget-notice warn">{error}</small>}
+    <div className="budget-editor-actions">
+      <button type="button" className="plan-tool primary" onClick={save}>Save day</button>
       <button type="button" className="plan-tool" onClick={onCancel}>Cancel</button>
     </div>
   </div>;
@@ -499,16 +514,26 @@ function TripPlanCard({ plan, onSaveBudget }) {
       items: dayItems,
     };
   });
-  const [editing, setEditing] = useState(false);
+  const [editingCategory, setEditingCategory] = useState(false);
+  const [editingDay, setEditingDay] = useState(null);
   const [notice, setNotice] = useState("");
   const [mapOpen, setMapOpen] = useState(points.length > 0);
   const [showReferences, setShowReferences] = useState(true);
-  const [budgetView, setBudgetView] = useState("day");
 
-  function handleSave(payload) {
+  function startCategoryEdit() {
+    setEditingDay(null);
+    setEditingCategory(true);
+    setNotice("");
+  }
+  function saveCategory(payload) {
     onSaveBudget?.(payload);
-    setEditing(false);
-    setNotice("Saved. The assistant will use this budget on your next message.");
+    setEditingCategory(false);
+    setNotice("Saved. The assistant will use this on your next message.");
+  }
+  function saveDay(dayObject) {
+    onSaveBudget?.({ mode: "day", budget: estimate, currency, days: [dayObject] });
+    setEditingDay(null);
+    setNotice("Day saved. The assistant will use this on your next message.");
   }
 
   return <div className="trip-plan-card">
@@ -527,28 +552,43 @@ function TripPlanCard({ plan, onSaveBudget }) {
     <div className="trip-plan-content">
       {mapOpen && <TripMap plan={plan} />}
       <div className="trip-days">
-      {plan.days.map((day) => {
+      {days.map((day) => {
+        const budget = dayBudgets.find((entry) => entry.day === day.day);
         const dayMarkers = markerNumbersForDay(points, day.day);
         const markerFor = (name) => {
           const index = points.findIndex((point) => point.kind === "place" && point.day === day.day && point.label === name);
           return index >= 0 ? index + 1 : null;
         };
+        const isEditing = editingDay === day.day;
         return <article className="trip-day" key={`${day.day}-${day.title}`}>
           <div className="trip-day-head">
             <div><div className="day-number">DAY {day.day}</div><strong>{day.title}</strong></div>
-            {dayMarkers.length > 0 && <span className="day-map-ref" title="Map reference">🗺 {dayMarkers.join(" · ")}</span>}
+            <div className="trip-day-head-actions">
+              {dayMarkers.length > 0 && <span className="day-map-ref" title="Map reference">🗺 {dayMarkers.join(" · ")}</span>}
+              {!isEditing && <button type="button" className="plan-tool" onClick={() => { setEditingCategory(false); setEditingDay(day.day); setNotice(""); }}>Edit</button>}
+            </div>
           </div>
-          <ul>{day.activities.map((activity) => <li key={activity}>{activity}</li>)}</ul>
-          {day.places?.length > 0 && <div className="trip-places">
-            {day.places.map((place, index) => {
-              const marker = markerFor(place.name);
-              const label = <>{marker ? <span className="place-marker-ref">{marker}</span> : null}📍 {place.name}</>;
-              return place.url
-                ? <a key={`${place.name}-${index}`} href={place.url} target="_blank" rel="noopener noreferrer">{label}</a>
-                : <span key={`${place.name}-${index}`}>{label}</span>;
-            })}
-          </div>}
-          {day.notes?.length > 0 && <small>{day.notes.join(" · ")}</small>}
+          {isEditing ? <DayEditor day={day} dayBudget={budget} currency={currency} onCancel={() => setEditingDay(null)} onSave={saveDay} /> : <>
+            <ul>{day.activities.map((activity) => <li key={activity}>{activity}</li>)}</ul>
+            {day.places?.length > 0 && <div className="trip-places">
+              {day.places.map((place, index) => {
+                const marker = markerFor(place.name);
+                const label = <>{marker ? <span className="place-marker-ref">{marker}</span> : null}📍 {place.name}</>;
+                return place.url
+                  ? <a key={`${place.name}-${index}`} href={place.url} target="_blank" rel="noopener noreferrer">{label}</a>
+                  : <span key={`${place.name}-${index}`}>{label}</span>;
+              })}
+            </div>}
+            {day.notes?.length > 0 && <small>{day.notes.join(" · ")}</small>}
+            {budget && (budget.amount != null || budget.items.length > 0) && <div className="day-budget">
+              <div className="day-budget-head"><span>Budget</span><b>{budget.amount == null ? "—" : formatBudget(budget.amount, currency)}{budget.derived ? " (est.)" : ""}</b></div>
+              {budget.items.length > 0 && <ul className="budget-items budget-day-items">
+                {budget.items.map((item, index) => <li key={`${item.category}-${index}`}>
+                  <span>{item.category}</span><b>{formatBudget(item.amount, item.currency || currency)}</b>
+                </li>)}
+              </ul>}
+            </div>}
+          </>}
         </article>;
       })}
       </div>
@@ -557,41 +597,24 @@ function TripPlanCard({ plan, onSaveBudget }) {
       <div className="trip-budget-head">
         <span>ESTIMATED BUDGET</span>
         <strong>{estimate == null ? "Not specified" : formatBudget(estimate, currency)}</strong>
-        {!editing && <button type="button" className="plan-tool" onClick={() => { setEditing(true); setNotice(""); }}>Edit</button>}
+        {!editingCategory && <button type="button" className="plan-tool" onClick={startCategoryEdit}>Edit</button>}
       </div>
-      {!editing && (dayBudgets.length > 0 || items.length > 0) && (
-        <div className="budget-view-toggle" role="tablist" aria-label="Budget view">
-          {dayBudgets.length > 0 && <button type="button" role="tab" aria-selected={budgetView === "day"} className={budgetView === "day" ? "active" : ""} onClick={() => setBudgetView("day")}>By day</button>}
-          {items.length > 0 && <button type="button" role="tab" aria-selected={budgetView === "category"} className={budgetView === "category" ? "active" : ""} onClick={() => setBudgetView("category")}>By category</button>}
-        </div>
-      )}
-      {!editing && budgetView === "day" && dayBudgets.length > 0 && <ul className="budget-days">
-        {dayBudgets.map((entry) => <li key={`day-${entry.day}`}>
-          <div className="budget-day-row">
-            <span>Day {entry.day}{entry.derived ? " (est.)" : ""}</span>
-            <b>{entry.amount == null ? "—" : formatBudget(entry.amount, currency)}</b>
-          </div>
-          {entry.items.length > 0 && <ul className="budget-day-items">
-            {entry.items.map((item, index) => <li key={`${item.category}-${index}`}>
+      {editingCategory ? (
+        <CategoryBudgetEditor plan={plan} currency={currency} onCancel={() => setEditingCategory(false)} onSave={saveCategory} />
+      ) : (
+        items.length > 0 ? <>
+          <div className="budget-subhead">Category items</div>
+          <ul className="budget-items">
+            {items.map((item, index) => <li key={`${item.category}-${index}`}>
               <span>{item.category}</span><b>{formatBudget(item.amount, item.currency || currency)}</b>
             </li>)}
-          </ul>}
-        </li>)}
-      </ul>}
-      {!editing && budgetView === "category" && items.length > 0 && <>
-        <ul className="budget-items">
-          {items.map((item, index) => <li key={`${item.category}-${index}`}>
-            <span>{item.category}</span><b>{formatBudget(item.amount, item.currency || currency)}</b>
-          </li>)}
-        </ul>
-        <div className="budget-total-row">
-          <span>Items total</span><b>{formatBudget(itemsTotal, currency)}</b>
-        </div>
-        {estimate != null && itemsTotal != null && Math.abs(estimate - itemsTotal) > 0.001 && (
-          <small className="budget-notice warn">Items total {formatBudget(itemsTotal, currency)} differs from the estimated budget {formatBudget(estimate, currency)}.</small>
-        )}
-      </>}
-      {editing && <BudgetEditor plan={plan} currency={currency} mode={budgetView} onCancel={() => setEditing(false)} onSave={handleSave} />}
+          </ul>
+          <div className="budget-total-row"><span>Items total</span><b>{formatBudget(itemsTotal, currency)}</b></div>
+          {estimate != null && itemsTotal != null && Math.abs(estimate - itemsTotal) > 0.001 && (
+            <small className="budget-notice warn">Items total {formatBudget(itemsTotal, currency)} differs from the estimated budget {formatBudget(estimate, currency)}.</small>
+          )}
+        </> : <small className="budget-notice">No category items yet — use Edit to add them. Each day has its own budget in its card.</small>
+      )}
       {notice && <small className="budget-notice">{notice}</small>}
     </div>
     {plan.notes?.length > 0 && <small className="trip-notes">{plan.notes.join(" · ")}</small>}
@@ -614,17 +637,28 @@ const AGENT_LABELS = [
   ["travel_history", "Agent 4 · travel_history"],
   ["web_search", "web_search tool"],
   ["display_trip_plan", "Agent 3 · coordinator"],
+  ["trip plan", "Agent 3 · coordinator"],
+  ["start_trip_plan", "Agent 3 · coordinator"],
+  ["set_trip_day", "Agent 3 · coordinator"],
+  ["set_trip_budget", "Agent 3 · coordinator"],
+  ["set_trip_references", "Agent 3 · coordinator"],
+  ["remove_trip_day", "Agent 3 · coordinator"],
+  ["get_trip_plan", "Agent 3 · coordinator"],
   ["ask_user_question", "Agent 3 · coordinator"],
   ["coordinator", "Agent 3 · coordinator"],
   ["model", "Model"],
 ];
 
+function agentForEvent(event) {
+  const label = (event.label || "").toLowerCase();
+  const match = AGENT_LABELS.find(([key]) => label.includes(key));
+  return match ? match[1] : null;
+}
+
 function currentAgent(events) {
   const running = [...events].reverse().find((event) => event.status === "running");
   if (!running) return null;
-  const label = (running.label || "").toLowerCase();
-  const match = AGENT_LABELS.find(([key]) => label.includes(key));
-  return match ? match[1] : running.label;
+  return agentForEvent(running) || running.label;
 }
 
 function Activity({ events }) {
@@ -636,6 +670,7 @@ function Activity({ events }) {
   };
   useEffect(scrollToLatest, [events.length]);
   const working = currentAgent(events);
+  let previousAgent = null;
   return (
     <details className="activity-card" onToggle={(event) => { if (event.currentTarget.open) scrollToLatest(); }}>
       <summary className="activity-heading">
@@ -645,13 +680,18 @@ function Activity({ events }) {
         <small>{events.length} events</small>
       </summary>
       <div className="activity-items" ref={itemsRef}>
-        {events.map((event, index) => (
-          <div className={`event ${event.status}`} key={`${event.label}-${index}`}>
-            <span className="event-icon">{eventIcon(event)}</span>
-            <span><strong>{event.label}</strong>{event.detail && <small>{event.detail}</small>}</span>
-            <span className={`event-dot ${event.status}`} />
-          </div>
-        ))}
+        {events.map((event, index) => {
+          const agent = agentForEvent(event);
+          const handover = Boolean(agent) && agent !== previousAgent;
+          previousAgent = agent || previousAgent;
+          return (
+            <div className={`event ${event.status}${handover ? " handover" : ""}`} key={`${event.label}-${index}`}>
+              <span className="event-icon">{eventIcon(event)}</span>
+              <span><strong>{event.label}</strong>{event.detail && <small>{event.detail}</small>}{handover && <small className="event-agent">{agent}</small>}</span>
+              <span className={`event-dot ${event.status}`} />
+            </div>
+          );
+        })}
       </div>
     </details>
   );
@@ -839,6 +879,26 @@ function HistoryPage({ userId }) {
     const response = await fetch(`/api/travel-history/${id}?user_id=${encodeURIComponent(userId)}`, { method: "DELETE" });
     if (response.ok) await load();
   }
+  const countries = useMemo(() => {
+    const map = new Map();
+    entries.forEach((entry) => {
+      const country = (entry.country || "").trim() || "Unspecified country";
+      const city = (entry.city || "").trim() || "Unspecified city";
+      if (!map.has(country)) map.set(country, new Map());
+      const cities = map.get(country);
+      if (!cities.has(city)) cities.set(city, []);
+      cities.get(city).push(entry);
+    });
+    return [...map.entries()]
+      .map(([country, cities]) => ({
+        country,
+        count: [...cities.values()].reduce((total, list) => total + list.length, 0),
+        cities: [...cities.entries()]
+          .map(([city, items]) => ({ city, items }))
+          .sort((a, b) => a.city.localeCompare(b.city)),
+      }))
+      .sort((a, b) => a.country.localeCompare(b.country));
+  }, [entries]);
   return <section className="page">
     <div className="page-title"><div><p className="eyebrow">YOUR MEMORY</p><h1>Travel history</h1><p className="muted">Places you have visited, used to make future plans more personal.</p></div><span className="hero-icon">🧭</span></div>
     <div className="history-layout">
@@ -857,9 +917,33 @@ function HistoryPage({ userId }) {
       </Paper>
       <div className="panel history-list"><div className="section-title"><span>▣</span><h2>Visited places</h2><b>{entries.length}</b></div>
         {!entries.length && <div className="empty-state"><span>✈</span><p>No places saved yet.</p><small>Add a visit or tell the assistant you have been there before.</small></div>}
-        {entries.map((entry) => <div className="history-entry" key={entry.id}><span className="place-pin">●</span><div><strong>{entry.location}</strong><p>{[entry.city, entry.country].filter(Boolean).join(", ") || "Location details not specified"}</p></div><IconButton className="icon-button danger" color="error" title="Remove visit" onClick={() => remove(entry.id)} sx={{ ml: "auto" }}>
-            <DeleteOutlinedIcon fontSize="small" />
-          </IconButton></div>)}
+        <div className="history-countries">
+          {countries.map((group) => (
+            <Accordion key={group.country} disableGutters elevation={0} className="history-country" defaultExpanded>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                <PlaceIcon color="primary" fontSize="small" sx={{ mr: 1 }} />
+                <Typography fontWeight={700} sx={{ flex: 1 }}>{group.country}</Typography>
+                <Chip size="small" label={`${group.count} ${group.count === 1 ? "place" : "places"}`} color="primary" variant="outlined" />
+              </AccordionSummary>
+              <AccordionDetails>
+                {group.cities.map((cityGroup) => (
+                  <Box key={cityGroup.city} className="history-city">
+                    <Typography variant="caption" className="history-city-name">{cityGroup.city}</Typography>
+                    {cityGroup.items.map((entry) => (
+                      <div className="history-entry" key={entry.id}>
+                        <span className="place-pin">●</span>
+                        <div><strong>{entry.location}</strong></div>
+                        <IconButton className="icon-button danger" color="error" title="Remove visit" onClick={() => remove(entry.id)} sx={{ ml: "auto" }}>
+                          <DeleteOutlinedIcon fontSize="small" />
+                        </IconButton>
+                      </div>
+                    ))}
+                  </Box>
+                ))}
+              </AccordionDetails>
+            </Accordion>
+          ))}
+        </div>
       </div>
     </div>
   </section>;
@@ -1001,22 +1085,36 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
       const target = planFromEvents(previous.events);
       if (!target) return previous;
       const result = target.data.result;
-      const dayBudgetMap = new Map((payload.day_budgets || []).map((entry) => [entry.day, entry.amount]));
-      const dayItemMap = new Map();
-      (payload.day_items || []).forEach((entry) => {
-        const list = dayItemMap.get(entry.day) || [];
-        list.push({ category: entry.category, amount: entry.amount, currency: payload.currency || result.currency || "" });
-        dayItemMap.set(entry.day, list);
-      });
-      const days = (result.days || []).map((day) => ({
-        ...day,
-        budget: dayBudgetMap.has(day.day) ? dayBudgetMap.get(day.day) : day.budget,
-        budget_items: dayItemMap.has(day.day) ? dayItemMap.get(day.day) : day.budget_items,
-      }));
+      let days = (result.days || []).map((day) => ({ ...day }));
+      if (Array.isArray(payload.days) && payload.days.length) {
+        payload.days.forEach((updatedDay) => {
+          const index = days.findIndex((day) => day.day === updatedDay.day);
+          if (index >= 0) days[index] = { ...days[index], ...updatedDay };
+          else days.push({ ...updatedDay });
+        });
+        days.sort((a, b) => a.day - b.day);
+      } else {
+        const dayBudgetMap = new Map((payload.day_budgets || []).map((entry) => [entry.day, entry.amount]));
+        const dayItemMap = new Map();
+        (payload.day_items || []).forEach((entry) => {
+          const list = dayItemMap.get(entry.day) || [];
+          list.push({ category: entry.category, amount: entry.amount, currency: payload.currency || result.currency || "" });
+          dayItemMap.set(entry.day, list);
+        });
+        days = days.map((day) => ({
+          ...day,
+          budget: dayBudgetMap.has(day.day) ? dayBudgetMap.get(day.day) : day.budget,
+          budget_items: dayItemMap.has(day.day) ? dayItemMap.get(day.day) : day.budget_items,
+        }));
+      }
+      const merged = { ...result, days };
+      if ("budget" in payload) merged.budget = payload.budget;
+      if (payload.currency) merged.currency = payload.currency;
+      if (payload.mode !== "day" && Array.isArray(payload.budget_items)) merged.budget_items = payload.budget_items;
       return {
         ...previous,
         events: previous.events.map((event) => event === target
-          ? { ...event, data: { ...event.data, result: { ...result, ...payload, days } } }
+          ? { ...event, data: { ...event.data, result: merged } }
           : event),
       };
     });

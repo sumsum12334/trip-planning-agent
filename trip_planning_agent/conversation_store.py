@@ -58,6 +58,15 @@ class ConversationStore:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS trip_plans (
+                    conversation_id TEXT PRIMARY KEY,
+                    plan TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path)
@@ -145,6 +154,10 @@ class ConversationStore:
                 "DELETE FROM pending_questions WHERE conversation_id = ?",
                 (conversation_id,),
             )
+            connection.execute(
+                "DELETE FROM trip_plans WHERE conversation_id = ?",
+                (conversation_id,),
+            )
         return cursor.rowcount > 0
 
     def save_pending_question(
@@ -203,13 +216,49 @@ class ConversationStore:
                 (conversation_id,),
             )
 
-    def update_latest_trip_plan(
-        self, conversation_id: str, updates: dict[str, Any]
-    ) -> bool:
-        """Overwrite the budget fields on the latest display_trip_plan event.
+    def get_trip_plan(self, conversation_id: str) -> dict[str, Any] | None:
+        """Return the assembled trip plan stored for a conversation."""
+        if not conversation_id:
+            return None
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT plan FROM trip_plans WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            return json.loads(row[0])
+        except (json.JSONDecodeError, TypeError):
+            return None
 
-        Used when the user edits the trip budget so the change survives reloads
-        and is available to the next model turn.
+    def save_trip_plan(self, conversation_id: str, plan: dict[str, Any]) -> None:
+        """Persist the assembled trip plan for a conversation."""
+        if not conversation_id:
+            return
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO trip_plans (conversation_id, plan, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(conversation_id) DO UPDATE SET
+                    plan=excluded.plan,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    conversation_id,
+                    json.dumps(plan),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+
+    def set_latest_trip_plan_event(
+        self, conversation_id: str, plan: dict[str, Any]
+    ) -> bool:
+        """Point the latest trip-plan UI event at the given assembled plan.
+
+        Used after the user edits the budget so the browser re-renders the
+        current plan; the plan itself lives in the ``trip_plans`` table.
         """
         with self._connection() as connection:
             row = connection.execute(
@@ -221,41 +270,8 @@ class ConversationStore:
             events = json.loads(row[0])
             for event in reversed(events):
                 data = event.get("data", {})
-                result = data.get("result")
-                if data.get("tool") == "display_trip_plan" and isinstance(result, dict):
-                    result["budget"] = updates.get("budget")
-                    if updates.get("currency") is not None:
-                        result["currency"] = updates["currency"]
-                    result["budget_items"] = updates.get("budget_items", [])
-                    currency = updates.get("currency") or ""
-                    day_budgets = {
-                        int(item["day"]): item.get("amount")
-                        for item in updates.get("day_budgets", [])
-                        if isinstance(item, dict)
-                        and isinstance(item.get("day"), (int, float))
-                        and not isinstance(item.get("day"), bool)
-                    }
-                    day_items: dict[int, list[dict[str, Any]]] = {}
-                    for item in updates.get("day_items", []):
-                        if (
-                            isinstance(item, dict)
-                            and isinstance(item.get("day"), (int, float))
-                            and not isinstance(item.get("day"), bool)
-                        ):
-                            day_items.setdefault(int(item["day"]), []).append(
-                                {
-                                    "category": str(item.get("category", "")).strip(),
-                                    "amount": item.get("amount"),
-                                    "currency": currency,
-                                }
-                            )
-                    for day in result.get("days", []):
-                        if not isinstance(day, dict):
-                            continue
-                        if day.get("day") in day_budgets:
-                            day["budget"] = day_budgets[day["day"]]
-                        if day.get("day") in day_items:
-                            day["budget_items"] = day_items[day["day"]]
+                if data.get("tool") == "display_trip_plan" and isinstance(data.get("result"), dict):
+                    data["result"] = plan
                     event["data"] = data
                     connection.execute(
                         "UPDATE conversations SET events = ?, updated_at = ? WHERE id = ?",

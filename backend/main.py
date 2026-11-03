@@ -49,7 +49,14 @@ from shared.schemas import (
     WebSearchRequest,
 )
 from shared.prompts import TRIP_PLANNING_SYSTEM_PROMPT
-from shared.trip_plan import TRIP_PLAN_TOOL, format_plan_context, normalize_trip_plan
+from shared.trip_plan import (
+    TRIP_PLAN_TOOL_NAMES,
+    TRIP_PLAN_TOOLS,
+    TRIP_PLAN_UI_TOOL,
+    apply_trip_plan_tool,
+    assemble_trip_plan,
+    format_plan_context,
+)
 from trip_planning_agent.tacc_client import TACCClient
 from trip_planning_agent.cancellation import clear as clear_cancel
 from trip_planning_agent.cancellation import register as register_cancel
@@ -73,6 +80,36 @@ app.add_middleware(
 # trip_planning_agent.cancellation. The client sends a `request_id` with the
 # stream and can call POST /api/chat/stop to set its event; the streaming loop
 # and the model client check the event between deltas.
+
+
+def _apply_trip_plan_tool(
+    store: ConversationStore, conversation_id: str, name: str, arguments: dict[str, Any]
+) -> tuple[Any, dict[str, Any] | None]:
+    """Apply one trip-plan tool, persist the plan, and return (result, ui_plan).
+
+    Invalid arguments return a labeled error result (with no UI plan) so the
+    model can correct itself instead of failing the whole turn.
+    """
+    plan = store.get_trip_plan(conversation_id)
+    try:
+        new_plan, model_result = apply_trip_plan_tool(name, arguments, plan)
+    except ValueError as error:
+        return {"ok": False, "tool": name, "error": str(error)}, None
+    if name == "get_trip_plan":
+        # Reading the plan does not change the UI.
+        return model_result, None
+    store.save_trip_plan(conversation_id, new_plan)
+    return model_result, assemble_trip_plan(new_plan)
+
+
+def _trip_plan_event(name: str, ui_plan: dict[str, Any]) -> ChatEvent:
+    """Build the UI event that renders the currently assembled trip plan."""
+    return ChatEvent(
+        type="tool",
+        label=f"Trip plan updated ({name})",
+        status="completed",
+        data={"tool": TRIP_PLAN_UI_TOOL, "result": ui_plan, "action": name},
+    )
 
 
 @app.get("/health")
@@ -349,7 +386,7 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                 "required": ["question", "options"],
             },
         },
-    }, TRIP_PLAN_TOOL, *AGENT_TOOL_SCHEMAS]
+    }, *TRIP_PLAN_TOOLS, *AGENT_TOOL_SCHEMAS]
 
     def execute_history_tool(name: str, arguments: dict[str, Any]) -> Any:
         if name == "search_travel_history":
@@ -360,8 +397,6 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
             if not question or len(options) < 2 or any(not option for option in options):
                 raise ValueError("ask_user_question requires a question and at least two options.")
             return {"question": question, "options": options[:6], "status": "awaiting_user"}
-        if name == "display_trip_plan":
-            return normalize_trip_plan(arguments)
         if name in AGENT_TOOL_NAMES:
             return execute_agent_tool(name, arguments)
         raise ValueError(f"Unknown tool requested: {name}")
@@ -409,13 +444,24 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
             stream_queue.put(("pause", (messages, result)))
 
         def run_model() -> None:
+            def tool_executor(name: str, arguments: dict[str, Any]) -> Any:
+                if name in TRIP_PLAN_TOOL_NAMES:
+                    model_result, ui_plan = _apply_trip_plan_tool(store, conversation_id, name, arguments)
+                    if ui_plan is not None:
+                        stream_queue.put(("event", _trip_plan_event(name, ui_plan).model_dump()))
+                    return model_result
+                try:
+                    return execute_history_tool(name, arguments)
+                except ValueError as error:
+                    return {"ok": False, "tool": name, "error": str(error)}
+
             try:
                 for delta in client.stream(
                     prompt,
                     system=TRIP_PLANNING_SYSTEM_PROMPT,
                     on_event=lambda event: stream_queue.put(("event", event)),
                     tools=history_tools,
-                    tool_executor=execute_history_tool,
+                    tool_executor=tool_executor,
                     on_pause=save_pause,
                     session_id=conversation_id,
                     trace_context=trace_context_for(trace),
@@ -606,22 +652,30 @@ def answer_chat_question(request: ChatRequest) -> ChatResponse:
                 "required": ["question", "options"],
             },
         },
-    }, TRIP_PLAN_TOOL, *AGENT_TOOL_SCHEMAS]
+    }, *TRIP_PLAN_TOOLS, *AGENT_TOOL_SCHEMAS]
 
     def execute_tool(name: str, arguments: dict[str, Any]) -> Any:
-        if name == "search_travel_history":
-            return history_store.search(request.user_id, str(arguments.get("query", "")))
-        if name == "ask_user_question":
-            question = str(arguments.get("question", "")).strip()
-            options = [str(option).strip() for option in arguments.get("options", [])]
-            if not question or len(options) < 2 or any(not option for option in options):
-                raise ValueError("ask_user_question requires a question and at least two options.")
-            return {"question": question, "options": options[:6], "status": "awaiting_user"}
-        if name == "display_trip_plan":
-            return normalize_trip_plan(arguments)
-        if name in AGENT_TOOL_NAMES:
-            return execute_agent_tool(name, arguments)
-        raise ValueError(f"Unknown tool requested: {name}")
+        if name in TRIP_PLAN_TOOL_NAMES:
+            model_result, ui_plan = _apply_trip_plan_tool(
+                store, request.conversation_id or "", name, arguments
+            )
+            if ui_plan is not None:
+                events.append(_trip_plan_event(name, ui_plan))
+            return model_result
+        try:
+            if name == "search_travel_history":
+                return history_store.search(request.user_id, str(arguments.get("query", "")))
+            if name == "ask_user_question":
+                question = str(arguments.get("question", "")).strip()
+                options = [str(option).strip() for option in arguments.get("options", [])]
+                if not question or len(options) < 2 or any(not option for option in options):
+                    raise ValueError("ask_user_question requires a question and at least two options.")
+                return {"question": question, "options": options[:6], "status": "awaiting_user"}
+            if name in AGENT_TOOL_NAMES:
+                return execute_agent_tool(name, arguments)
+            raise ValueError(f"Unknown tool requested: {name}")
+        except ValueError as error:
+            return {"ok": False, "tool": name, "error": str(error)}
 
     messages = list(pending["messages"])
     messages.append({"role": "user", "content": request.message})
@@ -808,20 +862,78 @@ def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
                 status_code=422, detail="Each day item needs a non-negative amount."
             )
         day_items.append({"day": int(day), "category": category, "amount": float(amount)})
-    updated = ConversationStore(get_settings().database_url).update_latest_trip_plan(
-        conversation_id,
-        {
-            "budget": request.budget,
-            "currency": currency,
-            "budget_items": budget_items,
-            "day_budgets": day_budgets,
-            "day_items": day_items,
-        },
-    )
-    if not updated:
+    store = ConversationStore(get_settings().database_url)
+    plan = store.get_trip_plan(conversation_id)
+    if plan is None:
         raise HTTPException(
             status_code=404, detail="No trip plan found for this conversation."
         )
+
+    updated_plan = dict(plan)
+    updated_plan["budget"] = request.budget
+    if currency is not None:
+        updated_plan["currency"] = currency
+    if request.mode != "day":
+        updated_plan["budget_items"] = budget_items
+
+    # Full day edits (itinerary + budget together) from the merged day editor.
+    if request.mode != "category":
+        for entry in request.days[:30]:
+            if not isinstance(entry, dict):
+                raise HTTPException(status_code=422, detail="Each day must be an object.")
+            try:
+                updated_plan, _ = apply_trip_plan_tool(
+                    "set_trip_day",
+                    {
+                        "day": entry.get("day"),
+                        "title": entry.get("title"),
+                        "activities": entry.get("activities", []),
+                        "notes": entry.get("notes", []),
+                        "places": entry.get("places", []),
+                        "coordinates": entry.get("coordinates"),
+                        "budget": entry.get("budget"),
+                        "budget_items": entry.get("budget_items", []),
+                    },
+                    updated_plan,
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+
+    # Legacy per-day budget fields (still accepted for compatibility).
+    days = [dict(day) for day in updated_plan.get("days", []) if isinstance(day, dict)]
+    day_map = {day.get("day"): day for day in days}
+
+    def ensure_day(number: int) -> dict[str, Any]:
+        day = day_map.get(number)
+        if day is None:
+            day = {
+                "day": number,
+                "title": f"Day {number}",
+                "activities": [],
+                "notes": [],
+                "coordinates": None,
+                "places": [],
+                "budget": None,
+                "budget_items": [],
+            }
+            days.append(day)
+            day_map[number] = day
+        return day
+
+    for entry in day_budgets:
+        ensure_day(entry["day"])["budget"] = entry["amount"]
+    items_by_day: dict[int, list[dict[str, Any]]] = {}
+    for item in day_items:
+        items_by_day.setdefault(item["day"], []).append(
+            {"category": item["category"], "amount": item["amount"], "currency": currency or ""}
+        )
+    for number, items in items_by_day.items():
+        ensure_day(number)["budget_items"] = items
+    updated_plan["days"] = sorted(days, key=lambda day: day.get("day", 0))
+
+    assembled = assemble_trip_plan(updated_plan)
+    store.save_trip_plan(conversation_id, updated_plan)
+    store.set_latest_trip_plan_event(conversation_id, assembled)
     return {
         "updated": True,
         "budget": request.budget,

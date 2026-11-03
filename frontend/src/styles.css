@@ -339,3 +339,39 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .budget-day-editor-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
 .budget-day-editor-head .budget-amount{margin-left:auto}
 .app[data-color-mode="dark"] .budget-day-editor{background:#12192c;border-color:rgba(154,166,196,0.14)}
+
+/* Live workflow: agent handovers */
+.workflow-handover{margin:8px 0 4px;padding:6px 9px;border-radius:8px;background:#f1f5ff;border:1px dashed #cdd9f2;color:#4b6ea8;font-size:10px;font-weight:700;line-height:1.5}
+.event.handover{border-left-color:#8c86ff}
+.event-agent{color:#6c63ff !important;font-weight:700}
+.app[data-color-mode="dark"] .workflow-handover{background:#141d33;border-color:rgba(106,168,255,0.28);color:#9db8ff}
+.app[data-color-mode="dark"] .event-agent{color:#b9b3ff !important}
+
+/* Travel history: country-oriented */
+.history-countries{display:grid;gap:8px}
+.history-country{border:1px solid #e6eaf3 !important;border-radius:12px !important;overflow:hidden;background:#fff}
+.history-country:before{display:none}
+.history-country .MuiAccordionSummary-root{padding:0 10px}
+.history-country .MuiAccordionDetails-root{padding:0 12px 8px}
+.history-city{padding:4px 0 2px}
+.history-city-name{display:block;margin:6px 0 2px;color:#7a83a0;font-weight:700;letter-spacing:.6px;text-transform:uppercase}
+.history-city .history-entry{border-top:1px solid #eef1f7;padding:8px 0}
+.app[data-color-mode="dark"] .history-country{background:#141b2e;border-color:rgba(154,166,196,0.14) !important}
+.app[data-color-mode="dark"] .history-city .history-entry{border-top-color:rgba(154,166,196,0.12)}
+
+/* Merged day route + budget */
+.trip-day-head-actions{display:flex;align-items:center;gap:6px}
+.day-budget{margin-top:9px;padding-top:8px;border-top:1px dashed #e2ebf8}
+.day-budget-head{display:flex;justify-content:space-between;gap:10px;font-size:11px;font-weight:700;color:#3b5ecb}
+.day-budget .budget-items{margin-top:6px}
+.day-budget .budget-items li{background:#f7fbff;border-color:#e6eefb}
+
+/* Day editor (route + budget together) */
+.day-editor{display:grid;gap:8px;margin-top:6px}
+.day-editor-field{display:block;font-size:11px;font-weight:700;color:#43506d}
+.day-editor-field input,.day-editor-field textarea{display:block;width:100%;margin-top:4px;padding:7px 9px;border:1px solid #cfdcf3;border-radius:8px;outline:none;font-size:12px;font-family:inherit;resize:vertical}
+.app[data-color-mode="dark"] .day-budget{border-top-color:rgba(154,166,196,0.16)}
+.app[data-color-mode="dark"] .day-budget .budget-items li{background:#0f1626;border-color:rgba(154,166,196,0.14)}
+.app[data-color-mode="dark"] .day-editor-field{color:#c5cee6}
+.app[data-color-mode="dark"] .day-editor-field input,.app[data-color-mode="dark"] .day-editor-field textarea{background:#12192c;border-color:rgba(154,166,196,0.2);color:#e8ecf8}
+.app[data-color-mode="dark"] .trip-day-head-actions .plan-tool{background:#1c2740;border-color:rgba(154,166,196,0.2);color:#cfd8f5}
