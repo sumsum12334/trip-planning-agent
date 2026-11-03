@@ -111,8 +111,9 @@ chain-of-thought is never used as an activity event.
 
 The chat workflow also provides an `ask_user_question` tool. When the model
 needs a planning decision, it can return a structured question with two to six
-options; the UI renders selectable options instead of requiring the model to
-print a question list. Tool arguments and results are persisted in the
+options; the UI renders selectable options plus an **Other…** field for a custom
+free-text answer (validated server-side) instead of requiring the model to print
+a question list. Tool arguments and results are persisted in the
 conversation events. The Live workflow is collapsed by default to keep the
 chat compact; expand it to inspect the ordered tool calls and saved results.
 Selecting an option resumes the same model tool session through
@@ -136,15 +137,18 @@ not abort the turn), and only `http(s)` reference URLs are accepted.
 
 Each day card **merges the route with its own itemized budget**, so the day's
 activities/places and its budget are viewed and edited together (the day **Edit**
-saves both). The panel also shows an independent **estimated total** (never
-derived from the item breakdown) and the global category items with an **items
-total** and a note when it differs from the estimate; the estimated total and the
-category items are edited via their own **Edit**. It also renders externally
-linked references and numbered day/place labels that reference the map markers.
-The Live workflow panel scrolls to the latest event and names the agent currently
-working. The plan can be exported as a day-by-day Markdown file or a printable
-PDF report. Categories are expected to use concrete labels rather than a vague
-"other" bucket.
+saves both). The plan has an **Overview / Day by day** toggle: the overview lists
+each day with its budget and map reference, and the day-by-day view uses
+collapsible day cards with Expand all / Collapse all to avoid long scrolling. The
+panel also shows an independent **estimated total** (never derived from the item
+breakdown) and the global category items with an **items total** and a note when
+it differs from the estimate; the estimated total and the category items are
+edited via their own **Edit**. It also renders externally linked references and
+numbered day/place labels that reference the map markers. The Live workflow panel
+scrolls to the latest event and names the agent currently working. The plan can be
+exported as a day-by-day Markdown file or a printable, day-oriented PDF report
+(hero summary, route-by-day timeline, per-day details and budgets). Categories are
+expected to use concrete labels rather than a vague "other" bucket.
 
 Edited budgets are persisted with `PUT /api/conversations/{id}/trip-plan` and
 are sent to the model on the next turn as a `plan_context` block, so the agent

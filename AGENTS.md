@@ -24,7 +24,8 @@
   per-day `budget`, the estimated total is independent of the `budget_items`
   breakdown, and categories should be concrete rather than a vague "other".
   Each day card merges its route with its itemized budget so both are viewed and
-  edited together. Validate these fields in `shared/trip_plan.py` and return
+  edited together, and the plan offers Overview and Day-by-day views with
+  collapsible days. Validate these fields in `shared/trip_plan.py` and return
   tool-argument errors as labeled results rather than aborting the turn.
 
 ## Engineering standards
@@ -40,9 +41,10 @@
   errors, pending questions, and user selections; never infer durable state
   from display text alone.
 - User questions must be resumable: validate the conversation and selected
-  option server-side, disable duplicate submissions in the UI, preserve a
-  retryable pending state after continuation failures, and mark the question
-  answered only after successful model continuation.
+  option server-side, support a custom "Other" free-text answer, disable
+  duplicate submissions in the UI, preserve a retryable pending state after
+  continuation failures, and mark the question answered only after successful
+  model continuation.
 - Structured UI tools (the trip-plan tools in `shared/trip_plan.py` and the
   agent tools in `agents/chat_tools.py`) must validate their payloads before
   emitting events. Render structured data in dedicated components rather than
