@@ -16,6 +16,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from agents.chat_tools import (
+    AGENT_TOOL_NAMES,
+    AGENT_TOOL_SCHEMAS,
+    execute_agent_tool,
+)
 from agents.coordinator import run as coordinate
 from agents.coordinator.agent import health as coordinator_health
 from agents.estimate_transport.agent import health as transport_health
@@ -28,6 +33,7 @@ from agents.web_search import run as web_search
 from config.settings import get_model_config, get_settings, update_model_config
 from shared.schemas import (
     ChatEvent,
+    ChatStopRequest,
     StayCandidate,
     ChatRequest,
     ChatResponse,
@@ -39,10 +45,15 @@ from shared.schemas import (
     TripRequest,
     TravelHistoryCreate,
     TravelHistoryEntry,
+    TripPlanUpdate,
     WebSearchRequest,
 )
 from shared.prompts import TRIP_PLANNING_SYSTEM_PROMPT
+from shared.trip_plan import TRIP_PLAN_TOOL, format_plan_context, normalize_trip_plan
 from trip_planning_agent.tacc_client import TACCClient
+from trip_planning_agent.cancellation import clear as clear_cancel
+from trip_planning_agent.cancellation import register as register_cancel
+from trip_planning_agent.cancellation import request_stop
 from trip_planning_agent.conversation_store import ConversationStore
 from trip_planning_agent.observability import (
     end_trace,
@@ -57,6 +68,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Cooperative cancellation for in-flight streaming turns lives in
+# trip_planning_agent.cancellation. The client sends a `request_id` with the
+# stream and can call POST /api/chat/stop to set its event; the streaming loop
+# and the model client check the event between deltas.
 
 
 @app.get("/health")
@@ -187,11 +203,14 @@ def chat(request: ChatRequest) -> ChatResponse:
     events: list[ChatEvent] = [
         ChatEvent(type="agent", label="Agent request queued", status="completed"),
     ]
+    plan_context = format_plan_context(request.plan_context)
     prompt = request.message
     if conversation:
         prompt = "\n".join(
             f"{item.get('role', 'user')}: {item.get('content', '')}" for item in conversation
         ) + f"\nuser: {request.message}"
+    if plan_context:
+        prompt = f"{plan_context}\n\n{prompt}"
     conversation.append({"role": "user", "content": request.message})
     conversation_id = store.save(
         request.conversation_id,
@@ -268,15 +287,27 @@ def chat(request: ChatRequest) -> ChatResponse:
     )
 
 
+@app.post("/api/chat/stop")
+def stop_chat(request: ChatStopRequest) -> dict:
+    """Cooperatively stop a streaming turn started with the same request_id."""
+    return {
+        "request_id": request.request_id,
+        "stopped": request_stop(request.request_id),
+    }
+
+
 @app.post("/api/chat/stream")
 def chat_stream(request: ChatRequest) -> StreamingResponse:
     store = ConversationStore(get_settings().database_url)
     conversation = list(request.conversation[-20:])
+    plan_context = format_plan_context(request.plan_context)
     prompt = request.message
     if conversation:
         prompt = "\n".join(
             f"{item.get('role', 'user')}: {item.get('content', '')}" for item in conversation
         ) + f"\nuser: {request.message}"
+    if plan_context:
+        prompt = f"{plan_context}\n\n{prompt}"
     conversation.append({"role": "user", "content": request.message})
     conversation_id = store.save(request.conversation_id, conversation, [])
     memory_user_id = request.user_id or conversation_id
@@ -318,37 +349,7 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                 "required": ["question", "options"],
             },
         },
-    }, {
-        "type": "function",
-        "function": {
-            "name": "display_trip_plan",
-            "description": "Display a structured trip itinerary after enough planning details are known.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "destination": {"type": "string"},
-                    "days": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "day": {"type": "integer", "minimum": 1},
-                                "title": {"type": "string"},
-                                "activities": {"type": "array", "items": {"type": "string"}},
-                                "notes": {"type": "array", "items": {"type": "string"}},
-                            },
-                            "required": ["day", "title", "activities"],
-                        },
-                        "minItems": 1,
-                        "maxItems": 14,
-                    },
-                    "budget": {"type": "number"},
-                    "notes": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["destination", "days"],
-            },
-        },
-    }]
+    }, TRIP_PLAN_TOOL, *AGENT_TOOL_SCHEMAS]
 
     def execute_history_tool(name: str, arguments: dict[str, Any]) -> Any:
         if name == "search_travel_history":
@@ -360,30 +361,9 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                 raise ValueError("ask_user_question requires a question and at least two options.")
             return {"question": question, "options": options[:6], "status": "awaiting_user"}
         if name == "display_trip_plan":
-            destination = str(arguments.get("destination", "")).strip()
-            days = arguments.get("days", [])
-            if not destination or not isinstance(days, list) or not 1 <= len(days) <= 14:
-                raise ValueError("display_trip_plan requires a destination and one to fourteen days.")
-            normalized_days = []
-            for item in days:
-                if not isinstance(item, dict):
-                    raise ValueError("Each trip day must be an object.")
-                activities = [str(value).strip() for value in item.get("activities", [])]
-                if not item.get("title") or not activities:
-                    raise ValueError("Each trip day requires a title and activities.")
-                normalized_days.append({
-                    "day": int(item.get("day", len(normalized_days) + 1)),
-                    "title": str(item["title"]).strip(),
-                    "activities": activities,
-                    "notes": [str(value).strip() for value in item.get("notes", [])],
-                })
-            return {
-                "destination": destination,
-                "days": normalized_days,
-                "budget": arguments.get("budget"),
-                "notes": [str(value).strip() for value in arguments.get("notes", [])],
-                "status": "displayed",
-            }
+            return normalize_trip_plan(arguments)
+        if name in AGENT_TOOL_NAMES:
+            return execute_agent_tool(name, arguments)
         raise ValueError(f"Unknown tool requested: {name}")
 
     def events():
@@ -422,6 +402,8 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
         trace_finished = False
         stream_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         pending_question: dict[str, Any] | None = None
+        cancel_event = register_cancel(request.request_id)
+        cancelled = False
 
         def save_pause(messages: list[dict[str, Any]], result: dict[str, Any]) -> None:
             stream_queue.put(("pause", (messages, result)))
@@ -437,6 +419,7 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                     on_pause=save_pause,
                     session_id=conversation_id,
                     trace_context=trace_context_for(trace),
+                    cancel_event=cancel_event,
                 ):
                     stream_queue.put(("delta", delta))
                 stream_queue.put(("done", None))
@@ -446,7 +429,13 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
         threading.Thread(target=run_model, daemon=True).start()
         try:
             while True:
-                kind, payload = stream_queue.get()
+                if cancel_event.is_set():
+                    cancelled = True
+                    break
+                try:
+                    kind, payload = stream_queue.get(timeout=0.25)
+                except queue.Empty:
+                    continue
                 if kind == "event":
                     yield emit(ChatEvent(**payload))
                     continue
@@ -464,6 +453,7 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                     )
                     continue
                 if kind == "done":
+                    cancelled = cancel_event.is_set()
                     break
                 delta = payload
                 if delta["kind"] == "reasoning":
@@ -471,6 +461,33 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                 else:
                     text_parts.append(delta["text"])
                 yield f"data: {json.dumps({'kind': delta['kind'], 'text': delta['text']})}\n\n"
+            if cancelled:
+                yield emit(
+                    ChatEvent(
+                        type="agent",
+                        label="Stopped by user",
+                        detail="The response was stopped before it completed.",
+                        status="completed",
+                    )
+                )
+                stopped_message = {
+                    "role": "assistant",
+                    "content": "".join(text_parts) or "[Stopped] The response was stopped.",
+                    "reasoning": "".join(reasoning_parts),
+                }
+                store.save(
+                    conversation_id,
+                    conversation
+                    if pending_question is not None
+                    else conversation + [stopped_message],
+                    [event.model_dump() for event in activity],
+                )
+                end_trace(trace, output="".join(text_parts) or {"status": "stopped"})
+                trace_finished = True
+                yield (
+                    f"data: {json.dumps({'kind': 'done', 'stopped': True, 'text': ''.join(text_parts), 'reasoning': ''.join(reasoning_parts), 'model': client.model, 'stub': not client.configured, 'conversation_id': conversation_id, 'pending_question': pending_question, 'events': [event.model_dump() for event in activity]})}\n\n"
+                )
+                return
             yield emit(
                 ChatEvent(
                     type="agent",
@@ -541,6 +558,7 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
             )
             yield f"data: {json.dumps({'kind': 'error', 'message': 'The model request failed. The user message was saved and can be retried.', 'conversation_id': conversation_id, 'events': [failure.model_dump(), agent_failure.model_dump()]})}\n\n"
         finally:
+            clear_cancel(request.request_id, cancel_event)
             if not trace_finished:
                 end_trace(
                     trace,
@@ -588,23 +606,7 @@ def answer_chat_question(request: ChatRequest) -> ChatResponse:
                 "required": ["question", "options"],
             },
         },
-    }, {
-        "type": "function",
-        "function": {
-            "name": "display_trip_plan",
-            "description": "Display a structured trip itinerary after enough planning details are known.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "destination": {"type": "string"},
-                    "days": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 14},
-                    "budget": {"type": "number"},
-                    "notes": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["destination", "days"],
-            },
-        },
-    }]
+    }, TRIP_PLAN_TOOL, *AGENT_TOOL_SCHEMAS]
 
     def execute_tool(name: str, arguments: dict[str, Any]) -> Any:
         if name == "search_travel_history":
@@ -616,30 +618,9 @@ def answer_chat_question(request: ChatRequest) -> ChatResponse:
                 raise ValueError("ask_user_question requires a question and at least two options.")
             return {"question": question, "options": options[:6], "status": "awaiting_user"}
         if name == "display_trip_plan":
-            destination = str(arguments.get("destination", "")).strip()
-            days = arguments.get("days", [])
-            if not destination or not isinstance(days, list) or not 1 <= len(days) <= 14:
-                raise ValueError("display_trip_plan requires a destination and one to fourteen days.")
-            normalized_days = []
-            for item in days:
-                if not isinstance(item, dict):
-                    raise ValueError("Each trip day must be an object.")
-                activities = [str(value).strip() for value in item.get("activities", [])]
-                if not item.get("title") or not activities:
-                    raise ValueError("Each trip day requires a title and activities.")
-                normalized_days.append({
-                    "day": int(item.get("day", len(normalized_days) + 1)),
-                    "title": str(item["title"]).strip(),
-                    "activities": activities,
-                    "notes": [str(value).strip() for value in item.get("notes", [])],
-                })
-            return {
-                "destination": destination,
-                "days": normalized_days,
-                "budget": arguments.get("budget"),
-                "notes": [str(value).strip() for value in arguments.get("notes", [])],
-                "status": "displayed",
-            }
+            return normalize_trip_plan(arguments)
+        if name in AGENT_TOOL_NAMES:
+            return execute_agent_tool(name, arguments)
         raise ValueError(f"Unknown tool requested: {name}")
 
     messages = list(pending["messages"])
@@ -773,6 +754,45 @@ def answer_chat_question(request: ChatRequest) -> ChatResponse:
         conversation_id=conversation_id,
         events=events,
     )
+
+
+@app.put("/api/conversations/{conversation_id}/trip-plan")
+def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
+    """Persist user-edited budget fields onto the conversation's latest plan."""
+    currency = None if request.currency is None else request.currency.strip()[:12]
+    budget_items: list[dict[str, Any]] = []
+    for item in request.budget_items[:12]:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=422, detail="Each budget item must be an object.")
+        category = str(item.get("category", "")).strip()
+        amount = item.get("amount")
+        if (
+            not category
+            or isinstance(amount, bool)
+            or not isinstance(amount, (int, float))
+            or amount < 0
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Each budget item needs a category and a non-negative amount.",
+            )
+        budget_items.append(
+            {"category": category, "amount": float(amount), "currency": currency or ""}
+        )
+    updated = ConversationStore(get_settings().database_url).update_latest_trip_plan(
+        conversation_id,
+        {"budget": request.budget, "currency": currency, "budget_items": budget_items},
+    )
+    if not updated:
+        raise HTTPException(
+            status_code=404, detail="No trip plan found for this conversation."
+        )
+    return {
+        "updated": True,
+        "budget": request.budget,
+        "currency": currency,
+        "budget_items": budget_items,
+    }
 
 
 @app.get("/api/conversations", response_model=list[ConversationSummary])

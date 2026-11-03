@@ -203,6 +203,42 @@ class ConversationStore:
                 (conversation_id,),
             )
 
+    def update_latest_trip_plan(
+        self, conversation_id: str, updates: dict[str, Any]
+    ) -> bool:
+        """Overwrite the budget fields on the latest display_trip_plan event.
+
+        Used when the user edits the trip budget so the change survives reloads
+        and is available to the next model turn.
+        """
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT events FROM conversations WHERE id = ?",
+                (conversation_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            events = json.loads(row[0])
+            for event in reversed(events):
+                data = event.get("data", {})
+                result = data.get("result")
+                if data.get("tool") == "display_trip_plan" and isinstance(result, dict):
+                    result["budget"] = updates.get("budget")
+                    if updates.get("currency") is not None:
+                        result["currency"] = updates["currency"]
+                    result["budget_items"] = updates.get("budget_items", [])
+                    event["data"] = data
+                    connection.execute(
+                        "UPDATE conversations SET events = ?, updated_at = ? WHERE id = ?",
+                        (
+                            json.dumps(events),
+                            datetime.now(timezone.utc).isoformat(),
+                            conversation_id,
+                        ),
+                    )
+                    return True
+            return False
+
     def mark_question_answered(
         self, conversation_id: str, selected: str, question: str | None = None
     ) -> bool:

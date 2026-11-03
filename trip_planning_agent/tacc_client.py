@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Callable, Iterator
 from typing import Any, Optional
 
@@ -138,8 +139,13 @@ class TACCClient:
         on_pause: Callable[[list[dict[str, Any]], dict[str, Any]], None] | None = None,
         session_id: str | None = None,
         trace_context: dict[str, str] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> Iterator[dict[str, str]]:
-        """Yield reasoning and answer deltas from the OpenAI-compatible SSE endpoint."""
+        """Yield reasoning and answer deltas from the OpenAI-compatible SSE endpoint.
+
+        When ``cancel_event`` is set the generator stops at the next delta and
+        returns, closing the upstream request.
+        """
         if not self.configured:
             if on_event:
                 on_event({"type": "model", "label": "Using local model stub", "status": "completed"})
@@ -165,8 +171,11 @@ class TACCClient:
             )
             on_event({"type": "model", "label": "Model is thinking", "detail": self.model, "status": "running"})
 
+        cancelled = False
         with httpx.Client(timeout=300.0) as client:
             while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    return
                 payload = {
                     "model": self.model,
                     "messages": messages,
@@ -201,6 +210,9 @@ class TACCClient:
                         ) as response:
                             response.raise_for_status()
                             for line in response.iter_lines():
+                                if cancel_event is not None and cancel_event.is_set():
+                                    cancelled = True
+                                    break
                                 if not line.startswith("data:"):
                                     continue
                                 data = line[5:].strip()
@@ -248,8 +260,13 @@ class TACCClient:
                                     current["name"] += function.get("name") or ""
                                     current["arguments"] += function.get("arguments") or ""
                         output_text = "".join(streamed_text)
-                        if output_text:
-                            generation_output: Any = output_text
+                        if cancelled:
+                            generation_output: Any = {
+                                "status": "stopped",
+                                "partial": output_text,
+                            }
+                        elif output_text:
+                            generation_output = output_text
                         elif tool_calls:
                             generation_output = {
                                 "tool_calls": self._tool_call_summary(tool_calls)
@@ -264,6 +281,8 @@ class TACCClient:
                             error=error,
                         )
                         raise
+                if cancelled:
+                    return
                 if not tool_calls:
                     break
                 if not tool_executor:
