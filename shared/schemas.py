@@ -65,6 +65,7 @@ class ChatRequest(BaseModel):
     user_id: str = Field(default="local-user", min_length=1, max_length=200)
     request_id: Optional[str] = Field(default=None, max_length=100)
     plan_context: Optional[dict[str, Any]] = None
+    custom: Optional[bool] = None
 
 
 class ChatStopRequest(BaseModel):
@@ -76,9 +77,13 @@ class ChatStopRequest(BaseModel):
 class TripPlanUpdate(BaseModel):
     """User-edited budget fields persisted onto the latest trip-plan event."""
 
+    mode: Optional[str] = Field(default=None, max_length=20)
     budget: Optional[float] = Field(default=None, ge=0)
     currency: Optional[str] = Field(default=None, max_length=12)
     budget_items: list[dict[str, Any]] = Field(default_factory=list)
+    day_budgets: list[dict[str, Any]] = Field(default_factory=list)
+    day_items: list[dict[str, Any]] = Field(default_factory=list)
+    days: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ChatEvent(BaseModel):

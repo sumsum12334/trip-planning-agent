@@ -1,4 +1,4 @@
-"""Tests for persisting user-edited trip-plan budgets."""
+"""Tests for persisting the assembled trip plan."""
 
 from __future__ import annotations
 
@@ -9,47 +9,30 @@ def _store(tmp_path) -> ConversationStore:
     return ConversationStore(f"sqlite:///{(tmp_path / 'conv.sqlite').as_posix()}")
 
 
-def _plan_event(store, conversation_id):
-    conversation = store.get(conversation_id)
-    events = [event for event in conversation["events"] if event["data"].get("tool") == "display_trip_plan"]
-    return events[-1]["data"]["result"]
-
-
-def test_update_latest_trip_plan_overwrites_budget(tmp_path):
-    store = _store(tmp_path)
-    plan = {
-        "destination": "Rome",
-        "budget": 420,
-        "currency": "EUR",
-        "budget_items": [{"category": "Food", "amount": 120, "currency": "EUR"}],
-        "days": [{"day": 1, "title": "Arrival", "activities": ["Check in"]}],
-    }
-    events = [{
-        "type": "tool",
-        "label": "display_trip_plan result received",
-        "status": "completed",
-        "data": {"tool": "display_trip_plan", "result": plan},
-    }]
-    conversation_id = store.save(None, [{"role": "user", "content": "hi"}], events)
-
-    updated = store.update_latest_trip_plan(
-        conversation_id,
-        {
-            "budget": 300,
-            "currency": "USD",
-            "budget_items": [{"category": "Stay", "amount": 200, "currency": "USD"}],
-        },
-    )
-    assert updated is True
-    result = _plan_event(store, conversation_id)
-    assert result["budget"] == 300
-    assert result["currency"] == "USD"
-    assert result["budget_items"][0]["category"] == "Stay"
-
-
-def test_update_without_plan_returns_false(tmp_path):
+def test_save_and_get_trip_plan(tmp_path):
     store = _store(tmp_path)
     conversation_id = store.save(None, [{"role": "user", "content": "hi"}], [])
-    assert store.update_latest_trip_plan(
-        conversation_id, {"budget": 1, "currency": "", "budget_items": []}
-    ) is False
+    plan = {"destination": "Rome", "days": [{"day": 1, "title": "t", "activities": ["a"]}], "budget": 100}
+    store.save_trip_plan(conversation_id, plan)
+    assert store.get_trip_plan(conversation_id)["destination"] == "Rome"
+
+
+def test_set_latest_trip_plan_event_updates_result(tmp_path):
+    store = _store(tmp_path)
+    event = {
+        "type": "tool",
+        "label": "Trip plan updated",
+        "status": "completed",
+        "data": {"tool": "display_trip_plan", "result": {"destination": "Old"}},
+    }
+    conversation_id = store.save(None, [{"role": "user", "content": "hi"}], [event])
+    assert store.set_latest_trip_plan_event(conversation_id, {"destination": "New"}) is True
+    events = store.get(conversation_id)["events"]
+    result = [item for item in events if item["data"].get("tool") == "display_trip_plan"][-1]["data"]["result"]
+    assert result["destination"] == "New"
+
+
+def test_get_trip_plan_missing_returns_none(tmp_path):
+    store = _store(tmp_path)
+    conversation_id = store.save(None, [{"role": "user", "content": "hi"}], [])
+    assert store.get_trip_plan(conversation_id) is None

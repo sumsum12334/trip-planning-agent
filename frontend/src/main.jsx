@@ -3,10 +3,14 @@ import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Alert,
   Avatar,
   Box,
   Button,
+  Chip,
   CssBaseline,
   Divider,
   IconButton,
@@ -23,8 +27,11 @@ import {
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import ChatBubbleOutlinedIcon from "@mui/icons-material/ChatBubbleOutlined";
+import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import DarkModeOutlinedIcon from "@mui/icons-material/DarkModeOutlined";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import HistoryEduIcon from "@mui/icons-material/HistoryEdu";
 import LightModeOutlinedIcon from "@mui/icons-material/LightModeOutlined";
 import PlaceIcon from "@mui/icons-material/Place";
@@ -140,14 +147,6 @@ const eventIcon = (event) => {
 };
 
 const planBudgetItems = (plan) => (Array.isArray(plan?.budget_items) ? plan.budget_items : []);
-const planTotal = (plan) => {
-  const items = planBudgetItems(plan);
-  if (items.length) {
-    return Math.round(items.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) * 100) / 100;
-  }
-  return plan?.budget ?? null;
-};
-
 const planFromEvents = (events, predicate = () => true) =>
   [...(events || [])].reverse().find(
     (event) => event.data?.tool === "display_trip_plan" && event.data?.result && predicate(event.data.result),
@@ -156,24 +155,32 @@ const planFromEvents = (events, predicate = () => true) =>
 function routePoints(plan) {
   if (!plan) return [];
   const points = [];
-  if (plan.destination_coordinates) {
-    points.push({ ...plan.destination_coordinates, label: plan.destination, sub: "Destination" });
+  if (plan.airport?.coordinates) {
+    points.push({ ...plan.airport.coordinates, label: plan.airport.name, sub: "Arrival airport", kind: "airport" });
+  } else if (plan.destination_coordinates) {
+    points.push({ ...plan.destination_coordinates, label: plan.destination, sub: "Destination", kind: "destination" });
   }
   (plan.days || []).forEach((day) => {
     const placePoints = (day.places || []).filter((place) => place.coordinates);
     if (placePoints.length) {
-      placePoints.forEach((place) => points.push({ ...place.coordinates, label: place.name, sub: `Day ${day.day}` }));
+      placePoints.forEach((place) => points.push({ ...place.coordinates, label: place.name, sub: `Day ${day.day}`, kind: "place", day: day.day }));
     } else if (day.coordinates) {
-      points.push({ ...day.coordinates, label: `Day ${day.day}: ${day.title}`, sub: "Day stop (approximate)" });
+      points.push({ ...day.coordinates, label: `Day ${day.day}: ${day.title}`, sub: "Day stop (approximate)", kind: "day", day: day.day });
     }
   });
   return points.filter((point) => typeof point.lat === "number" && typeof point.lng === "number");
 }
 
-function numberedIcon(number) {
+function markerNumbersForDay(points, dayNumber) {
+  return points
+    .map((point, index) => (point.day === dayNumber ? index + 1 : null))
+    .filter((number) => number != null);
+}
+
+function numberedIcon(number, kind) {
   return L.divIcon({
-    className: "trip-map-marker",
-    html: `<span>${number}</span>`,
+    className: kind === "airport" ? "trip-map-marker airport" : "trip-map-marker",
+    html: `<span>${kind === "airport" ? "✈" : number}</span>`,
     iconSize: [28, 28],
     iconAnchor: [14, 14],
     popupAnchor: [0, -14],
@@ -184,8 +191,14 @@ function buildPlanMarkdown(plan) {
   const currency = plan.currency || "";
   const items = planBudgetItems(plan);
   const lines = [`# ${plan.destination} — Trip plan`, ""];
-  const total = planTotal(plan);
-  if (total != null) lines.push(`**Estimated budget:** ${formatBudget(total, currency)}`, "");
+  const estimate = plan.budget ?? null;
+  if (estimate != null) lines.push(`**Estimated budget:** ${formatBudget(estimate, currency)}`, "");
+  const dayBudgets = (plan.days || []).filter((day) => day.budget != null);
+  if (dayBudgets.length) {
+    lines.push("**Per-day estimate:**", "");
+    dayBudgets.forEach((day) => lines.push(`- Day ${day.day}: ${formatBudget(day.budget, currency)}`));
+    lines.push("");
+  }
   if (items.length) {
     lines.push("**Budget breakdown:**", "");
     items.forEach((item) => lines.push(`- ${item.category}: ${formatBudget(item.amount, item.currency || currency)}`));
@@ -211,51 +224,115 @@ function buildPlanMarkdown(plan) {
 function buildPlanHtml(plan) {
   const currency = plan.currency || "";
   const items = planBudgetItems(plan);
-  const total = planTotal(plan);
-  const budget = total == null ? "Not specified" : formatBudget(total, currency);
-  const breakdown = items.length
-    ? `<ul>${items.map((item) => `<li>${escapeHtml(item.category)} — ${escapeHtml(formatBudget(item.amount, item.currency || currency))}</li>`).join("")}</ul>`
+  const estimate = plan.budget ?? null;
+  const days = plan.days || [];
+  const points = routePoints(plan);
+  const itemsTotal = items.length
+    ? Math.round(items.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) * 100) / 100
+    : null;
+  const markerForPlace = (dayNumber, name) => {
+    const index = points.findIndex((point) => point.kind === "place" && point.day === dayNumber && point.label === name);
+    return index >= 0 ? index + 1 : null;
+  };
+  const generated = new Date().toLocaleDateString();
+  const budgetText = estimate == null ? "Not specified" : formatBudget(estimate, currency);
+
+  const daySections = days.map((day) => {
+    const dayItems = Array.isArray(day.budget_items) ? day.budget_items : [];
+    const dayItemsTotal = dayItems.length
+      ? Math.round(dayItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) * 100) / 100
+      : null;
+    const dayTotal = day.budget ?? dayItemsTotal;
+    return `<section class="day">
+      <header class="day-head">
+        <span class="day-num">Day ${escapeHtml(day.day)}</span>
+        <h3>${escapeHtml(day.title)}</h3>
+        ${dayTotal != null ? `<span class="day-total">${escapeHtml(formatBudget(dayTotal, currency))}</span>` : ""}
+      </header>
+      <ul class="activities">${(day.activities || []).map((activity) => `<li>${escapeHtml(activity)}</li>`).join("")}</ul>
+      ${(day.places || []).length ? `<p class="route"><span class="label">Route</span> ${day.places.map((place) => {
+        const marker = markerForPlace(day.day, place.name);
+        return `${marker ? `<span class="mk">${marker}</span>` : ""}${escapeHtml(place.name)}`;
+      }).join(' <span class="arrow">→</span> ')}</p>` : ""}
+      ${dayItems.length ? `<table class="mini"><tbody>${dayItems.map((item) => `<tr><td>${escapeHtml(item.category)}</td><td class="amt">${escapeHtml(formatBudget(item.amount, item.currency || currency))}</td></tr>`).join("")}</tbody></table>` : ""}
+      ${(day.notes || []).length ? `<p class="notes">${day.notes.map(escapeHtml).join(" · ")}</p>` : ""}
+    </section>`;
+  }).join("");
+
+  const routeRows = [
+    plan.airport?.name ? `<li><span class="mk airport">✈</span><div><strong>${escapeHtml(plan.airport.name)}</strong><br/><span class="muted">Arrival airport</span></div></li>` : "",
+    ...days.map((day) => {
+      const markers = points.map((point, index) => (point.day === day.day ? index + 1 : null)).filter((value) => value != null);
+      return `<li><span class="mk">${escapeHtml(day.day)}</span><div><strong>Day ${escapeHtml(day.day)} · ${escapeHtml(day.title)}</strong><br/><span class="muted">${(day.activities || []).length} activities${markers.length ? ` · map markers ${markers.join(", ")}` : ""}</span></div></li>`;
+    }),
+  ].join("");
+
+  const categoryHtml = items.length
+    ? `<section class="card"><h2>Category budget</h2><table class="budget"><tbody>${items.map((item) => `<tr><td>${escapeHtml(item.category)}</td><td class="amt">${escapeHtml(formatBudget(item.amount, item.currency || currency))}</td></tr>`).join("")}<tr class="total"><td>Items total</td><td class="amt">${escapeHtml(formatBudget(itemsTotal, currency))}</td></tr></tbody></table></section>`
     : "";
-  const days = (plan.days || []).map((day) => `
-      <section class="day">
-        <h2>Day ${escapeHtml(day.day)} · ${escapeHtml(day.title)}</h2>
-        <ul>${(day.activities || []).map((activity) => `<li>${escapeHtml(activity)}</li>`).join("")}</ul>
-        ${(day.notes || []).length ? `<p class="muted"><strong>Notes:</strong> ${day.notes.map(escapeHtml).join(" · ")}</p>` : ""}
-        ${(day.places || []).length ? `<p class="muted"><strong>Places:</strong> ${day.places.map((place) => escapeHtml(place.name)).join(", ")}</p>` : ""}
-      </section>`).join("");
-  const route = routePoints(plan);
-  const routeHtml = route.length
-    ? `<p class="muted"><strong>Route:</strong> ${route.map((point) => escapeHtml(point.label)).join(" → ")}</p>`
+  const notesHtml = (plan.notes || []).length
+    ? `<section class="card"><h2>Notes</h2><ul>${plan.notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}</ul></section>`
     : "";
-  const notes = (plan.notes || []).length
-    ? `<section><h2>Notes</h2><ul>${plan.notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}</ul></section>`
+  const referencesHtml = (plan.references || []).length
+    ? `<section class="card"><h2>References</h2><ul class="refs">${plan.references.map((ref) => `<li><a href="${escapeHtml(ref.url)}">${escapeHtml(ref.title)}</a></li>`).join("")}</ul></section>`
     : "";
-  const references = (plan.references || []).length
-    ? `<section><h2>References</h2><ul>${plan.references.map((ref) => `<li><a href="${escapeHtml(ref.url)}">${escapeHtml(ref.title)}</a></li>`).join("")}</ul></section>`
-    : "";
+
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
     <title>${escapeHtml(plan.destination)} trip plan</title>
     <style>
       *{box-sizing:border-box}
-      body{font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#1f2a44;margin:0;padding:32px 40px}
-      h1{font-size:26px;margin:0 0 4px}
-      h2{font-size:16px;margin:22px 0 8px;color:#334568}
-      .meta{color:#5b6784;margin:0 0 8px}
-      .budget{font-weight:700;color:#3b5ecb}
-      .muted{color:#5b6784;font-size:13px;margin:8px 0 0}
-      ul{margin:6px 0 0;padding-left:20px}
-      li{margin:3px 0}
-      .day{break-inside:avoid;border-top:1px solid #e3e8f2;padding-top:10px;margin-top:14px}
-      a{color:#3b5ecb}
-      footer{margin-top:26px;color:#8a94aa;font-size:11px;border-top:1px solid #e3e8f2;padding-top:10px}
+      :root{--brand:#6c63ff;--ink:#1f2a44;--muted:#6b7793;--line:#e6eaf3}
+      body{font:13px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);margin:0;padding:28px 36px}
+      a{color:#3b5ecb;text-decoration:none}
+      .hero{background:linear-gradient(135deg,#eef2ff,#f7f9ff);border:1px solid var(--line);border-radius:16px;padding:20px 24px;margin-bottom:18px}
+      .hero h1{margin:0;font-size:27px;letter-spacing:-.02em}
+      .hero .sub{color:var(--muted);margin:4px 0 14px}
+      .stats{display:flex;gap:12px;flex-wrap:wrap}
+      .stat{flex:1 1 150px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+      .stat .k{color:var(--muted);font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase}
+      .stat .v{font-size:15px;font-weight:700;margin-top:3px}
+      .card{border:1px solid var(--line);border-radius:14px;padding:14px 18px;margin:16px 0;break-inside:avoid}
+      .card h2{font-size:13px;margin:0 0 10px;color:#334568;text-transform:uppercase;letter-spacing:1px}
+      .timeline{list-style:none;margin:0;padding:0}
+      .timeline li{display:flex;gap:10px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--line)}
+      .timeline li:first-child{border-top:0}
+      .mk{display:inline-grid;place-items:center;min-width:22px;height:22px;padding:0 6px;border-radius:999px;background:var(--brand);color:#fff;font-size:11px;font-weight:700}
+      .mk.airport{background:#2f9e6f;min-width:26px}
+      .muted{color:var(--muted)}
+      .day{break-inside:avoid;border:1px solid var(--line);border-radius:14px;padding:14px 18px;margin:12px 0}
+      .day-head{display:flex;align-items:baseline;gap:10px}
+      .day-num{background:#eef2ff;color:#3b5ecb;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800;letter-spacing:.5px}
+      .day-head h3{margin:0;font-size:16px;flex:1}
+      .day-total{color:#3b5ecb;font-weight:700;font-size:13px}
+      .activities{margin:10px 0 0;padding-left:18px}
+      .activities li{margin:3px 0}
+      .route{color:var(--muted);margin:10px 0 0}
+      .route .label{font-weight:800;color:#334568;margin-right:4px}
+      .arrow{color:#a9b3cc;padding:0 2px}
+      table{width:100%;border-collapse:collapse;margin-top:8px}
+      table td{padding:5px 6px;border-bottom:1px solid var(--line);text-align:left}
+      table .amt{text-align:right;font-variant-numeric:tabular-nums;color:#334568}
+      table .total td{font-weight:800;color:#3b5ecb;border-bottom:0;border-top:2px solid #dbe3f7}
+      .mini{max-width:320px}
+      .notes{color:var(--muted);margin:10px 0 0;font-size:12px}
+      .refs{margin:0;padding-left:18px}
+      footer{margin-top:24px;color:#8a94aa;font-size:11px;border-top:1px solid var(--line);padding-top:10px}
+      @media print{ body{padding:10mm} .hero,.card,.day{break-inside:avoid} }
     </style></head><body>
-    <h1>${escapeHtml(plan.destination)} — Trip plan</h1>
-    <p class="meta">Estimated budget: <span class="budget">${escapeHtml(budget)}</span></p>
-    ${breakdown}
-    ${routeHtml}
-    ${days}
-    ${notes}
-    ${references}
+    <section class="hero">
+      <h1>${escapeHtml(plan.destination)}</h1>
+      <p class="sub">Trip plan · generated ${escapeHtml(generated)}</p>
+      <div class="stats">
+        <div class="stat"><div class="k">Estimated budget</div><div class="v">${escapeHtml(budgetText)}</div></div>
+        <div class="stat"><div class="k">Days</div><div class="v">${escapeHtml(days.length)}</div></div>
+        ${plan.airport?.name ? `<div class="stat"><div class="k">Arrival airport</div><div class="v">${escapeHtml(plan.airport.name)}</div></div>` : ""}
+      </div>
+    </section>
+    ${days.length ? `<section class="card"><h2>Route by day</h2><ul class="timeline">${routeRows}</ul></section>` : ""}
+    ${daySections}
+    ${categoryHtml}
+    ${notesHtml}
+    ${referencesHtml}
     <footer>Generated by Tripwise. Coordinates, prices, and availability are approximate and should be confirmed before booking.</footer>
   </body></html>`;
 }
@@ -311,7 +388,7 @@ function TripMap({ plan }) {
     }).addTo(map);
     const latlngs = points.map((point) => [point.lat, point.lng]);
     points.forEach((point, index) => {
-      L.marker([point.lat, point.lng], { icon: numberedIcon(index + 1) })
+      L.marker([point.lat, point.lng], { icon: numberedIcon(index + 1, point.kind) })
         .addTo(map)
         .bindPopup(`<strong>${escapeHtml(point.label)}</strong>${point.sub ? `<br/>${escapeHtml(point.sub)}` : ""}`);
     });
@@ -343,22 +420,20 @@ function TripMap({ plan }) {
   </div>;
 }
 
-function BudgetEditor({ plan, currency, onCancel, onSave }) {
-  const items = planBudgetItems(plan);
-  const total = planTotal(plan);
-  const [rows, setRows] = useState(items.length
-    ? items.map((item) => ({ category: item.category, amount: String(item.amount) }))
-    : []);
-  const [totalOnly, setTotalOnly] = useState(total != null ? String(total) : "");
-  const [breakdown, setBreakdown] = useState(items.length > 0);
-  const [error, setError] = useState("");
+function splitLines(value) {
+  return String(value || "").split("\n").map((line) => line.trim()).filter(Boolean);
+}
 
-  const computedTotal = breakdown
-    ? Math.round(rows.reduce((sum, row) => {
-        const amount = Number(row.amount);
-        return sum + (Number.isFinite(amount) && amount >= 0 ? amount : 0);
-      }, 0) * 100) / 100
-    : null;
+function CategoryBudgetEditor({ plan, currency, onCancel, onSave }) {
+  const items = planBudgetItems(plan);
+  const estimate = plan.budget ?? null;
+  const [estimateInput, setEstimateInput] = useState(estimate != null ? String(estimate) : "");
+  const [rows, setRows] = useState(items.map((item) => ({ category: item.category, amount: String(item.amount) })));
+  const [error, setError] = useState("");
+  const itemsTotal = Math.round(rows.reduce((sum, row) => {
+    const amount = Number(row.amount);
+    return sum + (Number.isFinite(amount) && amount >= 0 ? amount : 0);
+  }, 0) * 100) / 100;
 
   function updateRow(index, field, value) {
     setRows((previous) => previous.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
@@ -367,50 +442,115 @@ function BudgetEditor({ plan, currency, onCancel, onSave }) {
   function removeRow(index) { setRows((previous) => previous.filter((_, i) => i !== index)); }
 
   function save() {
-    if (breakdown) {
-      const cleaned = rows
-        .map((row) => ({ category: row.category.trim(), amount: Number(row.amount) }))
-        .filter((row) => row.category && Number.isFinite(row.amount) && row.amount >= 0);
-      if (!cleaned.length) { setError("Add at least one item with a category and a non-negative amount."); return; }
-      onSave({
-        budget: Math.round(cleaned.reduce((sum, row) => sum + row.amount, 0) * 100) / 100,
-        currency,
-        budget_items: cleaned.map((row) => ({ category: row.category, amount: row.amount, currency })),
-      });
+    const estimateValue = estimateInput.trim() === "" ? null : Number(estimateInput);
+    if (estimateValue != null && (!Number.isFinite(estimateValue) || estimateValue < 0)) {
+      setError("Enter a non-negative estimated total.");
       return;
     }
-    const value = totalOnly.trim() === "" ? null : Number(totalOnly);
-    if (value != null && (!Number.isFinite(value) || value < 0)) { setError("Enter a non-negative total."); return; }
-    onSave({ budget: value, currency, budget_items: [] });
+    const cleanedItems = rows
+      .map((row) => ({ category: row.category.trim(), amount: Number(row.amount) }))
+      .filter((row) => row.category && Number.isFinite(row.amount) && row.amount >= 0);
+    onSave({
+      mode: "category",
+      budget: estimateValue,
+      currency,
+      budget_items: cleanedItems.map((row) => ({ category: row.category, amount: row.amount, currency })),
+    });
   }
 
   return <div className="budget-editor">
-    {breakdown ? <>
-      <ul className="budget-editor-rows">
-        {rows.map((row, index) => <li key={index}>
-          <input className="budget-category" placeholder="Category" value={row.category} onChange={(event) => updateRow(index, "category", event.target.value)} />
-          <input className="budget-amount" type="number" min="0" step="any" placeholder="0" value={row.amount} onChange={(event) => updateRow(index, "amount", event.target.value)} />
-          <button type="button" className="icon-button danger" title="Remove item" onClick={() => removeRow(index)}>×</button>
-        </li>)}
-      </ul>
-      <div className="budget-editor-actions">
-        <button type="button" className="plan-tool" onClick={addRow}>＋ Item</button>
-        <button type="button" className="plan-tool" onClick={() => setBreakdown(false)}>Use single total</button>
-        <span className="budget-editor-total">Total: {formatBudget(computedTotal, currency)}</span>
-      </div>
-    </> : <>
-      <div className="budget-row">
-        <label>Total budget
-          <input className="budget-amount" type="number" min="0" step="any" value={totalOnly} onChange={(event) => setTotalOnly(event.target.value)} />
-        </label>
-      </div>
-      <div className="budget-editor-actions">
-        <button type="button" className="plan-tool" onClick={() => { setBreakdown(true); setRows((previous) => previous.length ? previous : [{ category: "", amount: totalOnly }]); }}>Break down into items</button>
-      </div>
-    </>}
+    <div className="budget-editor-label">Editing: category items</div>
+    <div className="budget-row">
+      <label>Estimated total
+        <input className="budget-amount" type="number" min="0" step="any" value={estimateInput} onChange={(event) => setEstimateInput(event.target.value)} />
+      </label>
+    </div>
+    <ul className="budget-editor-rows">
+      {rows.map((row, index) => <li key={index}>
+        <input className="budget-category" placeholder="Category" value={row.category} onChange={(event) => updateRow(index, "category", event.target.value)} />
+        <input className="budget-amount" type="number" min="0" step="any" placeholder="0" value={row.amount} onChange={(event) => updateRow(index, "amount", event.target.value)} />
+        <button type="button" className="icon-button danger" title="Remove item" onClick={() => removeRow(index)}>×</button>
+      </li>)}
+    </ul>
+    <div className="budget-editor-actions">
+      <button type="button" className="plan-tool" onClick={addRow}>＋ Item</button>
+      <span className="budget-editor-total">Items total: {formatBudget(itemsTotal, currency)}</span>
+    </div>
     {error && <small className="budget-notice warn">{error}</small>}
     <div className="budget-editor-actions">
       <button type="button" className="plan-tool primary" onClick={save}>Save</button>
+      <button type="button" className="plan-tool" onClick={onCancel}>Cancel</button>
+    </div>
+  </div>;
+}
+
+function DayEditor({ day, dayBudget, currency, onCancel, onSave }) {
+  const [title, setTitle] = useState(day.title || "");
+  const [activities, setActivities] = useState((day.activities || []).join("\n"));
+  const [notes, setNotes] = useState((day.notes || []).join("\n"));
+  const [places, setPlaces] = useState((day.places || []).map((place) => (place.url ? `${place.name} | ${place.url}` : place.name)).join("\n"));
+  const [amount, setAmount] = useState(dayBudget && dayBudget.amount != null ? String(dayBudget.amount) : "");
+  const [items, setItems] = useState((dayBudget?.items || []).map((item) => ({ category: item.category, amount: String(item.amount) })));
+  const [error, setError] = useState("");
+
+  function updateItem(index, field, value) {
+    setItems((previous) => previous.map((item, i) => (i === index ? { ...item, [field]: value } : item)));
+  }
+  function addItem() { setItems((previous) => [...previous, { category: "", amount: "" }]); }
+  function removeItem(index) { setItems((previous) => previous.filter((_, i) => i !== index)); }
+
+  function save() {
+    const activityList = splitLines(activities);
+    if (!title.trim() || !activityList.length) {
+      setError("A day needs a title and at least one activity.");
+      return;
+    }
+    const amountValue = amount.trim() === "" ? null : Number(amount);
+    if (amountValue != null && (!Number.isFinite(amountValue) || amountValue < 0)) {
+      setError("Enter a non-negative day budget.");
+      return;
+    }
+    const cleanedItems = items
+      .map((item) => ({ category: item.category.trim(), amount: Number(item.amount) }))
+      .filter((item) => item.category && Number.isFinite(item.amount) && item.amount >= 0);
+    const parsedPlaces = splitLines(places)
+      .map((line) => {
+        const [name, url] = line.split("|").map((part) => part.trim());
+        return url ? { name, url } : { name };
+      })
+      .filter((place) => place.name);
+    onSave({
+      day: day.day,
+      title: title.trim(),
+      activities: activityList,
+      notes: splitLines(notes),
+      places: parsedPlaces,
+      coordinates: day.coordinates || null,
+      budget: amountValue,
+      budget_items: cleanedItems.map((item) => ({ ...item, currency })),
+    });
+  }
+
+  return <div className="day-editor">
+    <label className="day-editor-field">Title<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
+    <label className="day-editor-field">Activities (one per line)<textarea rows={4} value={activities} onChange={(event) => setActivities(event.target.value)} /></label>
+    <label className="day-editor-field">Places / route (one per line, optional "Name | url")<textarea rows={2} value={places} onChange={(event) => setPlaces(event.target.value)} /></label>
+    <label className="day-editor-field">Notes (one per line)<textarea rows={2} value={notes} onChange={(event) => setNotes(event.target.value)} /></label>
+    <label className="day-editor-field">Day budget<input className="budget-amount" type="number" min="0" step="any" value={amount} onChange={(event) => setAmount(event.target.value)} /></label>
+    <div className="budget-editor-label">Day budget items</div>
+    <ul className="budget-editor-rows">
+      {items.map((item, index) => <li key={index}>
+        <input className="budget-category" placeholder="Category" value={item.category} onChange={(event) => updateItem(index, "category", event.target.value)} />
+        <input className="budget-amount" type="number" min="0" step="any" placeholder="0" value={item.amount} onChange={(event) => updateItem(index, "amount", event.target.value)} />
+        <button type="button" className="icon-button danger" title="Remove item" onClick={() => removeItem(index)}>×</button>
+      </li>)}
+    </ul>
+    <div className="budget-editor-actions">
+      <button type="button" className="plan-tool" onClick={addItem}>＋ Item</button>
+    </div>
+    {error && <small className="budget-notice warn">{error}</small>}
+    <div className="budget-editor-actions">
+      <button type="button" className="plan-tool primary" onClick={save}>Save day</button>
       <button type="button" className="plan-tool" onClick={onCancel}>Cancel</button>
     </div>
   </div>;
@@ -420,16 +560,47 @@ function TripPlanCard({ plan, onSaveBudget }) {
   const points = useMemo(() => routePoints(plan), [plan]);
   const currency = plan.currency || "";
   const items = planBudgetItems(plan);
-  const total = planTotal(plan);
-  const [editing, setEditing] = useState(false);
+  const estimate = plan.budget ?? null;
+  const itemsTotal = items.length
+    ? Math.round(items.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) * 100) / 100
+    : null;
+  const days = plan.days || [];
+  const derivedDay = estimate != null && days.length ? Math.round((estimate / days.length) * 100) / 100 : null;
+  const dayBudgets = days.map((day) => {
+    const dayItems = Array.isArray(day.budget_items) ? day.budget_items : [];
+    const dayItemsTotal = dayItems.length
+      ? Math.round(dayItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) * 100) / 100
+      : null;
+    return {
+      day: day.day,
+      amount: day.budget ?? dayItemsTotal ?? derivedDay,
+      derived: day.budget == null && dayItemsTotal == null && derivedDay != null,
+      items: dayItems,
+    };
+  });
+  const [editingCategory, setEditingCategory] = useState(false);
+  const [editingDay, setEditingDay] = useState(null);
   const [notice, setNotice] = useState("");
   const [mapOpen, setMapOpen] = useState(points.length > 0);
   const [showReferences, setShowReferences] = useState(true);
+  const [planView, setPlanView] = useState("overview");
+  const [expandedDays, setExpandedDays] = useState({});
+  const allDaysOpen = days.length > 0 && days.every((day) => expandedDays[day.day]);
 
-  function handleSave(payload) {
+  function startCategoryEdit() {
+    setEditingDay(null);
+    setEditingCategory(true);
+    setNotice("");
+  }
+  function saveCategory(payload) {
     onSaveBudget?.(payload);
-    setEditing(false);
-    setNotice("Saved. The assistant will use this budget on your next message.");
+    setEditingCategory(false);
+    setNotice("Saved. The assistant will use this on your next message.");
+  }
+  function saveDay(dayObject) {
+    onSaveBudget?.({ mode: "day", budget: estimate, currency, days: [dayObject] });
+    setEditingDay(null);
+    setNotice("Day saved. The assistant will use this on your next message.");
   }
 
   return <div className="trip-plan-card">
@@ -442,36 +613,106 @@ function TripPlanCard({ plan, onSaveBudget }) {
     </div>
     <div className="trip-plan-toolbar">
       <button type="button" className="plan-tool" aria-pressed={mapOpen} onClick={() => setMapOpen((value) => !value)}>🗺 {mapOpen ? "Hide map" : "Map route"}</button>
+      {days.length > 0 && (
+        <div className="plan-view-toggle" role="tablist" aria-label="Plan view">
+          <button type="button" role="tab" aria-selected={planView === "overview"} className={planView === "overview" ? "active" : ""} onClick={() => setPlanView("overview")}>Overview</button>
+          <button type="button" role="tab" aria-selected={planView === "days"} className={planView === "days" ? "active" : ""} onClick={() => setPlanView("days")}>Day by day</button>
+        </div>
+      )}
+      {planView === "days" && days.length > 0 && (
+        <button type="button" className="plan-tool" onClick={() => setExpandedDays(allDaysOpen ? {} : Object.fromEntries(days.map((day) => [day.day, true])))}>
+          {allDaysOpen ? "Collapse all" : "Expand all"}
+        </button>
+      )}
       <button type="button" className="plan-tool" onClick={() => downloadPlanMarkdown(plan)}>⬇ Markdown</button>
       <button type="button" className="plan-tool" onClick={() => printPlanReport(plan)}>🖨 PDF report</button>
     </div>
     <div className="trip-plan-content">
       {mapOpen && <TripMap plan={plan} />}
-      <div className="trip-days">
-      {plan.days.map((day) => <article className="trip-day" key={`${day.day}-${day.title}`}>
-        <div className="day-number">DAY {day.day}</div><strong>{day.title}</strong>
-        <ul>{day.activities.map((activity) => <li key={activity}>{activity}</li>)}</ul>
-        {day.places?.length > 0 && <div className="trip-places">
-          {day.places.map((place, index) => place.url
-            ? <a key={`${place.name}-${index}`} href={place.url} target="_blank" rel="noopener noreferrer">📍 {place.name}</a>
-            : <span key={`${place.name}-${index}`}>📍 {place.name}</span>)}
-        </div>}
-        {day.notes?.length > 0 && <small>{day.notes.join(" · ")}</small>}
-      </article>)}
-      </div>
+      {planView === "overview" && days.length > 0 ? (
+        <div className="trip-overview">
+          {days.map((day) => {
+            const budget = dayBudgets.find((entry) => entry.day === day.day);
+            const dayMarkers = markerNumbersForDay(points, day.day);
+            return <button type="button" className="trip-overview-row" key={`overview-${day.day}`} onClick={() => { setPlanView("days"); setExpandedDays((previous) => ({ ...previous, [day.day]: true })); }}>
+              <span className="overview-day">Day {day.day}</span>
+              <span className="overview-title">{day.title}</span>
+              <span className="overview-meta">{day.activities.length} activities{dayMarkers.length ? ` · 🗺 ${dayMarkers.join("·")}` : ""}</span>
+              <b className="overview-budget">{budget && budget.amount != null ? formatBudget(budget.amount, currency) : "—"}</b>
+            </button>;
+          })}
+        </div>
+      ) : (
+        <div className="trip-days">
+        {days.map((day) => {
+          const budget = dayBudgets.find((entry) => entry.day === day.day);
+          const dayMarkers = markerNumbersForDay(points, day.day);
+          const markerFor = (name) => {
+            const index = points.findIndex((point) => point.kind === "place" && point.day === day.day && point.label === name);
+            return index >= 0 ? index + 1 : null;
+          };
+          const isEditing = editingDay === day.day;
+          const isOpen = Boolean(expandedDays[day.day]) || isEditing;
+          return <article className="trip-day" key={`${day.day}-${day.title}`}>
+            <div className="trip-day-head">
+              <button type="button" className="day-collapse" aria-expanded={isOpen} onClick={() => setExpandedDays((previous) => ({ ...previous, [day.day]: !isOpen }))}>
+                <span className="day-chevron">{isOpen ? "▾" : "▸"}</span>
+                <span className="day-number">DAY {day.day}</span>
+                <strong>{day.title}</strong>
+              </button>
+              <div className="trip-day-head-actions">
+                {dayMarkers.length > 0 && <span className="day-map-ref" title="Map reference">🗺 {dayMarkers.join(" · ")}</span>}
+                {!isEditing && <button type="button" className="plan-tool" onClick={() => { setEditingCategory(false); setEditingDay(day.day); setExpandedDays((previous) => ({ ...previous, [day.day]: true })); setNotice(""); }}>Edit</button>}
+              </div>
+            </div>
+            {isOpen && (isEditing ? <DayEditor day={day} dayBudget={budget} currency={currency} onCancel={() => setEditingDay(null)} onSave={saveDay} /> : <>
+              <ul>{day.activities.map((activity) => <li key={activity}>{activity}</li>)}</ul>
+              {day.places?.length > 0 && <div className="trip-places">
+                {day.places.map((place, index) => {
+                  const marker = markerFor(place.name);
+                  const label = <>{marker ? <span className="place-marker-ref">{marker}</span> : null}📍 {place.name}</>;
+                  return place.url
+                    ? <a key={`${place.name}-${index}`} href={place.url} target="_blank" rel="noopener noreferrer">{label}</a>
+                    : <span key={`${place.name}-${index}`}>{label}</span>;
+                })}
+              </div>}
+              {day.notes?.length > 0 && <small>{day.notes.join(" · ")}</small>}
+              {budget && (budget.amount != null || budget.items.length > 0) && <div className="day-budget">
+                <div className="day-budget-head"><span>Budget</span><b>{budget.amount == null ? "—" : formatBudget(budget.amount, currency)}{budget.derived ? " (est.)" : ""}</b></div>
+                {budget.items.length > 0 && <ul className="budget-items budget-day-items">
+                  {budget.items.map((item, index) => <li key={`${item.category}-${index}`}>
+                    <span>{item.category}</span><b>{formatBudget(item.amount, item.currency || currency)}</b>
+                  </li>)}
+                </ul>}
+              </div>}
+            </>)}
+          </article>;
+        })}
+        </div>
+      )}
     </div>
     <div className="trip-budget-block">
       <div className="trip-budget-head">
         <span>ESTIMATED BUDGET</span>
-        <strong>{total == null ? "Not specified" : formatBudget(total, currency)}</strong>
-        {!editing && <button type="button" className="plan-tool" onClick={() => { setEditing(true); setNotice(""); }}>Edit</button>}
+        <strong>{estimate == null ? "Not specified" : formatBudget(estimate, currency)}</strong>
+        {!editingCategory && <button type="button" className="plan-tool" onClick={startCategoryEdit}>Edit</button>}
       </div>
-      {!editing && items.length > 0 && <ul className="budget-items">
-        {items.map((item, index) => <li key={`${item.category}-${index}`}>
-          <span>{item.category}</span><b>{formatBudget(item.amount, item.currency || currency)}</b>
-        </li>)}
-      </ul>}
-      {editing && <BudgetEditor plan={plan} currency={currency} onCancel={() => setEditing(false)} onSave={handleSave} />}
+      {editingCategory ? (
+        <CategoryBudgetEditor plan={plan} currency={currency} onCancel={() => setEditingCategory(false)} onSave={saveCategory} />
+      ) : (
+        items.length > 0 ? <>
+          <div className="budget-subhead">Category items</div>
+          <ul className="budget-items">
+            {items.map((item, index) => <li key={`${item.category}-${index}`}>
+              <span>{item.category}</span><b>{formatBudget(item.amount, item.currency || currency)}</b>
+            </li>)}
+          </ul>
+          <div className="budget-total-row"><span>Items total</span><b>{formatBudget(itemsTotal, currency)}</b></div>
+          {estimate != null && itemsTotal != null && Math.abs(estimate - itemsTotal) > 0.001 && (
+            <small className="budget-notice warn">Items total {formatBudget(itemsTotal, currency)} differs from the estimated budget {formatBudget(estimate, currency)}.</small>
+          )}
+        </> : <small className="budget-notice">No category items yet — use Edit to add them. Each day has its own budget in its card.</small>
+      )}
       {notice && <small className="budget-notice">{notice}</small>}
     </div>
     {plan.notes?.length > 0 && <small className="trip-notes">{plan.notes.join(" · ")}</small>}
@@ -488,35 +729,82 @@ function TripPlanCard({ plan, onSaveBudget }) {
   </div>;
 }
 
+const AGENT_LABELS = [
+  ["search_stays", "Agent 1 · search_stays"],
+  ["estimate_transport", "Agent 2 · estimate_transport"],
+  ["travel_history", "Agent 4 · travel_history"],
+  ["web_search", "web_search tool"],
+  ["display_trip_plan", "Agent 3 · coordinator"],
+  ["trip plan", "Agent 3 · coordinator"],
+  ["start_trip_plan", "Agent 3 · coordinator"],
+  ["set_trip_day", "Agent 3 · coordinator"],
+  ["set_trip_budget", "Agent 3 · coordinator"],
+  ["set_trip_references", "Agent 3 · coordinator"],
+  ["remove_trip_day", "Agent 3 · coordinator"],
+  ["get_trip_plan", "Agent 3 · coordinator"],
+  ["ask_user_question", "Agent 3 · coordinator"],
+  ["coordinator", "Agent 3 · coordinator"],
+  ["model", "Model"],
+];
+
+function agentForEvent(event) {
+  const label = (event.label || "").toLowerCase();
+  const match = AGENT_LABELS.find(([key]) => label.includes(key));
+  return match ? match[1] : null;
+}
+
+function currentAgent(events) {
+  const running = [...events].reverse().find((event) => event.status === "running");
+  if (!running) return null;
+  return agentForEvent(running) || running.label;
+}
+
 function Activity({ events }) {
   if (!events.length) return null;
-  const activityRef = useRef(null);
-  useEffect(() => {
-    if (activityRef.current) activityRef.current.scrollTop = activityRef.current.scrollHeight;
-  }, [events.length]);
+  const itemsRef = useRef(null);
+  const scrollToLatest = () => {
+    const element = itemsRef.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  };
+  useEffect(scrollToLatest, [events.length]);
+  const working = currentAgent(events);
+  let previousAgent = null;
   return (
-    <details className="activity-card" ref={activityRef}>
-      <summary className="activity-heading"><span>◈</span><strong>Live workflow</strong><small>{events.length} events</small></summary>
-      <div className="activity-items">
-        {events.map((event, index) => (
-          <div className={`event ${event.status}`} key={`${event.label}-${index}`}>
-            <span className="event-icon">{eventIcon(event)}</span>
-            <span><strong>{event.label}</strong>{event.detail && <small>{event.detail}</small>}</span>
-            <span className={`event-dot ${event.status}`} />
-          </div>
-        ))}
+    <details className="activity-card" onToggle={(event) => { if (event.currentTarget.open) scrollToLatest(); }}>
+      <summary className="activity-heading">
+        <span>◈</span>
+        <strong>Live workflow</strong>
+        <span className={`agent-chip ${working ? "working" : "idle"}`}>{working ? `▶ ${working}` : "Idle"}</span>
+        <small>{events.length} events</small>
+      </summary>
+      <div className="activity-items" ref={itemsRef}>
+        {events.map((event, index) => {
+          const agent = agentForEvent(event);
+          const handover = Boolean(agent) && agent !== previousAgent;
+          previousAgent = agent || previousAgent;
+          return (
+            <div className={`event ${event.status}${handover ? " handover" : ""}`} key={`${event.label}-${index}`}>
+              <span className="event-icon">{eventIcon(event)}</span>
+              <span><strong>{event.label}</strong>{event.detail && <small>{event.detail}</small>}{handover && <small className="event-agent">{agent}</small>}</span>
+              <span className={`event-dot ${event.status}`} />
+            </div>
+          );
+        })}
       </div>
     </details>
   );
 }
 
 function QuestionBox({ event, onOption, disabled, retryOption, selectedOption }) {
+  const [showCustom, setShowCustom] = useState(false);
+  const [customText, setCustomText] = useState("");
   if (!event?.data?.result?.question) return null;
   const options = event.data.result.options || [];
   const selected = selectedOption || event.data.selected;
+  const locked = disabled || Boolean(selected);
   return <section className="question-box">
     <div className="question-box-header"><span className="question-box-icon">?</span><div><div className="question-kicker">YOUR INPUT NEEDED</div><strong>{event.data.result.question}</strong></div></div>
-    <p>Choose an option to continue planning.</p>
+    <p>Choose an option to continue planning, or write your own.</p>
     <Stack direction="row" flexWrap="wrap" useFlexGap spacing={1} className="question-options" sx={{ mt: 1.5, ml: "39px" }}>
       {options.map((option) => (
         <Button
@@ -524,13 +812,33 @@ function QuestionBox({ event, onOption, disabled, retryOption, selectedOption })
           type="button"
           size="small"
           variant={selected === option ? "contained" : "outlined"}
-          disabled={disabled || Boolean(selected)}
+          disabled={locked}
           onClick={() => onOption(option)}
         >
           {selected === option ? "Selected" : option}
         </Button>
       ))}
+      {!showCustom && (
+        <Button type="button" size="small" variant="outlined" disabled={locked} onClick={() => setShowCustom(true)}>
+          Other…
+        </Button>
+      )}
     </Stack>
+    {showCustom && (
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1.5, ml: "39px" }}>
+        <TextField
+          size="small"
+          variant="filled"
+          placeholder="Type your own answer"
+          value={customText}
+          onChange={(e) => setCustomText(e.target.value)}
+          sx={{ maxWidth: 360 }}
+        />
+        <Button type="button" size="small" variant="contained" disabled={locked || !customText.trim()} onClick={() => onOption(customText.trim(), true)}>
+          Send
+        </Button>
+      </Stack>
+    )}
     {retryOption && (
       <Button className="question-retry" type="button" size="small" color="error" variant="outlined" onClick={() => onOption(retryOption)} sx={{ mt: 1.5, ml: "39px" }}>
         Retry sending "{retryOption}"
@@ -692,6 +1000,26 @@ function HistoryPage({ userId }) {
     const response = await fetch(`/api/travel-history/${id}?user_id=${encodeURIComponent(userId)}`, { method: "DELETE" });
     if (response.ok) await load();
   }
+  const countries = useMemo(() => {
+    const map = new Map();
+    entries.forEach((entry) => {
+      const country = (entry.country || "").trim() || "Unspecified country";
+      const city = (entry.city || "").trim() || "Unspecified city";
+      if (!map.has(country)) map.set(country, new Map());
+      const cities = map.get(country);
+      if (!cities.has(city)) cities.set(city, []);
+      cities.get(city).push(entry);
+    });
+    return [...map.entries()]
+      .map(([country, cities]) => ({
+        country,
+        count: [...cities.values()].reduce((total, list) => total + list.length, 0),
+        cities: [...cities.entries()]
+          .map(([city, items]) => ({ city, items }))
+          .sort((a, b) => a.city.localeCompare(b.city)),
+      }))
+      .sort((a, b) => a.country.localeCompare(b.country));
+  }, [entries]);
   return <section className="page">
     <div className="page-title"><div><p className="eyebrow">YOUR MEMORY</p><h1>Travel history</h1><p className="muted">Places you have visited, used to make future plans more personal.</p></div><span className="hero-icon">🧭</span></div>
     <div className="history-layout">
@@ -710,9 +1038,33 @@ function HistoryPage({ userId }) {
       </Paper>
       <div className="panel history-list"><div className="section-title"><span>▣</span><h2>Visited places</h2><b>{entries.length}</b></div>
         {!entries.length && <div className="empty-state"><span>✈</span><p>No places saved yet.</p><small>Add a visit or tell the assistant you have been there before.</small></div>}
-        {entries.map((entry) => <div className="history-entry" key={entry.id}><span className="place-pin">●</span><div><strong>{entry.location}</strong><p>{[entry.city, entry.country].filter(Boolean).join(", ") || "Location details not specified"}</p></div><IconButton className="icon-button danger" color="error" title="Remove visit" onClick={() => remove(entry.id)} sx={{ ml: "auto" }}>
-            <DeleteOutlinedIcon fontSize="small" />
-          </IconButton></div>)}
+        <div className="history-countries">
+          {countries.map((group) => (
+            <Accordion key={group.country} disableGutters elevation={0} className="history-country" defaultExpanded>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                <PlaceIcon color="primary" fontSize="small" sx={{ mr: 1 }} />
+                <Typography fontWeight={700} sx={{ flex: 1 }}>{group.country}</Typography>
+                <Chip size="small" label={`${group.count} ${group.count === 1 ? "place" : "places"}`} color="primary" variant="outlined" />
+              </AccordionSummary>
+              <AccordionDetails>
+                {group.cities.map((cityGroup) => (
+                  <Box key={cityGroup.city} className="history-city">
+                    <Typography variant="caption" className="history-city-name">{cityGroup.city}</Typography>
+                    {cityGroup.items.map((entry) => (
+                      <div className="history-entry" key={entry.id}>
+                        <span className="place-pin">●</span>
+                        <div><strong>{entry.location}</strong></div>
+                        <IconButton className="icon-button danger" color="error" title="Remove visit" onClick={() => remove(entry.id)} sx={{ ml: "auto" }}>
+                          <DeleteOutlinedIcon fontSize="small" />
+                        </IconButton>
+                      </div>
+                    ))}
+                  </Box>
+                ))}
+              </AccordionDetails>
+            </Accordion>
+          ))}
+        </div>
       </div>
     </div>
   </section>;
@@ -739,8 +1091,9 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
     return {
       destination: result.destination,
       currency: result.currency,
-      budget: planTotal(result),
+      budget: result.budget ?? null,
       budget_items: planBudgetItems(result),
+      days: result.days || [],
     };
   }
 
@@ -801,7 +1154,9 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
         const completedMessages = result.pending_question
           ? optimisticMessages
           : [...optimisticMessages, { role: "assistant", content: result.text, reasoning: result.reasoning || streamedReasoning }];
-        setCurrent({ id: result.conversation_id, messages: completedMessages, events: result.events });
+        // Keep earlier turns' events (including the trip plan) and append this turn's.
+        const mergedEvents = [...current.events, ...(result.events || [])];
+        setCurrent({ id: result.conversation_id || current.id, messages: completedMessages, events: mergedEvents });
         setStatus(
           result.pending_question
             ? "The assistant is waiting for your choice."
@@ -809,6 +1164,14 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
               ? "Stopped. Edit your message or ask something else."
               : result.stub ? "Local stub response" : `Model: ${result.model}`
         );
+      } else {
+        setRetryText(text);
+        setStatus("The model stream ended without a response. You can retry.");
+        setCurrent((previous) => ({
+          ...previous,
+          messages: [...workingMessages.slice(0, -1), { role: "assistant", content: streamedText || "[No response received. Please retry.]", reasoning: streamedReasoning }],
+          events: streamEvents,
+        }));
       }
     } catch (error) {
       if (error?.name === "AbortError") {
@@ -852,10 +1215,37 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
     setCurrent((previous) => {
       const target = planFromEvents(previous.events);
       if (!target) return previous;
+      const result = target.data.result;
+      let days = (result.days || []).map((day) => ({ ...day }));
+      if (Array.isArray(payload.days) && payload.days.length) {
+        payload.days.forEach((updatedDay) => {
+          const index = days.findIndex((day) => day.day === updatedDay.day);
+          if (index >= 0) days[index] = { ...days[index], ...updatedDay };
+          else days.push({ ...updatedDay });
+        });
+        days.sort((a, b) => a.day - b.day);
+      } else {
+        const dayBudgetMap = new Map((payload.day_budgets || []).map((entry) => [entry.day, entry.amount]));
+        const dayItemMap = new Map();
+        (payload.day_items || []).forEach((entry) => {
+          const list = dayItemMap.get(entry.day) || [];
+          list.push({ category: entry.category, amount: entry.amount, currency: payload.currency || result.currency || "" });
+          dayItemMap.set(entry.day, list);
+        });
+        days = days.map((day) => ({
+          ...day,
+          budget: dayBudgetMap.has(day.day) ? dayBudgetMap.get(day.day) : day.budget,
+          budget_items: dayItemMap.has(day.day) ? dayItemMap.get(day.day) : day.budget_items,
+        }));
+      }
+      const merged = { ...result, days };
+      if ("budget" in payload) merged.budget = payload.budget;
+      if (payload.currency) merged.currency = payload.currency;
+      if (payload.mode !== "day" && Array.isArray(payload.budget_items)) merged.budget_items = payload.budget_items;
       return {
         ...previous,
         events: previous.events.map((event) => event === target
-          ? { ...event, data: { ...event.data, result: { ...event.data.result, ...payload } } }
+          ? { ...event, data: { ...event.data, result: merged } }
           : event),
       };
     });
@@ -884,7 +1274,7 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
   const workflow = workflowState(current.events, selectedOption ? null : pendingEvent, status);
   const suggestions = nextStepSuggestions(latestPlan, current.messages, Boolean(pendingEvent), streaming || answering);
 
-  async function answerQuestion(option) {
+  async function answerQuestion(option, custom = false) {
     if (answerLockRef.current) return;
     answerLockRef.current = true;
     setAnswering(true);
@@ -907,6 +1297,7 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
         message: option,
         conversation_id: current.id,
         user_id: userId,
+        custom,
         plan_context: planContextFromEvents(current.events),
       }),
     });
@@ -941,9 +1332,16 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
   }
 
   return <section className="page chat-page">
-    <div className="page-title"><div><p className="eyebrow">AI TRIP COMPANION</p><h1>Plan something memorable.</h1><p className="muted">Your coordinator connects stays, transport, and travel memory in one workflow.</p></div><span className="hero-icon">✦</span></div>
     <div className={`chat-workspace ${latestPlan ? "has-plan" : ""}`}>
       <section className="panel chat-panel">
+        <header className="chat-header">
+          <div>
+            <p className="eyebrow">AI TRIP COMPANION</p>
+            <h1 className="chat-title">Plan something memorable.</h1>
+            <p className="chat-summary">Your coordinator connects stays, transport, and travel memory in one workflow.</p>
+          </div>
+          <span className="hero-icon">✦</span>
+        </header>
         <Activity events={current.events} />
         <Box className="messages" ref={messagesRef} sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
       {!current.messages.length && <div className="welcome"><span>✦</span><h2>Where will you go next?</h2><p>Ask for an itinerary, compare options, or tell me about somewhere you have visited.</p></div>}
@@ -995,7 +1393,7 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
       <div className={`workflow-status ${workflow.className}`}><span>{workflow.icon}</span><strong>{workflow.label}</strong><small>{workflow.className === "waiting" ? "Choose an option below." : workflow.className === "working" ? "The assistant is processing your request." : ""}</small></div>
       {(pendingEvent || retryOption) && <QuestionBox event={activeQuestionEvent} onOption={answerQuestion} disabled={answering} retryOption={retryOption} selectedOption={selectedOption} />}
       <NextSteps suggestions={suggestions} onSelect={(text) => sendMessage(null, false, text)} disabled={streaming || answering} />
-      <Box className="composer" component="form" onSubmit={sendMessage} sx={{ display: "flex", gap: 1.5, alignItems: "flex-end", p: 2.5, borderTop: "1px solid #edf0f6" }}>
+      <Box className="composer" component="form" onSubmit={sendMessage} sx={{ display: "flex", flexDirection: "column", gap: 1.25, alignItems: "stretch", p: 2.5, borderTop: "1px solid #edf0f6" }}>
         <TextField
           multiline
           minRows={2}
@@ -1003,11 +1401,12 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           placeholder="Plan a 3-day trip to Kyoto for $800..."
-          sx={{ flex: 1 }}
         />
-        {streaming
-          ? <Button className="stop-button" type="button" variant="contained" color="error" onClick={stopStreaming}>Stop</Button>
-          : <Button className="send-button" type="submit" variant="contained" endIcon={<SendIcon />} disabled={answering}>Send</Button>}
+        <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
+          {streaming
+            ? <Button className="stop-button" type="button" variant="contained" color="error" onClick={stopStreaming}>Stop</Button>
+            : <Button className="send-button" type="submit" variant="contained" endIcon={<SendIcon />} disabled={answering}>Send</Button>}
+        </Box>
       </Box>
       <div className="composer-footer"><span>{status || "Markdown supported"}</span>{retryText && <Button className="retry" size="small" color="warning" variant="outlined" disabled={streaming} onClick={(event) => sendMessage(event, true)}>Retry</Button>}</div>
       </section>
@@ -1032,7 +1431,22 @@ function App() {
   const [page, setPage] = useState("chat");
   const [conversations, setConversations] = useState([]);
   const [current, setCurrent] = useState(emptyConversation);
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return window.localStorage.getItem("trip-sidebar-collapsed") === "1"; } catch { return false; }
+  });
   const userId = getUserId();
+  function toggleSidebar() {
+    setCollapsed((previous) => {
+      const next = !previous;
+      try { window.localStorage.setItem("trip-sidebar-collapsed", next ? "1" : "0"); } catch { /* ignore */ }
+      return next;
+    });
+  }
+  const navItems = [
+    { key: "chat", label: "Chat", icon: <ChatBubbleOutlinedIcon /> },
+    { key: "history", label: "Travel history", icon: <HistoryEduIcon /> },
+    { key: "settings", label: "Settings", icon: <SettingsIcon /> },
+  ];
   async function loadConversations() {
     const response = await fetch("/api/conversations");
     if (response.ok) setConversations(await response.json());
@@ -1060,92 +1474,111 @@ function App() {
       <Box
         component="aside"
         sx={{
-          width: 280,
+          width: collapsed ? 78 : 280,
+          flex: "0 0 auto",
           display: "flex",
           flexDirection: "column",
-          p: 2.5,
+          p: collapsed ? 1.25 : 2.5,
           bgcolor: isDark ? "#0a0f1c" : "#111b35",
           color: "#dfe6fa",
           borderRight: "1px solid",
           borderColor: isDark ? "rgba(255,255,255,0.06)" : "transparent",
+          transition: "width 160ms ease",
+          overflowX: "hidden",
         }}
       >
-        <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mx: 0.5, mb: 3 }}>
-          <Box sx={{ width: 36, height: 36, borderRadius: "12px", bgcolor: "primary.main", color: "#fff", display: "grid", placeItems: "center", boxShadow: "0 8px 18px rgba(80,72,190,0.4)" }}>
-            <TravelExploreIcon fontSize="small" />
-          </Box>
-          <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Stack direction={collapsed ? "column" : "row"} spacing={1.5} alignItems="center" sx={{ mx: collapsed ? 0 : 0.5, mb: 3 }}>
+          <Tooltip title="Tripwise" placement="right">
+            <Box sx={{ width: 36, height: 36, borderRadius: "12px", bgcolor: "primary.main", color: "#fff", display: "grid", placeItems: "center", boxShadow: "0 8px 18px rgba(80,72,190,0.4)", flex: "0 0 auto" }}>
+              <TravelExploreIcon fontSize="small" />
+            </Box>
+          </Tooltip>
+          {!collapsed && <Box sx={{ flex: 1, minWidth: 0 }}>
             <Typography fontWeight={700} color="#fff" fontSize={18}>Tripwise</Typography>
             <Typography variant="caption" sx={{ color: "#8794b7" }}>AI travel planner</Typography>
-          </Box>
-          <Tooltip title={isDark ? "Switch to light mode" : "Switch to dark mode"}>
+          </Box>}
+          <Tooltip title={isDark ? "Switch to light mode" : "Switch to dark mode"} placement={collapsed ? "right" : "top"}>
             <IconButton onClick={colorMode.toggleColorMode} size="small" sx={{ color: "#c5ceea", bgcolor: "rgba(255,255,255,0.06)", "&:hover": { bgcolor: "rgba(255,255,255,0.12)" } }}>
               {isDark ? <LightModeOutlinedIcon fontSize="small" /> : <DarkModeOutlinedIcon fontSize="small" />}
             </IconButton>
           </Tooltip>
+          <Tooltip title={collapsed ? "Expand sidebar" : "Collapse sidebar"} placement={collapsed ? "right" : "top"}>
+            <IconButton onClick={toggleSidebar} size="small" sx={{ color: "#c5ceea", bgcolor: "rgba(255,255,255,0.06)", "&:hover": { bgcolor: "rgba(255,255,255,0.12)" } }}>
+              {collapsed ? <ChevronRightIcon fontSize="small" /> : <ChevronLeftIcon fontSize="small" />}
+            </IconButton>
+          </Tooltip>
         </Stack>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => { setCurrent(emptyConversation()); setPage("chat"); }}
-          sx={{ mb: 1, py: 1.1 }}
-        >
-          New conversation
-        </Button>
+        {collapsed ? (
+          <Tooltip title="New conversation" placement="right">
+            <IconButton onClick={() => { setCurrent(emptyConversation()); setPage("chat"); }} sx={{ mx: "auto", mb: 1, bgcolor: "primary.main", color: "#fff", borderRadius: "12px", width: 44, height: 44, "&:hover": { bgcolor: "primary.dark" } }}>
+              <AddIcon />
+            </IconButton>
+          </Tooltip>
+        ) : (
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => { setCurrent(emptyConversation()); setPage("chat"); }}
+            sx={{ mb: 1, py: 1.1 }}
+          >
+            New conversation
+          </Button>
+        )}
         <Stack component="nav" spacing={0.5} sx={{ my: 2.5 }}>
-          <Button
-            startIcon={<ChatBubbleOutlinedIcon />}
-            onClick={() => setPage("chat")}
-            sx={{
-              justifyContent: "flex-start",
-              color: page === "chat" ? "#fff" : "#9daaca",
-              bgcolor: page === "chat" ? "#242f52" : "transparent",
-              "&:hover": { bgcolor: "#242f52", color: "#fff" },
-            }}
-          >
-            Chat
-          </Button>
-          <Button
-            startIcon={<HistoryEduIcon />}
-            onClick={() => setPage("history")}
-            sx={{
-              justifyContent: "flex-start",
-              color: page === "history" ? "#fff" : "#9daaca",
-              bgcolor: page === "history" ? "#242f52" : "transparent",
-              "&:hover": { bgcolor: "#242f52", color: "#fff" },
-            }}
-          >
-            Travel history
-          </Button>
-          <Button
-            startIcon={<SettingsIcon />}
-            onClick={() => setPage("settings")}
-            sx={{
-              justifyContent: "flex-start",
-              color: page === "settings" ? "#fff" : "#9daaca",
-              bgcolor: page === "settings" ? "#242f52" : "transparent",
-              "&:hover": { bgcolor: "#242f52", color: "#fff" },
-            }}
-          >
-            Settings
-          </Button>
+          {navItems.map((item) => collapsed ? (
+            <Tooltip key={item.key} title={item.label} placement="right">
+              <IconButton
+                onClick={() => setPage(item.key)}
+                sx={{
+                  mx: "auto",
+                  color: page === item.key ? "#fff" : "#9daaca",
+                  bgcolor: page === item.key ? "#242f52" : "transparent",
+                  "&:hover": { bgcolor: "#242f52", color: "#fff" },
+                }}
+              >
+                {item.icon}
+              </IconButton>
+            </Tooltip>
+          ) : (
+            <Button
+              key={item.key}
+              startIcon={item.icon}
+              onClick={() => setPage(item.key)}
+              sx={{
+                justifyContent: "flex-start",
+                color: page === item.key ? "#fff" : "#9daaca",
+                bgcolor: page === item.key ? "#242f52" : "transparent",
+                "&:hover": { bgcolor: "#242f52", color: "#fff" },
+              }}
+            >
+              {item.label}
+            </Button>
+          ))}
         </Stack>
-        <Typography sx={{ mx: 1, mb: 1, color: "#6e7c9f", fontSize: 10, letterSpacing: 1.5, fontWeight: 700 }}>
-          RECENT CHATS
-        </Typography>
-        <ConversationList
-          conversations={conversations}
-          activeId={current.id}
-          onSelect={(id) => {
-            setPage("chat");
-            fetch(`/api/conversations/${id}`).then((r) => r.json()).then((item) => setCurrent({ id: item.id, messages: item.messages, events: item.events || [] }));
-          }}
-          onDelete={deleteConversation}
-        />
+        {!collapsed && <>
+          <Typography sx={{ mx: 1, mb: 1, color: "#6e7c9f", fontSize: 10, letterSpacing: 1.5, fontWeight: 700 }}>
+            RECENT CHATS
+          </Typography>
+          <ConversationList
+            conversations={conversations}
+            activeId={current.id}
+            onSelect={(id) => {
+              setPage("chat");
+              fetch(`/api/conversations/${id}`).then((r) => r.json()).then((item) => setCurrent({ id: item.id, messages: item.messages, events: item.events || [] }));
+            }}
+            onDelete={deleteConversation}
+          />
+        </>}
         <Divider sx={{ borderColor: "#293556", mt: "auto", pt: 2 }} />
-        <Typography sx={{ pt: 2, px: 1, color: "#7380a1", fontSize: 12 }}>
-          Agent 1–4 <Box component="span" sx={{ float: "right", color: "#5fd39a" }}>online</Box>
-        </Typography>
+        {collapsed ? (
+          <Tooltip title="Agent 1–4 online" placement="right">
+            <Box sx={{ pt: 2, textAlign: "center", color: "#5fd39a", fontSize: 16 }}>●</Box>
+          </Tooltip>
+        ) : (
+          <Typography sx={{ pt: 2, px: 1, color: "#7380a1", fontSize: 12 }}>
+            Agent 1–4 <Box component="span" sx={{ float: "right", color: "#5fd39a" }}>online</Box>
+          </Typography>
+        )}
       </Box>
       <Box component="main" sx={{ flex: 1, minWidth: 0, bgcolor: "background.default", color: "text.primary" }}>
         {page === "history"

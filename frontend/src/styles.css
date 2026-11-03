@@ -245,3 +245,164 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .messages pre,.messages code{max-width:100%;overflow-x:auto}
 
 @media(max-width:1150px){.chat-workspace.has-plan{grid-template-columns:minmax(0,1fr)}.chat-side{position:static;max-height:none;overflow:visible}.trip-plan-content{grid-template-columns:1fr}}
+
+/* Keep the chat page within the viewport so the composer never spills past the bottom */
+.chat-page{height:100vh;height:100dvh;max-height:100vh;max-height:100dvh;display:flex;flex-direction:column;overflow:hidden}
+.chat-page>.page-title{flex:0 0 auto}
+.chat-workspace{flex:1 1 auto;min-height:0;align-items:stretch}
+.chat-panel{display:flex;flex-direction:column;min-height:0;height:100%;overflow:hidden}
+.messages{flex:1 1 auto;min-height:140px;height:auto}
+.chat-panel>.activity-card,
+.chat-panel>.workflow-status,
+.chat-panel>.question-box,
+.chat-panel>.next-steps,
+.chat-panel>.composer,
+.chat-panel>.composer-footer{flex:0 0 auto}
+.chat-side{height:100%;max-height:none;overflow:auto}
+@media(max-width:1150px){
+  .chat-page{height:auto;max-height:none;overflow:visible;display:block}
+  .chat-workspace{align-items:start}
+  .chat-panel{height:auto}
+  .messages{height:clamp(320px,52vh,560px)}
+  .chat-side{height:auto;overflow:visible}
+}
+
+/* Larger route map */
+.trip-map{height:340px}
+@media(max-width:560px){.trip-map{height:220px}}
+
+/* Budget total + day/map cross-references */
+.budget-total-row{display:flex;justify-content:space-between;gap:10px;margin-top:8px;padding:8px 10px;border-radius:8px;background:#eef4ff;border:1px solid #d9e6fb;font-size:12px;color:#334568;font-weight:700}
+.budget-total-row b{color:#3b5ecb}
+.trip-day-head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.day-map-ref{flex:0 0 auto;padding:2px 7px;border-radius:999px;background:#e8f0ff;color:#3f6fc4;font-size:10px;font-weight:700;white-space:nowrap}
+.place-marker-ref{display:inline-grid;place-items:center;width:15px;height:15px;margin-right:4px;border-radius:50%;background:#6c63ff;color:#fff;font-size:9px;font-weight:700;vertical-align:middle}
+.app[data-color-mode="dark"] .budget-total-row{background:#1b2540;border-color:rgba(106,168,255,0.28);color:#dbe3ff}
+.app[data-color-mode="dark"] .budget-total-row b{color:#9db8ff}
+.app[data-color-mode="dark"] .day-map-ref{background:rgba(106,168,255,0.18);color:#9db8ff}
+
+/* Live workflow text + current-agent chip (light) */
+.activity-card{background:#f8fafc}
+.activity-heading strong{color:#2f3d5c}
+.activity-heading small{color:#8a95aa}
+.event{color:#5d6983}
+.event strong{color:#2f3d5c}
+.event small{color:#8a95aa}
+.event-icon{background:#eef0ff;color:#6c63ff}
+.agent-chip{padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700;white-space:nowrap}
+.agent-chip.working{background:#e8f0ff;color:#3f6fc4}
+.agent-chip.idle{background:#eef0f5;color:#8a95aa}
+
+/* Live workflow text + current-agent chip (dark) */
+.app[data-color-mode="dark"] .activity-card{background:#141b2e}
+.app[data-color-mode="dark"] .activity-heading strong{color:#e8ecf8}
+.app[data-color-mode="dark"] .event{color:#9aa6c4}
+.app[data-color-mode="dark"] .event strong{color:#dbe3ff}
+.app[data-color-mode="dark"] .event small{color:#9aa6c4}
+.app[data-color-mode="dark"] .agent-chip.working{background:rgba(106,168,255,0.18);color:#9db8ff}
+.app[data-color-mode="dark"] .agent-chip.idle{background:rgba(255,255,255,0.06);color:#9aa6c4}
+
+/* Budget sub-sections + airport marker */
+.budget-subhead{margin-top:12px;font-size:10px;font-weight:800;letter-spacing:1px;color:#7a83a0;text-transform:uppercase}
+.budget-editor-label{margin:10px 0 6px;font-size:11px;font-weight:700;color:#43506d}
+.budget-day-label{flex:0 0 58px;font-size:12px;color:#5f6d8c}
+.trip-map-marker.airport span{background:#2f9e6f}
+.app[data-color-mode="dark"] .budget-subhead{color:#9aa6c4}
+.app[data-color-mode="dark"] .budget-editor-label{color:#c5cee6}
+.app[data-color-mode="dark"] .budget-day-label{color:#aab5d0}
+.app[data-color-mode="dark"] .trip-map-marker.airport span{background:#37b37e}
+
+/* Live workflow scrolls to the latest event */
+.chat-panel>.activity-card .activity-items{max-height:min(42vh,340px);overflow:auto;padding-right:4px;scroll-behavior:smooth}
+
+/* Budget: day/category view toggle + per-day breakdown */
+.budget-view-toggle{display:inline-flex;gap:2px;margin-top:10px;padding:2px;border-radius:999px;background:#eef1f8;border:1px solid #e0e5f0}
+.budget-view-toggle button{padding:4px 12px;border-radius:999px;background:transparent;color:#5f6d8c;font-size:11px;font-weight:700}
+.budget-view-toggle button.active{background:#fff;color:#3b5ecb;box-shadow:0 1px 3px rgba(15,23,42,0.12)}
+.budget-days{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:10px}
+.budget-day-row{display:flex;justify-content:space-between;gap:10px;padding:7px 10px;border-radius:8px;background:#eef4ff;border:1px solid #d9e6fb;font-size:12px;color:#334568;font-weight:700}
+.budget-day-row b{color:#3b5ecb}
+.budget-day-items{list-style:none;margin:6px 0 0;padding:0 0 0 10px;display:grid;gap:4px}
+.budget-day-items li{display:flex;justify-content:space-between;gap:10px;font-size:11px;color:#5f6d8c}
+.budget-day-items b{color:#334568}
+.app[data-color-mode="dark"] .budget-view-toggle{background:#1b2540;border-color:rgba(154,166,196,0.18)}
+.app[data-color-mode="dark"] .budget-view-toggle button{color:#aab5d0}
+.app[data-color-mode="dark"] .budget-view-toggle button.active{background:#2a3a5e;color:#9db8ff}
+.app[data-color-mode="dark"] .budget-day-row{background:#1b2540;border-color:rgba(106,168,255,0.28);color:#dbe3ff}
+.app[data-color-mode="dark"] .budget-day-row b{color:#9db8ff}
+.app[data-color-mode="dark"] .budget-day-items li{color:#9aa6c4}
+.app[data-color-mode="dark"] .budget-day-items b{color:#dbe3ff}
+
+/* Per-day budget editor */
+.budget-days-editor{display:grid;gap:12px;margin-top:8px}
+.budget-day-editor{padding:10px;border:1px solid #e6eefb;border-radius:10px;background:#fbfdff}
+.budget-day-editor-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.budget-day-editor-head .budget-amount{margin-left:auto}
+.app[data-color-mode="dark"] .budget-day-editor{background:#12192c;border-color:rgba(154,166,196,0.14)}
+
+/* Live workflow: agent handovers */
+.workflow-handover{margin:8px 0 4px;padding:6px 9px;border-radius:8px;background:#f1f5ff;border:1px dashed #cdd9f2;color:#4b6ea8;font-size:10px;font-weight:700;line-height:1.5}
+.event.handover{border-left-color:#8c86ff}
+.event-agent{color:#6c63ff !important;font-weight:700}
+.app[data-color-mode="dark"] .workflow-handover{background:#141d33;border-color:rgba(106,168,255,0.28);color:#9db8ff}
+.app[data-color-mode="dark"] .event-agent{color:#b9b3ff !important}
+
+/* Travel history: country-oriented */
+.history-countries{display:grid;gap:8px}
+.history-country{border:1px solid #e6eaf3 !important;border-radius:12px !important;overflow:hidden;background:#fff}
+.history-country:before{display:none}
+.history-country .MuiAccordionSummary-root{padding:0 10px}
+.history-country .MuiAccordionDetails-root{padding:0 12px 8px}
+.history-city{padding:4px 0 2px}
+.history-city-name{display:block;margin:6px 0 2px;color:#7a83a0;font-weight:700;letter-spacing:.6px;text-transform:uppercase}
+.history-city .history-entry{border-top:1px solid #eef1f7;padding:8px 0}
+.app[data-color-mode="dark"] .history-country{background:#141b2e;border-color:rgba(154,166,196,0.14) !important}
+.app[data-color-mode="dark"] .history-city .history-entry{border-top-color:rgba(154,166,196,0.12)}
+
+/* Merged day route + budget */
+.trip-day-head-actions{display:flex;align-items:center;gap:6px}
+.day-budget{margin-top:9px;padding-top:8px;border-top:1px dashed #e2ebf8}
+.day-budget-head{display:flex;justify-content:space-between;gap:10px;font-size:11px;font-weight:700;color:#3b5ecb}
+.day-budget .budget-items{margin-top:6px}
+.day-budget .budget-items li{background:#f7fbff;border-color:#e6eefb}
+
+/* Day editor (route + budget together) */
+.day-editor{display:grid;gap:8px;margin-top:6px}
+.day-editor-field{display:block;font-size:11px;font-weight:700;color:#43506d}
+.day-editor-field input,.day-editor-field textarea{display:block;width:100%;margin-top:4px;padding:7px 9px;border:1px solid #cfdcf3;border-radius:8px;outline:none;font-size:12px;font-family:inherit;resize:vertical}
+.app[data-color-mode="dark"] .day-budget{border-top-color:rgba(154,166,196,0.16)}
+.app[data-color-mode="dark"] .day-budget .budget-items li{background:#0f1626;border-color:rgba(154,166,196,0.14)}
+.app[data-color-mode="dark"] .day-editor-field{color:#c5cee6}
+.app[data-color-mode="dark"] .day-editor-field input,.app[data-color-mode="dark"] .day-editor-field textarea{background:#12192c;border-color:rgba(154,166,196,0.2);color:#e8ecf8}
+.app[data-color-mode="dark"] .trip-day-head-actions .plan-tool{background:#1c2740;border-color:rgba(154,166,196,0.2);color:#cfd8f5}
+
+/* Chat header (hero moved into the chat panel) */
+.chat-header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:18px 22px 12px;border-bottom:1px solid #eef1f7}
+.chat-header .eyebrow{margin:0 0 4px}
+.chat-title{margin:0;font-size:clamp(19px,1.8vw,24px);font-weight:700;letter-spacing:-0.02em;color:#17233d}
+.chat-summary{margin:4px 0 0;color:#74809b;font-size:13px;max-width:70ch}
+.chat-header .hero-icon{width:44px;height:44px;font-size:22px;border-radius:14px;flex:0 0 auto}
+.app[data-color-mode="dark"] .chat-header{border-bottom-color:rgba(154,166,196,0.12)}
+.app[data-color-mode="dark"] .chat-title{color:#f2f5ff}
+.app[data-color-mode="dark"] .chat-summary{color:#9aa6c4}
+
+/* Trip plan: overview / day-by-day view + collapsible days */
+.plan-view-toggle{display:inline-flex;gap:2px;padding:2px;border-radius:999px;background:#eef1f8;border:1px solid #e0e5f0}
+.plan-view-toggle button{padding:4px 12px;border-radius:999px;background:transparent;color:#5f6d8c;font-size:11px;font-weight:700}
+.plan-view-toggle button.active{background:#fff;color:#3b5ecb;box-shadow:0 1px 3px rgba(15,23,42,0.12)}
+.trip-overview{display:grid;gap:6px;margin:0}
+.trip-overview-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:10px;width:100%;padding:9px 12px;border:1px solid #e6eefb;border-radius:10px;background:#fff;text-align:left;color:#334568}
+.trip-overview-row:hover{border-color:#a9c4ec;background:#f7fbff}
+.overview-day{font-size:11px;font-weight:800;letter-spacing:.5px;color:#4b83d4}
+.overview-title{font-weight:700;color:#2f3d5c;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.overview-meta{font-size:11px;color:#8995a9;white-space:nowrap}
+.overview-budget{color:#3b5ecb;font-size:12px}
+.day-collapse{display:flex;align-items:center;gap:8px;padding:0;background:transparent;text-align:left;color:inherit;min-width:0}
+.day-chevron{color:#7a83a0;font-size:11px}
+.app[data-color-mode="dark"] .plan-view-toggle{background:#1b2540;border-color:rgba(154,166,196,0.18)}
+.app[data-color-mode="dark"] .plan-view-toggle button{color:#aab5d0}
+.app[data-color-mode="dark"] .plan-view-toggle button.active{background:#2a3a5e;color:#9db8ff}
+.app[data-color-mode="dark"] .trip-overview-row{background:#12192c;border-color:rgba(154,166,196,0.14)}
+.app[data-color-mode="dark"] .overview-title{color:#dbe3ff}
+.app[data-color-mode="dark"] .overview-budget{color:#9db8ff}
+.app[data-color-mode="dark"] .day-chevron{color:#9aa6c4}

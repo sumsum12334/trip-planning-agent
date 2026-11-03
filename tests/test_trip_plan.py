@@ -1,128 +1,127 @@
-"""Tests for the shared `display_trip_plan` schema and payload validation."""
+"""Tests for the split trip-plan tools and assembly."""
 
 from __future__ import annotations
 
 import pytest
 
 from shared.trip_plan import (
-    TRIP_PLAN_TOOL,
+    TRIP_PLAN_TOOL_NAMES,
+    TRIP_PLAN_TOOLS,
+    apply_trip_plan_tool,
+    assemble_trip_plan,
+    empty_trip_plan,
     format_plan_context,
-    normalize_trip_plan,
 )
 
 
-def test_normalize_full_payload_keeps_map_and_references():
-    plan = normalize_trip_plan(
+def test_tool_names():
+    names = {tool["function"]["name"] for tool in TRIP_PLAN_TOOLS}
+    assert names == TRIP_PLAN_TOOL_NAMES
+    assert {"start_trip_plan", "set_trip_day", "set_trip_budget", "get_trip_plan"} <= names
+
+
+def test_start_days_and_budget():
+    plan, _ = apply_trip_plan_tool(
+        "start_trip_plan",
         {
             "destination": "Kyoto",
+            "airport": {"name": "KIX", "coordinates": {"lat": 34.4347, "lng": 135.2329}},
             "currency": "JPY",
-            "budget": 800,
-            "destination_coordinates": {"lat": 35.0116, "lng": 135.7681},
+            "budget": 100000,
+        },
+        None,
+    )
+    plan, _ = apply_trip_plan_tool("set_trip_day", {"day": 2, "title": "Day two", "activities": ["B"], "budget": 40000}, plan)
+    plan, result = apply_trip_plan_tool(
+        "set_trip_day",
+        {"day": 1, "title": "Day one", "activities": ["A"], "budget": 60000, "budget_items": [{"category": "Food", "amount": 10000}]},
+        plan,
+    )
+    assert [day["day"] for day in plan["days"]] == [1, 2]
+    assert result["days"] == [1, 2]
+
+    plan, result = apply_trip_plan_tool("set_trip_budget", {"day": 1, "budget": 65000}, plan)
+    assert plan["days"][0]["budget"] == 65000
+    assert result["scope"] == "day 1"
+
+    plan, result = apply_trip_plan_tool("set_trip_budget", {"items": [{"category": "Stay", "amount": 50000}]}, plan)
+    assert plan["budget_items"][0]["category"] == "Stay"
+    assert result["scope"] == "total"
+
+
+def test_budget_is_independent_of_items():
+    plan, _ = apply_trip_plan_tool("start_trip_plan", {"destination": "Rome"}, None)
+    plan, _ = apply_trip_plan_tool("set_trip_budget", {"items": [{"category": "Food", "amount": 100}]}, plan)
+    assert plan["budget"] is None
+
+
+def test_references_and_remove_day():
+    plan, _ = apply_trip_plan_tool("start_trip_plan", {"destination": "Rome"}, None)
+    plan, _ = apply_trip_plan_tool("set_trip_day", {"day": 1, "title": "t", "activities": ["a"]}, plan)
+    plan, result = apply_trip_plan_tool("set_trip_references", {"references": [{"title": "T", "url": "https://example.com"}]}, plan)
+    assert result["references"] == 1
+    assert plan["references"][0]["url"] == "https://example.com"
+    plan, result = apply_trip_plan_tool("remove_trip_day", {"day": 1}, plan)
+    assert result["days"] == []
+    assert plan["days"] == []
+
+
+def test_get_trip_plan_returns_assembled():
+    plan = empty_trip_plan()
+    plan["destination"] = "Rome"
+    _, result = apply_trip_plan_tool("get_trip_plan", {}, plan)
+    assert result["destination"] == "Rome"
+    assert result["status"] == "displayed"
+
+
+def test_assemble_sorts_and_defaults():
+    assembled = assemble_trip_plan(
+        {
+            "destination": "X",
             "days": [
-                {
-                    "day": 1,
-                    "title": "Arrival",
-                    "activities": ["Check in", "Walk Gion"],
-                    "notes": ["Jet lag friendly"],
-                    "places": [
-                        {
-                            "name": "Gion",
-                            "coordinates": {"lat": 35.0037, "lng": 135.7788},
-                            "url": "https://example.com/gion",
-                        }
-                    ],
-                }
+                {"day": 2, "title": "", "activities": None},
+                {"day": 1, "title": "One", "activities": ["a"]},
             ],
-            "references": [{"title": "Guide", "url": "https://example.com/guide"}],
         }
     )
-    assert plan["status"] == "displayed"
-    assert plan["destination_coordinates"] == {"lat": 35.0116, "lng": 135.7681}
-    assert plan["budget"] == 800.0
-    assert plan["currency"] == "JPY"
-    assert plan["days"][0]["places"][0]["coordinates"] == {"lat": 35.0037, "lng": 135.7788}
-    assert plan["references"][0]["url"] == "https://example.com/guide"
-
-
-def test_normalize_defaults_optional_fields():
-    plan = normalize_trip_plan(
-        {"destination": "Lisbon", "days": [{"day": 1, "title": "Old town", "activities": ["Tram 28"]}]}
-    )
-    assert plan["budget"] is None
-    assert plan["currency"] == ""
-    assert plan["destination_coordinates"] is None
-    assert plan["days"][0]["coordinates"] is None
-    assert plan["days"][0]["places"] == []
-    assert plan["references"] == []
+    assert [day["day"] for day in assembled["days"]] == [1, 2]
+    assert assembled["days"][0]["title"] == "One"
+    assert assembled["days"][1]["title"] == "Day 2"
+    assert assembled["days"][1]["activities"] == []
 
 
 @pytest.mark.parametrize(
-    "arguments",
+    "name,arguments",
     [
-        {"destination": "", "days": [{"day": 1, "title": "t", "activities": ["a"]}]},
-        {"destination": "X", "days": []},
-        {"destination": "X", "days": [{"day": 1, "title": "", "activities": ["a"]}]},
-        {"destination": "X", "days": [{"day": 1, "title": "t", "activities": []}]},
-        {"destination": "X", "days": [{"day": 1, "title": "t", "activities": ["a"], "coordinates": {"lat": 200, "lng": 0}}]},
-        {"destination": "X", "days": [{"day": 1, "title": "t", "activities": ["a"]}], "budget": -5},
-        {"destination": "X", "days": [{"day": 1, "title": "t", "activities": ["a"]}], "references": [{"title": "bad", "url": "javascript:alert(1)"}]},
-        {"destination": "X", "days": [{"day": 1, "title": "t", "activities": ["a"]}], "references": [{"title": "", "url": "https://example.com"}]},
+        ("start_trip_plan", {"destination": "  "}),
+        ("set_trip_day", {"day": 1, "title": "", "activities": ["a"]}),
+        ("set_trip_day", {"day": 1, "title": "t", "activities": []}),
+        ("set_trip_budget", {"day": 0}),
+        ("remove_trip_day", {"day": 0}),
+        ("set_trip_references", {"references": [{"title": "x", "url": "javascript:alert(1)"}]}),
+        ("not_a_tool", {}),
     ],
 )
-def test_normalize_rejects_invalid_payloads(arguments):
+def test_invalid_arguments_raise(name, arguments):
     with pytest.raises(ValueError):
-        normalize_trip_plan(arguments)
+        apply_trip_plan_tool(name, arguments, None)
 
 
-def test_tool_schema_requires_destination_and_days():
-    parameters = TRIP_PLAN_TOOL["function"]["parameters"]
-    assert TRIP_PLAN_TOOL["function"]["name"] == "display_trip_plan"
-    assert set(parameters["required"]) == {"destination", "days"}
-    assert "references" in parameters["properties"]
-    assert "destination_coordinates" in parameters["properties"]
-    assert "budget_items" in parameters["properties"]
-
-
-def test_budget_items_compute_total_and_carry_currency():
-    plan = normalize_trip_plan(
-        {
-            "destination": "Rome",
-            "currency": "EUR",
-            "days": [{"day": 1, "title": "Arrival", "activities": ["Check in"]}],
-            "budget_items": [
-                {"category": "Accommodation", "amount": 300},
-                {"category": "transport", "amount": 120},
-                {"category": "Accommodation", "amount": 500},  # duplicate category dropped
-            ],
-        }
-    )
-    assert plan["budget"] == 420.0
-    assert [item["category"] for item in plan["budget_items"]] == ["Accommodation", "transport"]
-    assert plan["budget_items"][0]["currency"] == "EUR"
-
-
-def test_budget_items_reject_bad_amounts():
-    with pytest.raises(ValueError):
-        normalize_trip_plan(
-            {
-                "destination": "Rome",
-                "days": [{"day": 1, "title": "Arrival", "activities": ["Check in"]}],
-                "budget_items": [{"category": "Food", "amount": -3}],
-            }
-        )
-
-
-def test_format_plan_context_includes_items_and_total():
+def test_format_plan_context_includes_items_days_and_airport():
     context = format_plan_context(
         {
             "destination": "Rome",
             "currency": "EUR",
             "budget": 420,
             "budget_items": [{"category": "Food", "amount": 120, "currency": "EUR"}],
+            "days": [{"day": 1, "budget": 200}],
+            "airport": {"name": "FCO"},
         }
     )
     assert "Destination: Rome" in context
+    assert "Arrival airport: FCO" in context
     assert "Total budget: EUR 420" in context
+    assert "Day 1 budget: EUR 200" in context
     assert "Budget item Food: EUR 120" in context
     assert format_plan_context(None) == ""
     assert format_plan_context({}) == ""

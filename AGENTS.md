@@ -12,6 +12,21 @@
 - Reuse `shared/prompts.py` for model system prompts; keep trip-planning
   behavior, uncertainty handling, clarification guidance, Markdown formatting,
   and hidden chain-of-thought boundaries consistent across chat and agents.
+- Keep the trip plan as the focal browser UI: a wide panel beside a smaller chat
+  pane, a collapsible sidebar, and a separate Live workflow panel that names the
+  agent currently working and the handover between agents. Keep it theme-aware
+  (light/dark) and responsive, and keep Travel history organized by country.
+- Build the trip plan with several small tools (`start_trip_plan`, `set_trip_day`
+  per day, `set_trip_budget`, `set_trip_references`, `remove_trip_day`,
+  `get_trip_plan`) instead of one large payload, so follow-up edits stay small
+  and the UI renders the plan part by part. Keep the contract consistent: the
+  arrival `airport` is the first point of the map route, each day carries a
+  per-day `budget`, the estimated total is independent of the `budget_items`
+  breakdown, and categories should be concrete rather than a vague "other".
+  Each day card merges its route with its itemized budget so both are viewed and
+  edited together, and the plan offers Overview and Day-by-day views with
+  collapsible days. Validate these fields in `shared/trip_plan.py` and return
+  tool-argument errors as labeled results rather than aborting the turn.
 
 ## Engineering standards
 
@@ -26,12 +41,16 @@
   errors, pending questions, and user selections; never infer durable state
   from display text alone.
 - User questions must be resumable: validate the conversation and selected
-  option server-side, disable duplicate submissions in the UI, preserve a
-  retryable pending state after continuation failures, and mark the question
-  answered only after successful model continuation.
-- Structured UI tools such as `display_trip_plan` must validate their payloads
-  before emitting events. Render structured data in dedicated components rather
-  than relying on model-formatted prose.
+  option server-side, support a custom "Other" free-text answer, disable
+  duplicate submissions in the UI, preserve a retryable pending state after
+  continuation failures, and mark the question answered only after successful
+  model continuation.
+- Structured UI tools (the trip-plan tools in `shared/trip_plan.py` and the
+  agent tools in `agents/chat_tools.py`) must validate their payloads before
+  emitting events. Render structured data in dedicated components rather than
+  relying on model-formatted prose, never derive the estimated budget from the
+  item breakdown, and return tool-argument errors as labeled results so one bad
+  call cannot abort the turn.
 - Keep streaming behavior observable without exposing private chain-of-thought.
   Emit concise lifecycle, tool, retry, and failure events; label local stubs,
   estimates, and unavailable integrations explicitly.
