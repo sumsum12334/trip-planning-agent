@@ -224,3 +224,24 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .app[data-color-mode="dark"] .next-steps-label{color:#9aa6c4}
 .app[data-color-mode="dark"] .next-step-chip{background:#1c2740;border-color:rgba(154,166,196,0.2);color:#cfd8f5}
 .app[data-color-mode="dark"] .next-step-chip:hover{background:#243256;color:#fff;border-color:#5a7cc0}
+
+/* Chat page: use the available viewport width (no centered 1120px cap) */
+.chat-page{max-width:none;padding:28px 32px}
+.chat-page .page-title{margin-bottom:18px}
+.chat-page .page-title h1{font-size:clamp(24px,2.2vw,34px)}
+.chat-page .page-title .muted{max-width:70ch}
+
+/* Balanced panes: chat comfortable, trip plan large */
+.chat-workspace{grid-template-columns:minmax(0,1fr);align-items:start}
+.chat-workspace.has-plan{grid-template-columns:minmax(380px,0.92fr) minmax(520px,1.6fr)}
+
+/* Never clip message content */
+.chat-panel{min-width:0}
+.chat-side{min-width:0}
+.messages{height:clamp(360px,58vh,700px);overflow-wrap:anywhere}
+.messages>*{min-width:0}
+.messages .MuiPaper-root{min-width:0;max-width:100%;overflow-wrap:anywhere}
+.messages table{display:block;max-width:100%;overflow-x:auto}
+.messages pre,.messages code{max-width:100%;overflow-x:auto}
+
+@media(max-width:1150px){.chat-workspace.has-plan{grid-template-columns:minmax(0,1fr)}.chat-side{position:static;max-height:none;overflow:visible}.trip-plan-content{grid-template-columns:1fr}}
