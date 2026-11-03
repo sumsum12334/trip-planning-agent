@@ -18,8 +18,9 @@
 - Keep the `display_trip_plan` contract consistent: the arrival `airport` is the
   first point of the map route, each day carries a per-day `budget`, the
   estimated total `budget` is independent of the `budget_items` breakdown, and
-  budget categories should be concrete rather than a vague "other". Validate
-  these fields in `shared/trip_plan.py`.
+  budget categories should be concrete rather than a vague "other". The budget
+  view toggles between By day and By category, and the Edit action follows the
+  active view. Validate these fields in `shared/trip_plan.py`.
 
 ## Engineering standards
 

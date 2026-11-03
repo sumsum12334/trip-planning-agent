@@ -130,13 +130,18 @@ map link is shown when no coordinates are provided. Payloads are validated in
 `shared/trip_plan.py` before events are emitted, and only `http(s)` reference
 URLs are accepted.
 
-The panel also shows a **per-day estimated budget**, an independent
-**estimated total** (never derived from the item breakdown), the **items total**
-with a note when it differs from the estimate, externally linked references, and
-numbered day/place labels that reference the map markers. It can export the plan
-as a day-by-day Markdown file or a printable PDF report, and the Budget editor
-updates the estimated total, the per-day amounts, and the category items (which
-are expected to use concrete categories rather than a vague "other" bucket).
+The panel also shows an independent **estimated total** (never derived from the
+item breakdown) and a budget view you can switch between **By day** and
+**By category**: the per-day view lists each day's estimate and its own item
+breakdown, and the category view lists the global items with an **items total**
+and a note when it differs from the estimate. It also renders externally linked
+references and numbered day/place labels that reference the map markers. The
+Live workflow panel scrolls to the latest event and names the agent currently
+working. The plan can be exported as a day-by-day Markdown file or a printable
+PDF report. The **Edit** action follows the active budget view: in **By day** it
+edits each day's estimate and item breakdown, and in **By category** it edits the
+category items; both also edit the estimated total. Categories are expected to
+use concrete labels rather than a vague "other" bucket.
 
 Edited budgets are persisted with `PUT /api/conversations/{id}/trip-plan` and
 are sent to the model on the next turn as a `plan_context` block, so the agent

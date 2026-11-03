@@ -39,6 +39,7 @@ def test_update_latest_trip_plan_overwrites_budget(tmp_path):
             "currency": "USD",
             "budget_items": [{"category": "Stay", "amount": 200, "currency": "USD"}],
             "day_budgets": [{"day": 1, "amount": 150}],
+            "day_items": [{"day": 1, "category": "Food", "amount": 60}],
         },
     )
     assert updated is True
@@ -47,6 +48,7 @@ def test_update_latest_trip_plan_overwrites_budget(tmp_path):
     assert result["currency"] == "USD"
     assert result["budget_items"][0]["category"] == "Stay"
     assert result["days"][0]["budget"] == 150
+    assert result["days"][0]["budget_items"][0]["category"] == "Food"
 
 
 def test_update_without_plan_returns_false(tmp_path):

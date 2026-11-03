@@ -311,3 +311,31 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .app[data-color-mode="dark"] .budget-editor-label{color:#c5cee6}
 .app[data-color-mode="dark"] .budget-day-label{color:#aab5d0}
 .app[data-color-mode="dark"] .trip-map-marker.airport span{background:#37b37e}
+
+/* Live workflow scrolls to the latest event */
+.chat-panel>.activity-card .activity-items{max-height:min(42vh,340px);overflow:auto;padding-right:4px;scroll-behavior:smooth}
+
+/* Budget: day/category view toggle + per-day breakdown */
+.budget-view-toggle{display:inline-flex;gap:2px;margin-top:10px;padding:2px;border-radius:999px;background:#eef1f8;border:1px solid #e0e5f0}
+.budget-view-toggle button{padding:4px 12px;border-radius:999px;background:transparent;color:#5f6d8c;font-size:11px;font-weight:700}
+.budget-view-toggle button.active{background:#fff;color:#3b5ecb;box-shadow:0 1px 3px rgba(15,23,42,0.12)}
+.budget-days{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:10px}
+.budget-day-row{display:flex;justify-content:space-between;gap:10px;padding:7px 10px;border-radius:8px;background:#eef4ff;border:1px solid #d9e6fb;font-size:12px;color:#334568;font-weight:700}
+.budget-day-row b{color:#3b5ecb}
+.budget-day-items{list-style:none;margin:6px 0 0;padding:0 0 0 10px;display:grid;gap:4px}
+.budget-day-items li{display:flex;justify-content:space-between;gap:10px;font-size:11px;color:#5f6d8c}
+.budget-day-items b{color:#334568}
+.app[data-color-mode="dark"] .budget-view-toggle{background:#1b2540;border-color:rgba(154,166,196,0.18)}
+.app[data-color-mode="dark"] .budget-view-toggle button{color:#aab5d0}
+.app[data-color-mode="dark"] .budget-view-toggle button.active{background:#2a3a5e;color:#9db8ff}
+.app[data-color-mode="dark"] .budget-day-row{background:#1b2540;border-color:rgba(106,168,255,0.28);color:#dbe3ff}
+.app[data-color-mode="dark"] .budget-day-row b{color:#9db8ff}
+.app[data-color-mode="dark"] .budget-day-items li{color:#9aa6c4}
+.app[data-color-mode="dark"] .budget-day-items b{color:#dbe3ff}
+
+/* Per-day budget editor */
+.budget-days-editor{display:grid;gap:12px;margin-top:8px}
+.budget-day-editor{padding:10px;border:1px solid #e6eefb;border-radius:10px;background:#fbfdff}
+.budget-day-editor-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.budget-day-editor-head .budget-amount{margin-left:auto}
+.app[data-color-mode="dark"] .budget-day-editor{background:#12192c;border-color:rgba(154,166,196,0.14)}

@@ -108,12 +108,22 @@ def test_airport_and_per_day_budget_are_normalized():
         {
             "destination": "Hong Kong",
             "airport": {"name": "Hong Kong International Airport", "coordinates": {"lat": 22.308, "lng": 113.9185}},
-            "days": [{"day": 1, "title": "Arrival", "activities": ["Land"], "budget": 1200}],
+            "days": [
+                {
+                    "day": 1,
+                    "title": "Arrival",
+                    "activities": ["Land"],
+                    "budget": 1200,
+                    "budget_items": [{"category": "Transport", "amount": 200}, {"category": "Food", "amount": 100}],
+                }
+            ],
         }
     )
     assert plan["airport"]["name"] == "Hong Kong International Airport"
     assert plan["airport"]["coordinates"] == {"lat": 22.308, "lng": 113.9185}
     assert plan["days"][0]["budget"] == 1200.0
+    assert [item["category"] for item in plan["days"][0]["budget_items"]] == ["Transport", "Food"]
+    assert plan["days"][0]["budget_items"][0]["currency"] == ""
 
 
 def test_budget_items_reject_bad_amounts():

@@ -80,6 +80,7 @@ class TripPlanUpdate(BaseModel):
     currency: Optional[str] = Field(default=None, max_length=12)
     budget_items: list[dict[str, Any]] = Field(default_factory=list)
     day_budgets: list[dict[str, Any]] = Field(default_factory=list)
+    day_items: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ChatEvent(BaseModel):

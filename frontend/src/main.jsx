@@ -351,17 +351,25 @@ function TripMap({ plan }) {
   </div>;
 }
 
-function BudgetEditor({ plan, currency, onCancel, onSave }) {
+function BudgetEditor({ plan, currency, mode, onCancel, onSave }) {
   const items = planBudgetItems(plan);
   const estimate = plan.budget ?? null;
   const days = plan.days || [];
   const derivedDay = estimate != null && days.length ? Math.round((estimate / days.length) * 100) / 100 : null;
+  const dayMode = mode !== "category";
   const [estimateInput, setEstimateInput] = useState(estimate != null ? String(estimate) : "");
-  const [dayRows, setDayRows] = useState(days.map((day) => ({
-    day: day.day,
-    amount: day.budget != null ? String(day.budget) : (derivedDay != null ? String(derivedDay) : ""),
-  })));
   const [rows, setRows] = useState(items.map((item) => ({ category: item.category, amount: String(item.amount) })));
+  const [dayRows, setDayRows] = useState(days.map((day) => {
+    const dayItems = Array.isArray(day.budget_items) ? day.budget_items : [];
+    const dayItemsTotal = dayItems.length
+      ? Math.round(dayItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) * 100) / 100
+      : null;
+    return {
+      day: day.day,
+      amount: String(day.budget ?? dayItemsTotal ?? derivedDay ?? ""),
+      items: dayItems.map((item) => ({ category: item.category, amount: String(item.amount) })),
+    };
+  }));
   const [error, setError] = useState("");
 
   const sumRows = (list) => Math.round(list.reduce((sum, row) => {
@@ -369,15 +377,26 @@ function BudgetEditor({ plan, currency, onCancel, onSave }) {
     return sum + (Number.isFinite(amount) && amount >= 0 ? amount : 0);
   }, 0) * 100) / 100;
   const itemsTotal = sumRows(rows);
-  const dayTotal = sumRows(dayRows);
 
   function updateRow(index, field, value) {
     setRows((previous) => previous.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
   }
   function addRow() { setRows((previous) => [...previous, { category: "", amount: "" }]); }
   function removeRow(index) { setRows((previous) => previous.filter((_, i) => i !== index)); }
-  function updateDay(index, value) {
+
+  function updateDayAmount(index, value) {
     setDayRows((previous) => previous.map((row, i) => (i === index ? { ...row, amount: value } : row)));
+  }
+  function updateDayItem(dayIndex, itemIndex, field, value) {
+    setDayRows((previous) => previous.map((row, i) => (i === dayIndex
+      ? { ...row, items: row.items.map((item, j) => (j === itemIndex ? { ...item, [field]: value } : item)) }
+      : row)));
+  }
+  function addDayItem(dayIndex) {
+    setDayRows((previous) => previous.map((row, i) => (i === dayIndex ? { ...row, items: [...row.items, { category: "", amount: "" }] } : row)));
+  }
+  function removeDayItem(dayIndex, itemIndex) {
+    setDayRows((previous) => previous.map((row, i) => (i === dayIndex ? { ...row, items: row.items.filter((_, j) => j !== itemIndex) } : row)));
   }
 
   function save() {
@@ -392,42 +411,64 @@ function BudgetEditor({ plan, currency, onCancel, onSave }) {
     const dayBudgets = dayRows
       .map((row) => ({ day: row.day, amount: row.amount.trim() === "" ? null : Number(row.amount) }))
       .filter((row) => row.amount != null && Number.isFinite(row.amount) && row.amount >= 0);
+    const dayItems = [];
+    dayRows.forEach((row) => row.items.forEach((item) => {
+      const category = item.category.trim();
+      const amount = Number(item.amount);
+      if (category && Number.isFinite(amount) && amount >= 0) dayItems.push({ day: row.day, category, amount });
+    }));
     onSave({
       budget: estimateValue,
       currency,
       budget_items: cleanedItems.map((row) => ({ category: row.category, amount: row.amount, currency })),
       day_budgets: dayBudgets,
+      day_items: dayItems,
     });
   }
 
   return <div className="budget-editor">
+    <div className="budget-editor-label">{dayMode ? "Editing: by day" : "Editing: by category"}</div>
     <div className="budget-row">
       <label>Estimated total
         <input className="budget-amount" type="number" min="0" step="any" value={estimateInput} onChange={(event) => setEstimateInput(event.target.value)} />
       </label>
     </div>
-    {dayRows.length > 0 && <>
-      <div className="budget-editor-label">Per-day estimate</div>
-      <ul className="budget-editor-rows">
-        {dayRows.map((row, index) => <li key={row.day}>
-          <span className="budget-day-label">Day {row.day}</span>
-          <input className="budget-amount" type="number" min="0" step="any" placeholder="0" value={row.amount} onChange={(event) => updateDay(index, event.target.value)} />
-        </li>)}
-      </ul>
-      <div className="budget-editor-actions"><span className="budget-editor-total">Per-day total: {formatBudget(dayTotal, currency)}</span></div>
-    </>}
-    <div className="budget-editor-label">Category items</div>
-    <ul className="budget-editor-rows">
-      {rows.map((row, index) => <li key={index}>
-        <input className="budget-category" placeholder="Category" value={row.category} onChange={(event) => updateRow(index, "category", event.target.value)} />
-        <input className="budget-amount" type="number" min="0" step="any" placeholder="0" value={row.amount} onChange={(event) => updateRow(index, "amount", event.target.value)} />
-        <button type="button" className="icon-button danger" title="Remove item" onClick={() => removeRow(index)}>×</button>
-      </li>)}
-    </ul>
-    <div className="budget-editor-actions">
-      <button type="button" className="plan-tool" onClick={addRow}>＋ Item</button>
-      <span className="budget-editor-total">Items total: {formatBudget(itemsTotal, currency)}</span>
-    </div>
+    {dayMode ? (
+      dayRows.length > 0 ? <div className="budget-days-editor">
+        {dayRows.map((row, dayIndex) => <div className="budget-day-editor" key={row.day}>
+          <div className="budget-day-editor-head">
+            <span className="budget-day-label">Day {row.day}</span>
+            <input className="budget-amount" type="number" min="0" step="any" placeholder="0" value={row.amount} onChange={(event) => updateDayAmount(dayIndex, event.target.value)} />
+          </div>
+          <ul className="budget-editor-rows">
+            {row.items.map((item, itemIndex) => <li key={itemIndex}>
+              <input className="budget-category" placeholder="Category" value={item.category} onChange={(event) => updateDayItem(dayIndex, itemIndex, "category", event.target.value)} />
+              <input className="budget-amount" type="number" min="0" step="any" placeholder="0" value={item.amount} onChange={(event) => updateDayItem(dayIndex, itemIndex, "amount", event.target.value)} />
+              <button type="button" className="icon-button danger" title="Remove item" onClick={() => removeDayItem(dayIndex, itemIndex)}>×</button>
+            </li>)}
+          </ul>
+          <div className="budget-editor-actions">
+            <button type="button" className="plan-tool" onClick={() => addDayItem(dayIndex)}>＋ Item</button>
+            <span className="budget-editor-total">Day items: {formatBudget(sumRows(row.items), currency)}</span>
+          </div>
+        </div>)}
+      </div> : <small className="budget-notice">This plan has no days to break down.</small>
+    ) : (
+      <>
+        <div className="budget-editor-label">Category items</div>
+        <ul className="budget-editor-rows">
+          {rows.map((row, index) => <li key={index}>
+            <input className="budget-category" placeholder="Category" value={row.category} onChange={(event) => updateRow(index, "category", event.target.value)} />
+            <input className="budget-amount" type="number" min="0" step="any" placeholder="0" value={row.amount} onChange={(event) => updateRow(index, "amount", event.target.value)} />
+            <button type="button" className="icon-button danger" title="Remove item" onClick={() => removeRow(index)}>×</button>
+          </li>)}
+        </ul>
+        <div className="budget-editor-actions">
+          <button type="button" className="plan-tool" onClick={addRow}>＋ Item</button>
+          <span className="budget-editor-total">Items total: {formatBudget(itemsTotal, currency)}</span>
+        </div>
+      </>
+    )}
     {error && <small className="budget-notice warn">{error}</small>}
     <div className="budget-editor-actions">
       <button type="button" className="plan-tool primary" onClick={save}>Save</button>
@@ -446,15 +487,23 @@ function TripPlanCard({ plan, onSaveBudget }) {
     : null;
   const days = plan.days || [];
   const derivedDay = estimate != null && days.length ? Math.round((estimate / days.length) * 100) / 100 : null;
-  const dayBudgets = days.map((day) => ({
-    day: day.day,
-    amount: day.budget ?? derivedDay,
-    derived: day.budget == null && derivedDay != null,
-  }));
+  const dayBudgets = days.map((day) => {
+    const dayItems = Array.isArray(day.budget_items) ? day.budget_items : [];
+    const dayItemsTotal = dayItems.length
+      ? Math.round(dayItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) * 100) / 100
+      : null;
+    return {
+      day: day.day,
+      amount: day.budget ?? dayItemsTotal ?? derivedDay,
+      derived: day.budget == null && dayItemsTotal == null && derivedDay != null,
+      items: dayItems,
+    };
+  });
   const [editing, setEditing] = useState(false);
   const [notice, setNotice] = useState("");
   const [mapOpen, setMapOpen] = useState(points.length > 0);
   const [showReferences, setShowReferences] = useState(true);
+  const [budgetView, setBudgetView] = useState("day");
 
   function handleSave(payload) {
     onSaveBudget?.(payload);
@@ -510,16 +559,26 @@ function TripPlanCard({ plan, onSaveBudget }) {
         <strong>{estimate == null ? "Not specified" : formatBudget(estimate, currency)}</strong>
         {!editing && <button type="button" className="plan-tool" onClick={() => { setEditing(true); setNotice(""); }}>Edit</button>}
       </div>
-      {!editing && dayBudgets.some((day) => day.amount != null) && <>
-        <div className="budget-subhead">Per-day estimate{dayBudgets.every((day) => day.derived) ? " (split from the total)" : ""}</div>
-        <ul className="budget-items">
-          {dayBudgets.map((day) => <li key={`day-${day.day}`}>
-            <span>Day {day.day}{day.derived ? " (est.)" : ""}</span><b>{day.amount == null ? "—" : formatBudget(day.amount, currency)}</b>
-          </li>)}
-        </ul>
-      </>}
-      {!editing && items.length > 0 && <>
-        <div className="budget-subhead">Category items</div>
+      {!editing && (dayBudgets.length > 0 || items.length > 0) && (
+        <div className="budget-view-toggle" role="tablist" aria-label="Budget view">
+          {dayBudgets.length > 0 && <button type="button" role="tab" aria-selected={budgetView === "day"} className={budgetView === "day" ? "active" : ""} onClick={() => setBudgetView("day")}>By day</button>}
+          {items.length > 0 && <button type="button" role="tab" aria-selected={budgetView === "category"} className={budgetView === "category" ? "active" : ""} onClick={() => setBudgetView("category")}>By category</button>}
+        </div>
+      )}
+      {!editing && budgetView === "day" && dayBudgets.length > 0 && <ul className="budget-days">
+        {dayBudgets.map((entry) => <li key={`day-${entry.day}`}>
+          <div className="budget-day-row">
+            <span>Day {entry.day}{entry.derived ? " (est.)" : ""}</span>
+            <b>{entry.amount == null ? "—" : formatBudget(entry.amount, currency)}</b>
+          </div>
+          {entry.items.length > 0 && <ul className="budget-day-items">
+            {entry.items.map((item, index) => <li key={`${item.category}-${index}`}>
+              <span>{item.category}</span><b>{formatBudget(item.amount, item.currency || currency)}</b>
+            </li>)}
+          </ul>}
+        </li>)}
+      </ul>}
+      {!editing && budgetView === "category" && items.length > 0 && <>
         <ul className="budget-items">
           {items.map((item, index) => <li key={`${item.category}-${index}`}>
             <span>{item.category}</span><b>{formatBudget(item.amount, item.currency || currency)}</b>
@@ -532,7 +591,7 @@ function TripPlanCard({ plan, onSaveBudget }) {
           <small className="budget-notice warn">Items total {formatBudget(itemsTotal, currency)} differs from the estimated budget {formatBudget(estimate, currency)}.</small>
         )}
       </>}
-      {editing && <BudgetEditor plan={plan} currency={currency} onCancel={() => setEditing(false)} onSave={handleSave} />}
+      {editing && <BudgetEditor plan={plan} currency={currency} mode={budgetView} onCancel={() => setEditing(false)} onSave={handleSave} />}
       {notice && <small className="budget-notice">{notice}</small>}
     </div>
     {plan.notes?.length > 0 && <small className="trip-notes">{plan.notes.join(" · ")}</small>}
@@ -570,20 +629,22 @@ function currentAgent(events) {
 
 function Activity({ events }) {
   if (!events.length) return null;
-  const activityRef = useRef(null);
-  useEffect(() => {
-    if (activityRef.current) activityRef.current.scrollTop = activityRef.current.scrollHeight;
-  }, [events.length]);
+  const itemsRef = useRef(null);
+  const scrollToLatest = () => {
+    const element = itemsRef.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  };
+  useEffect(scrollToLatest, [events.length]);
   const working = currentAgent(events);
   return (
-    <details className="activity-card" ref={activityRef}>
+    <details className="activity-card" onToggle={(event) => { if (event.currentTarget.open) scrollToLatest(); }}>
       <summary className="activity-heading">
         <span>◈</span>
         <strong>Live workflow</strong>
         <span className={`agent-chip ${working ? "working" : "idle"}`}>{working ? `▶ ${working}` : "Idle"}</span>
         <small>{events.length} events</small>
       </summary>
-      <div className="activity-items">
+      <div className="activity-items" ref={itemsRef}>
         {events.map((event, index) => (
           <div className={`event ${event.status}`} key={`${event.label}-${index}`}>
             <span className="event-icon">{eventIcon(event)}</span>
@@ -939,10 +1000,23 @@ function ChatPage({ current, setCurrent, conversations, loadConversations, userI
     setCurrent((previous) => {
       const target = planFromEvents(previous.events);
       if (!target) return previous;
+      const result = target.data.result;
+      const dayBudgetMap = new Map((payload.day_budgets || []).map((entry) => [entry.day, entry.amount]));
+      const dayItemMap = new Map();
+      (payload.day_items || []).forEach((entry) => {
+        const list = dayItemMap.get(entry.day) || [];
+        list.push({ category: entry.category, amount: entry.amount, currency: payload.currency || result.currency || "" });
+        dayItemMap.set(entry.day, list);
+      });
+      const days = (result.days || []).map((day) => ({
+        ...day,
+        budget: dayBudgetMap.has(day.day) ? dayBudgetMap.get(day.day) : day.budget,
+        budget_items: dayItemMap.has(day.day) ? dayItemMap.get(day.day) : day.budget_items,
+      }));
       return {
         ...previous,
         events: previous.events.map((event) => event === target
-          ? { ...event, data: { ...event.data, result: { ...event.data.result, ...payload } } }
+          ? { ...event, data: { ...event.data, result: { ...result, ...payload, days } } }
           : event),
       };
     });

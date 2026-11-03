@@ -792,6 +792,22 @@ def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
                 status_code=422, detail="Each day budget needs a non-negative amount."
             )
         day_budgets.append({"day": int(day), "amount": float(amount)})
+    day_items: list[dict[str, Any]] = []
+    for item in request.day_items[:120]:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=422, detail="Each day item must be an object.")
+        day = item.get("day")
+        category = str(item.get("category", "")).strip()
+        amount = item.get("amount")
+        if isinstance(day, bool) or not isinstance(day, (int, float)) or day < 1:
+            raise HTTPException(status_code=422, detail="Each day item needs a day number.")
+        if not category:
+            raise HTTPException(status_code=422, detail="Each day item needs a category.")
+        if isinstance(amount, bool) or not isinstance(amount, (int, float)) or amount < 0:
+            raise HTTPException(
+                status_code=422, detail="Each day item needs a non-negative amount."
+            )
+        day_items.append({"day": int(day), "category": category, "amount": float(amount)})
     updated = ConversationStore(get_settings().database_url).update_latest_trip_plan(
         conversation_id,
         {
@@ -799,6 +815,7 @@ def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
             "currency": currency,
             "budget_items": budget_items,
             "day_budgets": day_budgets,
+            "day_items": day_items,
         },
     )
     if not updated:
@@ -811,6 +828,7 @@ def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
         "currency": currency,
         "budget_items": budget_items,
         "day_budgets": day_budgets,
+        "day_items": day_items,
     }
 
 

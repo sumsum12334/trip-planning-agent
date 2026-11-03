@@ -227,6 +227,7 @@ class ConversationStore:
                     if updates.get("currency") is not None:
                         result["currency"] = updates["currency"]
                     result["budget_items"] = updates.get("budget_items", [])
+                    currency = updates.get("currency") or ""
                     day_budgets = {
                         int(item["day"]): item.get("amount")
                         for item in updates.get("day_budgets", [])
@@ -234,9 +235,27 @@ class ConversationStore:
                         and isinstance(item.get("day"), (int, float))
                         and not isinstance(item.get("day"), bool)
                     }
+                    day_items: dict[int, list[dict[str, Any]]] = {}
+                    for item in updates.get("day_items", []):
+                        if (
+                            isinstance(item, dict)
+                            and isinstance(item.get("day"), (int, float))
+                            and not isinstance(item.get("day"), bool)
+                        ):
+                            day_items.setdefault(int(item["day"]), []).append(
+                                {
+                                    "category": str(item.get("category", "")).strip(),
+                                    "amount": item.get("amount"),
+                                    "currency": currency,
+                                }
+                            )
                     for day in result.get("days", []):
-                        if isinstance(day, dict) and day.get("day") in day_budgets:
+                        if not isinstance(day, dict):
+                            continue
+                        if day.get("day") in day_budgets:
                             day["budget"] = day_budgets[day["day"]]
+                        if day.get("day") in day_items:
+                            day["budget_items"] = day_items[day["day"]]
                     event["data"] = data
                     connection.execute(
                         "UPDATE conversations SET events = ?, updated_at = ? WHERE id = ?",

@@ -51,6 +51,25 @@ _AIRPORT_SCHEMA = {
     "required": ["name"],
 }
 
+_BUDGET_ITEMS_SCHEMA = {
+    "type": "array",
+    "description": (
+        "Per-category budget breakdown. Use concrete categories "
+        "(accommodation, transport, food, activities, entrance fees, shopping, "
+        "buffer). Avoid a vague 'other' bucket unless the amount is genuinely "
+        "small and miscellaneous."
+    ),
+    "items": {
+        "type": "object",
+        "properties": {
+            "category": {"type": "string", "description": "A concrete spending category."},
+            "amount": {"type": "number", "minimum": 0},
+        },
+        "required": ["category", "amount"],
+    },
+    "maxItems": MAX_BUDGET_ITEMS,
+}
+
 TRIP_PLAN_TOOL: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -79,6 +98,7 @@ TRIP_PLAN_TOOL: dict[str, Any] = {
                             "coordinates": _COORDINATE_SCHEMA,
                             "places": {"type": "array", "items": _PLACE_SCHEMA},
                             "budget": {"type": "number", "minimum": 0, "description": "Estimated cost for this day."},
+                            "budget_items": _BUDGET_ITEMS_SCHEMA,
                         },
                         "required": ["day", "title", "activities"],
                     },
@@ -87,24 +107,7 @@ TRIP_PLAN_TOOL: dict[str, Any] = {
                 },
                 "budget": {"type": "number", "description": "Estimated total budget (independent of budget_items)."},
                 "currency": {"type": "string", "description": "Currency code or symbol for the budget."},
-                "budget_items": {
-                    "type": "array",
-                    "description": (
-                        "Per-category budget breakdown. Use concrete categories "
-                        "(accommodation, transport, food, activities, entrance fees, "
-                        "shopping, buffer). Avoid a vague 'other' bucket unless it is a "
-                        "genuinely small miscellaneous amount."
-                    ),
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "category": {"type": "string", "description": "A concrete spending category."},
-                            "amount": {"type": "number", "minimum": 0},
-                        },
-                        "required": ["category", "amount"],
-                    },
-                    "maxItems": MAX_BUDGET_ITEMS,
-                },
+                "budget_items": _BUDGET_ITEMS_SCHEMA,
                 "notes": {"type": "array", "items": {"type": "string"}},
                 "references": {
                     "type": "array",
@@ -276,6 +279,7 @@ def normalize_trip_plan(arguments: dict[str, Any]) -> dict[str, Any]:
             "display_trip_plan requires a destination and one to fourteen days."
         )
 
+    currency = str(arguments.get("currency", "")).strip()[:MAX_CURRENCY_CHARS]
     normalized_days: list[dict[str, Any]] = []
     for item in days:
         if not isinstance(item, dict):
@@ -298,10 +302,12 @@ def normalize_trip_plan(arguments: dict[str, Any]) -> dict[str, Any]:
                 "budget": _optional_number(
                     item.get("budget"), field=f"Day {day_number} budget"
                 ),
+                "budget_items": _budget_items(
+                    item.get("budget_items"), currency=currency
+                ),
             }
         )
 
-    currency = str(arguments.get("currency", "")).strip()[:MAX_CURRENCY_CHARS]
     budget_items = _budget_items(arguments.get("budget_items"), currency=currency)
 
     return {
