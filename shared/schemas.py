@@ -40,6 +40,19 @@ class TransportLeg(BaseModel):
     duration_minutes: Optional[float] = None
     cost: Optional[float] = None
     source_url: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class EstimateTransportRequest(BaseModel):
+    """Direct Agent 2 call: places plus optional trip context for stub matching."""
+
+    from_place: str = Field(min_length=1)
+    to_place: str = Field(min_length=1)
+    destination: Optional[str] = None
+    origin: Optional[str] = None
+    days: Optional[int] = Field(default=None, ge=1)
+    budget: Optional[float] = Field(default=None, ge=0)
+    interests: list[str] = Field(default_factory=list)
 
 
 class DayPlan(BaseModel):
