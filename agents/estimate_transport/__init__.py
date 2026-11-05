@@ -1,5 +1,5 @@
 """Agent package: estimate_transport."""
 
-from .agent import run
+from .agent import health, run
 
-__all__ = ["run"]
+__all__ = ["run", "health"]

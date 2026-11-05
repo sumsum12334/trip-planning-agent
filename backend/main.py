@@ -35,6 +35,8 @@ from shared.schemas import (
     ChatEvent,
     ChatStopRequest,
     StayCandidate,
+    TransportLeg,
+    EstimateTransportRequest,
     ChatRequest,
     ChatResponse,
     ConversationResponse,
@@ -143,6 +145,24 @@ def agent_search_stays(request: TripRequest) -> list[StayCandidate]:
     from agents.search_stays.agent import run as search_stays_run
 
     return search_stays_run(request)
+
+
+@app.post("/agents/estimate_transport", response_model=TransportLeg)
+def agent_estimate_transport(body: EstimateTransportRequest) -> TransportLeg:
+    """Direct Agent 2 transport estimate (stub catalog or configured maps API)."""
+    from agents.estimate_transport.agent import run as estimate_transport_run
+
+    destination = body.destination or body.to_place
+    request = TripRequest(
+        destination=destination,
+        origin=body.origin,
+        days=body.days,
+        budget=body.budget,
+        interests=body.interests,
+    )
+    return estimate_transport_run(request, body.from_place, body.to_place)
+
+
 
 
 
