@@ -98,6 +98,25 @@ def score_transport(leg: TransportLeg | None, expect: dict[str, Any]) -> dict[st
     if same_place:
         checks["walk_mode"] = _norm(leg.mode) == "walk"
         checks["zero_cost"] = (leg.cost or 0) == 0
+
+    # City-consistency is reported when requested but does not fail the case
+    # on its own: the stub can still match another city's catalog row.
+    forbidden_modes = {_norm(mode) for mode in expect.get("forbidden_modes") or []}
+    notes_forbid = [_norm(token) for token in expect.get("transport_notes_forbid") or []]
+    city_consistent = True
+    if forbidden_modes:
+        city_consistent = _norm(leg.mode) not in forbidden_modes
+    if notes_forbid:
+        notes = _norm(leg.notes or "")
+        city_consistent = city_consistent and not any(token in notes for token in notes_forbid)
+    if expect.get("transport_city_consistent"):
+        checks["city_consistent"] = city_consistent
+
+    hard_checks = {
+        key: value
+        for key, value in checks.items()
+        if key != "city_consistent"
+    }
     return {
         "present": True,
         "mode": leg.mode,
@@ -107,8 +126,37 @@ def score_transport(leg: TransportLeg | None, expect: dict[str, Any]) -> dict[st
         "to_place": leg.to_place,
         "notes": leg.notes,
         "checks": checks,
-        "pass": all(checks.values()),
+        "pass": all(hard_checks.values()),
     }
+
+
+
+INFORMATIONAL_CHECKS = {
+    "day_coverage",
+    "budget_revise",
+    "city_level_keeps_stays",
+    "transport_city_consistent",
+    "fail_closed",
+    "cost_scale_ok",
+}
+
+
+def cost_scale_warnings(
+    leg: TransportLeg | None,
+    stays: list[StayCandidate],
+    request: TripRequest,
+) -> list[str]:
+    """Flag when transport cost is on a different scale from the stay budget."""
+    warnings: list[str] = []
+    if leg is None or leg.cost is None:
+        return warnings
+    if request.budget is not None and leg.cost > request.budget + 1e-6:
+        warnings.append("transport_cost_exceeds_budget")
+    if stays and request.days:
+        stay_cost = (stays[0].nightly_cost or 0) * request.days
+        if stay_cost > 0 and leg.cost > 5 * stay_cost:
+            warnings.append("transport_cost_dwarfs_stay_cost")
+    return warnings
 
 
 def score_itinerary(
@@ -144,19 +192,34 @@ def score_itinerary(
         budget_ok = total <= request.budget + 1e-6
 
     expect_revise = bool(expect.get("expect_revise"))
+    ignore_total = bool(expect.get("ignore_total_budget")) or expect_revise
     checks = {
         "agent1_stays": stay_score["pass"],
         "agent2_transport": transport_score["pass"],
-        "budget_total": budget_ok if not expect_revise else None,
+        "budget_total": budget_ok if not ignore_total else None,
         "day_coverage": day_check,
         "budget_revise": budget_ok if expect_revise else None,
     }
-    # Day coverage and budget_revise are reported (Agent 3 currently emits one
-    # day and has no revise loop) but do not fail the case on their own.
+    if expect.get("city_level_history"):
+        tokens = [_norm(t) for t in expect.get("stay_location_contains") or []]
+        checks["city_level_keeps_stays"] = any(
+            _location_ok(stay, tokens, allow_generic=False) for stay in stays
+        )
+    if expect.get("transport_city_consistent"):
+        checks["transport_city_consistent"] = (transport_score.get("checks") or {}).get(
+            "city_consistent"
+        )
+    if expect.get("expect_fail_closed"):
+        checks["fail_closed"] = not stays and not transports
+    warnings = cost_scale_warnings(transports[0] if transports else None, stays, request)
+    if expect.get("cost_scale_check"):
+        checks["cost_scale_ok"] = not warnings
+    # Informational checks are reported (Agent 3 day/revise gaps, matcher and
+    # stub-catalog issues) but do not fail the case on their own.
     applicable = {
         key: value
         for key, value in checks.items()
-        if value is not None and key not in {"day_coverage", "budget_revise"}
+        if value is not None and key not in INFORMATIONAL_CHECKS
     }
     return {
         "day_count": day_count,
@@ -165,6 +228,7 @@ def score_itinerary(
         "budget": request.budget,
         "used_travel_history": itinerary.used_travel_history,
         "notes": list(itinerary.notes or []),
+        "warnings": warnings,
         "stays": stay_score,
         "transport": transport_score,
         "checks": checks,

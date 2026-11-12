@@ -79,12 +79,34 @@ def run_variant(
 ) -> dict[str, Any]:
     enable_history = variant == "proposed"
     _set_runtime(enable_travel_history=enable_history, database_url=database_url)
-    request = TripRequest.model_validate(case["request"])
-    history_places = _seed_history(database_url, request.user_id or "eval-user", case.get("history") or [])
+    expect = case.get("expect") or {}
+    expect_error = bool(expect.get("expect_error"))
 
     started = time.perf_counter()
     error = None
     itinerary = None
+    try:
+        request = TripRequest.model_validate(case["request"])
+    except Exception as exc:
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+        passed = expect_error
+        return {
+            "variant": variant,
+            "enable_travel_history": enable_history,
+            "elapsed_ms": elapsed_ms,
+            "error": f"{type(exc).__name__}: {exc}",
+            "history_places": [],
+            "agent1": {"pass": passed, "checks": {"expect_error": passed}, "stay_count": 0, "stay_locations": []},
+            "agent2": {"pass": passed, "checks": {"expect_error": passed}},
+            "plan": {
+                "pass": passed,
+                "checks": {"expect_error": passed, "fail_closed": True},
+                "warnings": [],
+            },
+            "pass": passed,
+        }
+
+    history_places = _seed_history(database_url, request.user_id or "eval-user", case.get("history") or [])
     try:
         itinerary = coordinator_run(request, session_id=f"eval-{case['id']}-{variant}")
     except Exception as exc:  # pragma: no cover - surfaced in the report
@@ -96,7 +118,6 @@ def run_variant(
     from_place, to_place = _first_transport_from_expect(case, request)
     transport = estimate_transport_run(request, from_place, to_place)
 
-    expect = case.get("expect") or {}
     apply_filter = bool(expect.get("history_avoidance")) and enable_history and request.avoid_visited
     agent1 = score_stays(
         stays,
@@ -116,7 +137,10 @@ def run_variant(
             apply_history_filter=apply_filter,
         )
 
-    passed = error is None and agent1["pass"] and agent2["pass"] and (plan["pass"] if plan else False)
+    if expect_error:
+        passed = error is not None
+    else:
+        passed = error is None and agent1["pass"] and agent2["pass"] and (plan["pass"] if plan else False)
     return {
         "variant": variant,
         "enable_travel_history": enable_history,
@@ -374,7 +398,10 @@ def print_summary(report: dict[str, Any], json_path: Path, csv_path: Path) -> No
             f"{str(days) + '/' + str(expected):<12} "
             f"{_fmt_bool(extra):<10}"
         )
-        if not case["pass"] or revise is False:
+        plan_checks = (case.get("variants") or {}).get("proposed", {}).get("plan", {}) or {}
+        info_flags = plan_checks.get("checks") or {}
+        warnings = plan_checks.get("warnings") or []
+        if not case["pass"] or revise is False or info_flags.get("city_level_keeps_stays") is False or info_flags.get("transport_city_consistent") is False or info_flags.get("fail_closed") is False or info_flags.get("cost_scale_ok") is False:
             reasons = []
             if baseline.get("error"):
                 reasons.append(f"baseline error: {baseline['error']}")
@@ -388,6 +415,14 @@ def print_summary(report: dict[str, Any], json_path: Path, csv_path: Path) -> No
                     reasons.append(f"{name}: {', '.join(failed)}")
             if contrast and not contrast["pass"]:
                 reasons.append(contrast["detail"])
+            if info_flags.get("city_level_keeps_stays") is False:
+                reasons.append("known gap: city-level history dropped destination stays")
+            if info_flags.get("transport_city_consistent") is False:
+                reasons.append("known gap: transport matched another city's catalog")
+            if info_flags.get("fail_closed") is False:
+                reasons.append("known gap: invalid request did not fail closed")
+            if info_flags.get("cost_scale_ok") is False and warnings:
+                reasons.append("cost-scale warning: " + ", ".join(warnings))
             if reasons:
                 print("    " + " | ".join(reasons))
     print()

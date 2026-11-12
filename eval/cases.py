@@ -26,6 +26,16 @@ class CaseExpect(TypedDict, total=False):
     transport_same_place: bool
     transport_from: str
     transport_to: str
+    no_false_history_exclusion: bool
+    expect_revise: bool
+    expect_error: bool
+    expect_fail_closed: bool
+    city_level_history: bool
+    transport_city_consistent: bool
+    forbidden_modes: list[str]
+    transport_notes_forbid: list[str]
+    ignore_total_budget: bool
+    cost_scale_check: bool
 
 
 class EvalCase(TypedDict, total=False):
@@ -347,6 +357,150 @@ CASES: list[EvalCase] = [
             "history_avoidance": False,
             "allow_generic_fallback": False,
             "expect_revise": True,
+        },
+    },
+    {
+        "id": "tokyo_history_alias_shibuya",
+        "description": "History is the lowercase alias 'shibuya'; Proposed should still drop Shibuya stays.",
+        "request": {
+            "destination": "Tokyo",
+            "origin": "Tokyo Shinjuku",
+            "days": 4,
+            "budget": 400,
+            "interests": ["food"],
+            "avoid_visited": True,
+            "user_id": "eval-tokyo-history-alias",
+        },
+        "history": [
+            {"location": "shibuya", "city": "Tokyo", "country": "Japan"},
+        ],
+        "expect": {
+            "min_stays": 1,
+            "stay_location_contains": ["tokyo"],
+            "nightly_cost_within_budget": True,
+            "transport_required": True,
+            "expected_days": 4,
+            "history_avoidance": True,
+            "allow_generic_fallback": False,
+        },
+    },
+    {
+        "id": "tokyo_history_city_too_broad",
+        "description": "History location is just 'Tokyo'. A city-level visit should not exclude every Tokyo stay. Known matcher gap: substring overlap currently drops the whole catalog.",
+        "request": {
+            "destination": "Tokyo",
+            "origin": "Tokyo Shinjuku",
+            "days": 4,
+            "budget": 800,
+            "interests": [],
+            "avoid_visited": True,
+            "user_id": "eval-tokyo-city-history",
+        },
+        "history": [
+            {"location": "Tokyo", "city": "Tokyo", "country": "Japan"},
+        ],
+        "expect": {
+            "min_stays": 0,
+            "stay_location_contains": ["tokyo"],
+            "nightly_cost_within_budget": True,
+            "transport_required": True,
+            "expected_days": 4,
+            "history_avoidance": False,
+            "allow_generic_fallback": True,
+            "city_level_history": True,
+        },
+    },
+    {
+        "id": "paris_airport_not_hk_catalog",
+        "description": "Paris Charles de Gaulle to the Eiffel Tower must not reuse the Hong Kong Airport Express catalog row. Known stub gap: the 'airport' token can match HK.",
+        "request": {
+            "destination": "Paris",
+            "origin": "Paris Charles de Gaulle Airport",
+            "days": 3,
+            "budget": 400,
+            "interests": [],
+            "avoid_visited": False,
+            "user_id": "eval-paris-airport",
+        },
+        "history": [],
+        "expect": {
+            "min_stays": 0,
+            "nightly_cost_within_budget": True,
+            "transport_required": True,
+            "transport_from": "Paris Charles de Gaulle Airport",
+            "transport_to": "Paris Eiffel Tower",
+            "expected_days": 3,
+            "history_avoidance": False,
+            "allow_generic_fallback": True,
+            "transport_city_consistent": True,
+            "forbidden_modes": ["airport_express"],
+            "transport_notes_forbid": ["hong kong"],
+        },
+    },
+    {
+        "id": "empty_destination_fail_closed",
+        "description": "An empty destination should fail closed instead of silently returning generic stays. Known gap: the stub currently falls back to the generic catalog.",
+        "request": {
+            "destination": "",
+            "origin": "",
+            "days": 3,
+            "budget": 300,
+            "interests": [],
+            "avoid_visited": False,
+            "user_id": "eval-empty-destination",
+        },
+        "history": [],
+        "expect": {
+            "min_stays": 0,
+            "transport_required": False,
+            "expected_days": 3,
+            "history_avoidance": False,
+            "allow_generic_fallback": True,
+            "expect_fail_closed": True,
+        },
+    },
+    {
+        "id": "invalid_days_zero",
+        "description": "days=0 is invalid and should fail closed at request validation.",
+        "request": {
+            "destination": "Tokyo",
+            "origin": "Tokyo Shinjuku",
+            "days": 0,
+            "budget": 300,
+            "interests": [],
+            "avoid_visited": False,
+            "user_id": "eval-days-zero",
+        },
+        "history": [],
+        "expect": {
+            "expect_error": True,
+        },
+    },
+    {
+        "id": "tokyo_airport_cost_scale",
+        "description": "Narita airport-train stub costs 3200 against a 400 stay budget; records a cost-scale warning without failing the case.",
+        "request": {
+            "destination": "Tokyo",
+            "origin": "Tokyo Narita Airport",
+            "days": 4,
+            "budget": 400,
+            "interests": [],
+            "avoid_visited": False,
+            "user_id": "eval-tokyo-cost-scale",
+        },
+        "history": [],
+        "expect": {
+            "min_stays": 1,
+            "stay_location_contains": ["tokyo"],
+            "nightly_cost_within_budget": True,
+            "transport_required": True,
+            "transport_from": "Tokyo Narita Airport",
+            "transport_to": "Tokyo Shibuya",
+            "expected_days": 4,
+            "history_avoidance": False,
+            "allow_generic_fallback": False,
+            "ignore_total_budget": True,
+            "cost_scale_check": True,
         },
     },
 ]

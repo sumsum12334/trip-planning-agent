@@ -66,3 +66,18 @@ Append a dict to `CASES` in `cases.py` with:
 
   This is **not** live model routing accuracy; that still needs a configured
   Qwen / TACC endpoint.
+
+- History alias / case folding (`tokyo_history_alias_shibuya`): a lowercase
+  `shibuya` seed should still be avoided by Proposed.
+- City-level history (`tokyo_history_city_too_broad`): a visit recorded only as
+  `Tokyo` should not drop every Tokyo stay. The current substring matcher does,
+  so the report records `city_level_keeps_stays` without failing the case.
+- Cross-city transport (`paris_airport_not_hk_catalog`): Paris Charles de Gaulle
+  must not reuse the Hong Kong Airport Express row. The stub can match on the
+  token `airport`; this is recorded as `transport_city_consistent`.
+- Invalid requests: `invalid_days_zero` must fail closed at validation.
+  `empty_destination_fail_closed` records that the stub currently returns
+  generic stays instead of erroring.
+- Cost-scale warning (`tokyo_airport_cost_scale`): Narita train cost 3200 vs a
+  400 stay budget is flagged, but does not fail the case.
+- Determinism is checked in `tests/test_eval_runner.py` (same stub case twice).
