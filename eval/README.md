@@ -48,3 +48,21 @@ Append a dict to `CASES` in `cases.py` with:
 - `history`: optional visited places to seed for that `user_id`
 - `expect`: `min_stays`, `stay_location_contains`, `nightly_cost_within_budget`,
   `transport_required`, `expected_days`, `history_avoidance`
+
+
+## Added coverage
+
+- More history cases: multiple visited places, and an unrelated-history control
+  (Tokyo trip should not drop stays just because Hong Kong was visited).
+- Over-budget transport (`hk_over_budget_transport`): records whether the
+  coordinator revises an itinerary that exceeds the total budget. This is a
+  **known Agent 3 gap** today (no revise loop) and does not fail the suite alone.
+- Gold tool-call cases (`eval/tool_cases.py`): execute the chat tool layer with
+  the arguments a model should pass. Run with the default suite, or:
+
+  ```powershell
+  .\.venv\Scripts\python.exe -m eval.runner --tools-only
+  ```
+
+  This is **not** live model routing accuracy; that still needs a configured
+  Qwen / TACC endpoint.

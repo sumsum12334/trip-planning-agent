@@ -4,6 +4,7 @@ Usage (from the repo root, with the project venv):
 
     .venv/Scripts/python.exe -m eval.runner
     .venv/Scripts/python.exe -m eval.runner --case tokyo_history_avoid_shibuya
+    .venv/Scripts/python.exe -m eval.runner --tools-only
 
 Writes JSON + CSV under eval/results/ and prints a summary table.
 The runner uses an isolated SQLite file so it does not touch your .env database.
@@ -27,7 +28,9 @@ from agents.coordinator.agent import run as coordinator_run
 from agents.travel_history.agent import TravelHistoryStore
 from config import settings as settings_mod
 from eval.cases import CASES, EvalCase
-from eval.metrics import score_itinerary, score_stays, score_transport, stay_overlaps_history
+from eval.metrics import score_itinerary, score_stays, score_transport
+from eval.tool_cases import TOOL_CASES
+from eval.tool_metrics import score_tool_calls
 from shared.schemas import TripRequest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -138,7 +141,6 @@ def _history_contrast(case: EvalCase, results: dict[str, Any]) -> dict[str, Any]
     history = results["proposed"].get("history_places") or []
     baseline_overlap = baseline_stays.get("overlapping_history") or []
     proposed_overlap = proposed_stays.get("overlapping_history") or []
-    # Fallback: if plan stays were empty lists after filtering, also inspect agent1.
     if not baseline_overlap:
         baseline_overlap = results["baseline_a"]["agent1"].get("overlapping_history") or []
     if not proposed_overlap:
@@ -164,6 +166,7 @@ def run_case(case: EvalCase, database_url: str) -> dict[str, Any]:
     if contrast is not None:
         passed = passed and contrast["pass"]
     return {
+        "kind": "plan",
         "id": case["id"],
         "description": case.get("description"),
         "request": case["request"],
@@ -173,29 +176,77 @@ def run_case(case: EvalCase, database_url: str) -> dict[str, Any]:
     }
 
 
-def run_suite(case_ids: list[str] | None = None) -> dict[str, Any]:
-    selected = [case for case in CASES if not case_ids or case["id"] in case_ids]
-    missing = [cid for cid in (case_ids or []) if cid not in {c["id"] for c in CASES}]
+def run_tool_case(case: dict[str, Any]) -> dict[str, Any]:
+    started = time.perf_counter()
+    scored = score_tool_calls(list(case.get("gold_calls") or []))
+    elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+    return {
+        "kind": "tools",
+        "id": case["id"],
+        "description": case.get("description"),
+        "message": case.get("message"),
+        "elapsed_ms": elapsed_ms,
+        "tools": scored,
+        "pass": scored["pass"],
+    }
+
+
+def run_suite(
+    case_ids: list[str] | None = None,
+    *,
+    include_plan: bool = True,
+    include_tools: bool = True,
+) -> dict[str, Any]:
+    known_ids = {c["id"] for c in CASES} | {c["id"] for c in TOOL_CASES}
+    missing = [cid for cid in (case_ids or []) if cid not in known_ids]
     if missing:
         raise SystemExit(f"Unknown case id(s): {', '.join(missing)}")
 
+    plan_selected = [
+        case
+        for case in CASES
+        if include_plan and (not case_ids or case["id"] in case_ids)
+    ]
+    tool_selected = [
+        case
+        for case in TOOL_CASES
+        if include_tools and (not case_ids or case["id"] in case_ids)
+    ]
+
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    started = time.perf_counter()
+    cases: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="trip-eval-") as tmp:
         database_url = "sqlite:///" + str(Path(tmp) / "travel_history.sqlite")
-        started = time.perf_counter()
-        cases = [run_case(case, database_url) for case in selected]
-        elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+        _set_runtime(enable_travel_history=True, database_url=database_url)
+        cases.extend(run_case(case, database_url) for case in plan_selected)
+        cases.extend(run_tool_case(case) for case in tool_selected)
+    elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
 
-    passed = sum(1 for case in cases if case["pass"])
-    contrast_cases = [case for case in cases if case.get("history_contrast") is not None]
+    plan_cases = [case for case in cases if case.get("kind") == "plan"]
+    tool_cases = [case for case in cases if case.get("kind") == "tools"]
+    contrast_cases = [case for case in plan_cases if case.get("history_contrast") is not None]
+    latencies = [
+        variant["elapsed_ms"]
+        for case in plan_cases
+        for variant in (case.get("variants") or {}).values()
+        if variant.get("elapsed_ms") is not None
+    ]
     report = {
         "generated_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
         "case_count": len(cases),
-        "passed": passed,
-        "failed": len(cases) - passed,
+        "passed": sum(1 for case in cases if case["pass"]),
+        "failed": sum(1 for case in cases if not case["pass"]),
         "elapsed_ms": elapsed_ms,
         "history_contrast_pass": sum(1 for case in contrast_cases if case["history_contrast"]["pass"]),
         "history_contrast_total": len(contrast_cases),
+        "tool_pass": sum(1 for case in tool_cases if case["pass"]),
+        "tool_total": len(tool_cases),
+        "latency_ms": {
+            "plan_runs": len(latencies),
+            "mean": round(sum(latencies) / len(latencies), 1) if latencies else None,
+            "max": max(latencies) if latencies else None,
+        },
         "cases": cases,
     }
     return report
@@ -210,6 +261,31 @@ def _write_outputs(report: dict[str, Any], out_dir: Path) -> tuple[Path, Path]:
 
     rows: list[dict[str, Any]] = []
     for case in report["cases"]:
+        if case.get("kind") == "tools":
+            rows.append(
+                {
+                    "case_id": case["id"],
+                    "kind": "tools",
+                    "variant": "",
+                    "pass": case["pass"],
+                    "elapsed_ms": case.get("elapsed_ms"),
+                    "error": "",
+                    "agent1_pass": "",
+                    "agent2_pass": "",
+                    "plan_pass": "",
+                    "day_count": "",
+                    "expected_days": "",
+                    "total_estimated_cost": "",
+                    "budget": "",
+                    "stay_names": "",
+                    "transport_mode": "",
+                    "history_contrast_pass": "",
+                    "tool_names": "; ".join(
+                        call["name"] for call in (case.get("tools") or {}).get("calls") or []
+                    ),
+                }
+            )
+            continue
         contrast = case.get("history_contrast") or {}
         for name in VARIANTS:
             variant = case["variants"][name]
@@ -219,6 +295,7 @@ def _write_outputs(report: dict[str, Any], out_dir: Path) -> tuple[Path, Path]:
             rows.append(
                 {
                     "case_id": case["id"],
+                    "kind": "plan",
                     "variant": name,
                     "pass": variant["pass"],
                     "elapsed_ms": variant["elapsed_ms"],
@@ -233,6 +310,7 @@ def _write_outputs(report: dict[str, Any], out_dir: Path) -> tuple[Path, Path]:
                     "stay_names": "; ".join(stays.get("stay_names") or []),
                     "transport_mode": transport.get("mode"),
                     "history_contrast_pass": contrast.get("pass", ""),
+                    "tool_names": "",
                 }
             )
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
@@ -251,30 +329,52 @@ def _fmt_bool(value: Any) -> str:
 
 
 def print_summary(report: dict[str, Any], json_path: Path, csv_path: Path) -> None:
+    latency = report.get("latency_ms") or {}
     print(
         f"Eval {report['passed']}/{report['case_count']} cases passed "
         f"({report['elapsed_ms']} ms). "
-        f"History contrast {report['history_contrast_pass']}/{report['history_contrast_total']}."
+        f"History contrast {report['history_contrast_pass']}/{report['history_contrast_total']}. "
+        f"Tool layer {report.get('tool_pass', 0)}/{report.get('tool_total', 0)}."
     )
+    if latency.get("mean") is not None:
+        print(f"Plan latency mean {latency['mean']} ms, max {latency['max']} ms.")
     print(
-        f"{'case':<34} {'baseline':<10} {'proposed':<10} {'days (exp)':<12} {'contrast':<10}"
+        f"{'case':<36} {'kind':<8} {'baseline':<10} {'proposed':<10} {'days (exp)':<12} {'extra':<10}"
     )
-    print("-" * 80)
+    print("-" * 90)
     for case in report["cases"]:
+        if case.get("kind") == "tools":
+            print(
+                f"{case['id']:<36} {'tools':<8} "
+                f"{'-':<10} {_fmt_bool(case['pass']):<10} {'-':<12} {'-':<10}"
+            )
+            if not case["pass"]:
+                failed = []
+                for call in (case.get("tools") or {}).get("calls") or []:
+                    bad = [key for key, ok in (call.get("checks") or {}).items() if ok is False]
+                    if bad:
+                        failed.append(f"{call['name']}: {', '.join(bad)}")
+                    elif call.get("error"):
+                        failed.append(f"{call['name']}: {call['error']}")
+                if failed:
+                    print("    " + " | ".join(failed))
+            continue
         baseline = case["variants"]["baseline_a"]
         proposed = case["variants"]["proposed"]
         plan = proposed.get("plan") or {}
         days = plan.get("day_count")
         expected = plan.get("expected_days")
         contrast = case.get("history_contrast")
+        revise = (plan.get("checks") or {}).get("budget_revise")
+        extra = contrast["pass"] if contrast is not None else revise
         print(
-            f"{case['id']:<34} "
+            f"{case['id']:<36} {'plan':<8} "
             f"{_fmt_bool(baseline['pass']):<10} "
             f"{_fmt_bool(proposed['pass']):<10} "
             f"{str(days) + '/' + str(expected):<12} "
-            f"{_fmt_bool(contrast['pass'] if contrast else None):<10}"
+            f"{_fmt_bool(extra):<10}"
         )
-        if not case["pass"]:
+        if not case["pass"] or revise is False:
             reasons = []
             if baseline.get("error"):
                 reasons.append(f"baseline error: {baseline['error']}")
@@ -298,13 +398,19 @@ def print_summary(report: dict[str, Any], json_path: Path, csv_path: Path) -> No
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run Baseline A vs Proposed eval cases.")
     parser.add_argument("--case", action="append", dest="cases", help="Case id to run (repeatable).")
+    parser.add_argument("--plan-only", action="store_true", help="Skip gold tool-call cases.")
+    parser.add_argument("--tools-only", action="store_true", help="Run only gold tool-call cases.")
     parser.add_argument(
         "--out",
         default=str(RESULTS_DIR),
         help="Directory for JSON/CSV reports (default: eval/results).",
     )
     args = parser.parse_args(argv)
-    report = run_suite(args.cases)
+    report = run_suite(
+        args.cases,
+        include_plan=not args.tools_only,
+        include_tools=not args.plan_only,
+    )
     json_path, csv_path = _write_outputs(report, Path(args.out))
     print_summary(report, json_path, csv_path)
     return 0 if report["failed"] == 0 else 1

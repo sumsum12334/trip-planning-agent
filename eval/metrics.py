@@ -63,6 +63,9 @@ def score_stays(
         "within_nightly_budget": not budget_violations,
         "location_match": not location_violations,
         "avoids_visited": not overlapping if check_avoid else None,
+        "no_false_history_exclusion": (
+            not overlapping if expect.get("no_false_history_exclusion") else None
+        ),
     }
     applicable = {k: v for k, v in checks.items() if v is not None}
     return {
@@ -140,18 +143,20 @@ def score_itinerary(
     if request.budget is not None and total is not None:
         budget_ok = total <= request.budget + 1e-6
 
+    expect_revise = bool(expect.get("expect_revise"))
     checks = {
         "agent1_stays": stay_score["pass"],
         "agent2_transport": transport_score["pass"],
-        "budget_total": budget_ok,
+        "budget_total": budget_ok if not expect_revise else None,
         "day_coverage": day_check,
+        "budget_revise": budget_ok if expect_revise else None,
     }
-    # Day coverage is reported (coordinator currently emits one day) but is
-    # not a case-level failure; it is a known Agent 3 gap.
+    # Day coverage and budget_revise are reported (Agent 3 currently emits one
+    # day and has no revise loop) but do not fail the case on their own.
     applicable = {
         key: value
         for key, value in checks.items()
-        if value is not None and key != "day_coverage"
+        if value is not None and key not in {"day_coverage", "budget_revise"}
     }
     return {
         "day_count": day_count,
