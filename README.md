@@ -344,3 +344,14 @@ The repository includes a self-contained deployment package in
 `SERVICE_BASE_URL` into [`server-url.txt`](./server-url.txt), then submit the
 repository root using [`tuxiv.conf`](./tuxiv.conf). See
 [`tacc/README.md`](./tacc/README.md) for the complete sequence.
+
+## Evaluation (Baseline A vs Proposed)
+
+Langfuse is optional tracing only. To score the agents, run the fixed-case harness:
+
+```powershell
+.\.venv\Scripts\python.exe -m eval.runner
+```
+
+See [`eval/README.md`](./eval/README.md). The suite compares Baseline A (`ENABLE_TRAVEL_HISTORY=0`) with Proposed (`ENABLE_TRAVEL_HISTORY=1`) on stay budget/location, transport fields, and history avoidance.
+

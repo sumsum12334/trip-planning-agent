@@ -1,6 +1,50 @@
 # Eval — Baseline A vs Proposed
 
+Langfuse traces are useful for debugging, but they do not score the agents.
+This folder is a fixed-case harness that runs the same requests twice:
+
 - **Baseline A:** `ENABLE_TRAVEL_HISTORY=0` (Agents 1–3 only)
 - **Proposed:** `ENABLE_TRAVEL_HISTORY=1` (Agents 1–4)
 
-Add success/failure cases and Langfuse review notes here later.
+It measures per-agent constraints (stay budget/location, transport fields) and
+**history avoidance**: for cases with a seeded travel history and
+`avoid_visited=true`, Proposed must drop visited stays while Baseline A still
+recommends at least one of them.
+
+The runner always uses stub stay/maps tools and an isolated SQLite file. It
+does not call your `.env` database or a live model endpoint.
+
+## Run
+
+From the repository root:
+
+```powershell
+cd C:\dev\trip-planning-agent
+.\.venv\Scripts\python.exe -m eval.runner
+```
+
+One case only:
+
+```powershell
+.\.venv\Scripts\python.exe -m eval.runner --case tokyo_history_avoid_shibuya
+```
+
+Reports are written to `eval/results/` as JSON and CSV.
+
+## Cases
+
+See `cases.py`. They are written against the stub catalogs in
+`agents/search_stays/tools.py` and `agents/estimate_transport/tools.py`.
+
+The coordinator currently emits a **single day** even when the request asks
+for more. The report still shows `days (exp)` so that gap is visible; it does
+not fail the case on its own.
+
+## Add a case
+
+Append a dict to `CASES` in `cases.py` with:
+
+- `request`: fields for `TripRequest` (`destination`, `days`, `budget`, …)
+- `history`: optional visited places to seed for that `user_id`
+- `expect`: `min_stays`, `stay_location_contains`, `nightly_cost_within_budget`,
+  `transport_required`, `expected_days`, `history_avoidance`
