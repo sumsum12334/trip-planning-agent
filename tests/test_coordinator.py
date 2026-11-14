@@ -65,3 +65,48 @@ def test_single_day_plan_still_has_arrival_transport():
     assert itinerary.days[0].day_index == 1
     assert itinerary.days[0].transports
     assert itinerary.days[0].stays
+
+
+def test_multi_day_plan_packs_unique_pois():
+    req = TripRequest(destination="Tokyo", origin="Tokyo Shinjuku", budget=400, days=3)
+    itinerary = run(req)
+    all_pois = [poi for day in itinerary.days for poi in day.pois]
+    assert all(day.pois for day in itinerary.days)
+    assert len(all_pois) == len(set(all_pois))
+    assert len(all_pois) >= 6
+
+
+def test_interest_food_ranks_food_pois_first():
+    req = TripRequest(
+        destination="Tokyo",
+        origin="Tokyo Shinjuku",
+        budget=400,
+        days=1,
+        interests=["food"],
+    )
+    itinerary = run(req)
+    assert itinerary.days[0].pois
+    assert itinerary.days[0].pois[0] in {"Tsukiji Outer Market", "Ichiran Shibuya"}
+
+
+def test_avoid_visited_skips_named_pois(tmp_path, monkeypatch):
+    from agents.travel_history.agent import TravelHistoryStore
+    from config import settings as settings_mod
+
+    url = f"sqlite:///{(tmp_path / 'history.sqlite').as_posix()}"
+    monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setenv("ENABLE_TRAVEL_HISTORY", "1")
+    settings_mod.get_settings.cache_clear()
+    TravelHistoryStore(url).record_visit("poi-eval-user", "Shibuya Crossing")
+    req = TripRequest(
+        destination="Tokyo",
+        origin="Tokyo Shinjuku",
+        budget=400,
+        days=3,
+        avoid_visited=True,
+        user_id="poi-eval-user",
+    )
+    itinerary = run(req)
+    all_pois = [poi for day in itinerary.days for poi in day.pois]
+    assert all("shibuya crossing" not in poi.casefold() for poi in all_pois)
+    assert all_pois

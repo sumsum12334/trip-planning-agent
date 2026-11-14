@@ -6,6 +6,7 @@ from typing import Any, Optional, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from agents.coordinator.pois import pack_pois
 from agents.estimate_transport import run as estimate_transport
 from agents.search_stays import run as search_stays
 from agents.travel_history import run as travel_history
@@ -57,18 +58,21 @@ def render_days(
     request: TripRequest,
     stays: list[StayCandidate],
     transport: TransportLeg,
+    pois_by_day: list[list[str]] | None = None,
 ) -> list[DayPlan]:
     """Emit one DayPlan per requested day, charging one night on each day."""
     stay = _chosen_stay(stays)
+    packed = pois_by_day or []
     days: list[DayPlan] = []
     for index in range(1, trip_length(request) + 1):
         transports = [transport] if index == 1 else []
+        pois = packed[index - 1] if index - 1 < len(packed) else []
         days.append(
             DayPlan(
                 day_index=index,
                 stays=[stay] if stay else [],
                 transports=transports,
-                pois=[],
+                pois=list(pois),
                 estimated_cost=_day_cost(stay, transports),
             )
         )
@@ -97,7 +101,14 @@ def _coordinate_node(state: CoordinatorState) -> CoordinatorState:
     used_history = settings.enable_travel_history
     stay = _chosen_stay(stays)
     transport = _arrival_transport(request, stay)
-    days = render_days(request, stays, transport)
+    excluded = visited if request.avoid_visited else []
+    packed = pack_pois(
+        request.destination,
+        trip_length(request),
+        interests=request.interests,
+        excluded=excluded,
+    )
+    days = render_days(request, stays, transport, packed)
     total = sum((day.estimated_cost or 0) for day in days)
 
     # Optional LLM nudge via TACC (stub-safe)
