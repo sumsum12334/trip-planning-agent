@@ -110,3 +110,36 @@ def test_avoid_visited_skips_named_pois(tmp_path, monkeypatch):
     all_pois = [poi for day in itinerary.days for poi in day.pois]
     assert all("shibuya crossing" not in poi.casefold() for poi in all_pois)
     assert all_pois
+
+
+def test_revise_steps_down_from_over_budget_stay():
+    req = TripRequest(
+        destination="Tokyo",
+        origin="Tokyo Shinjuku",
+        budget=400,
+        days=3,
+    )
+    itinerary = run(req)
+    stay = itinerary.days[0].stays[0]
+    assert stay.name == "Shinjuku Business Hotel"
+    assert itinerary.total_estimated_cost is not None
+    assert itinerary.total_estimated_cost <= 400
+    assert any(
+        "Revised stay from Asakusa Traditional Ryokan to Shinjuku Business Hotel" in note
+        for note in itinerary.notes
+    )
+
+
+def test_under_budget_plan_is_not_revised():
+    req = TripRequest(
+        destination="Hong Kong",
+        origin="Hong Kong Airport",
+        days=1,
+        budget=400,
+    )
+    itinerary = run(req)
+    assert itinerary.total_estimated_cost is not None
+    assert itinerary.total_estimated_cost <= 400
+    assert all("Revised stay" not in note for note in itinerary.notes)
+    assert all("Revise could not meet budget" not in note for note in itinerary.notes)
+

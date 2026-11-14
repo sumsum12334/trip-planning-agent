@@ -40,7 +40,10 @@ def trip_length(request: TripRequest) -> int:
 
 
 def _chosen_stay(stays: list[StayCandidate]) -> Optional[StayCandidate]:
-    return stays[0] if stays else None
+    """Prefer the highest-rated candidate; later revise may step down to fit budget."""
+    if not stays:
+        return None
+    return max(stays, key=lambda stay: ((stay.rating or 0), -(stay.nightly_cost or 0)))
 
 
 def _arrival_transport(request: TripRequest, stay: Optional[StayCandidate]) -> TransportLeg:
@@ -79,6 +82,66 @@ def render_days(
     return days
 
 
+def render_itinerary(
+    request: TripRequest,
+    stay: Optional[StayCandidate],
+    visited: list[str],
+    used_history: bool,
+    notes: list[str],
+) -> Itinerary:
+    """Render a complete itinerary around one chosen stay."""
+    transport = _arrival_transport(request, stay)
+    excluded = visited if request.avoid_visited else []
+    packed = pack_pois(
+        request.destination,
+        trip_length(request),
+        interests=request.interests,
+        excluded=excluded,
+    )
+    days = render_days(request, [stay] if stay else [], transport, packed)
+    return Itinerary(
+        request=request,
+        days=days,
+        total_estimated_cost=sum((day.estimated_cost or 0) for day in days),
+        used_travel_history=used_history,
+        notes=list(notes),
+    )
+
+
+def _over_budget(itinerary: Itinerary) -> bool:
+    budget = itinerary.request.budget
+    return budget is not None and (itinerary.total_estimated_cost or 0) > budget
+
+
+def revise_itinerary(
+    request: TripRequest,
+    stays: list[StayCandidate],
+    itinerary: Itinerary,
+    visited: list[str],
+    used_history: bool,
+) -> Itinerary:
+    """If the plan exceeds budget, step down to a cheaper stay that still fits."""
+    if not _over_budget(itinerary):
+        return itinerary
+    current = itinerary.days[0].stays[0] if itinerary.days and itinerary.days[0].stays else None
+    alternatives = [
+        stay
+        for stay in stays
+        if current is None or stay.name != current.name
+    ]
+    alternatives.sort(key=lambda stay: (-(stay.rating or 0), stay.nightly_cost or 0))
+    for stay in alternatives:
+        trial = render_itinerary(request, stay, visited, used_history, itinerary.notes)
+        if not _over_budget(trial):
+            started = current.name if current else "no stay"
+            trial.notes = list(itinerary.notes) + [
+                f"Revised stay from {started} to {stay.name} to fit budget"
+            ]
+            return trial
+    itinerary.notes = list(itinerary.notes) + ["Revise could not meet budget"]
+    return itinerary
+
+
 def _travel_history_node(state: CoordinatorState) -> CoordinatorState:
     """Run Agent 4 and place its memory result in graph state."""
     return {"visited": travel_history(state["request"])}
@@ -99,17 +162,11 @@ def _coordinate_node(state: CoordinatorState) -> CoordinatorState:
     visited = state.get("visited", [])
     stays = state.get("stays", [])
     used_history = settings.enable_travel_history
-    stay = _chosen_stay(stays)
-    transport = _arrival_transport(request, stay)
-    excluded = visited if request.avoid_visited else []
-    packed = pack_pois(
-        request.destination,
-        trip_length(request),
-        interests=request.interests,
-        excluded=excluded,
-    )
-    days = render_days(request, stays, transport, packed)
-    total = sum((day.estimated_cost or 0) for day in days)
+    notes: list[str] = []
+    if settings.baseline_a:
+        notes.append("Baseline A: Agent 4 disabled (ENABLE_TRAVEL_HISTORY=0)")
+    if used_history:
+        notes.append(f"Travel history entries considered: {len(visited)}")
 
     # Optional LLM nudge via TACC (stub-safe)
     _ = tacc.complete(
@@ -121,19 +178,8 @@ def _coordinate_node(state: CoordinatorState) -> CoordinatorState:
         trace_context=state.get("trace_context"),
     )
 
-    notes = []
-    if settings.baseline_a:
-        notes.append("Baseline A: Agent 4 disabled (ENABLE_TRAVEL_HISTORY=0)")
-    if used_history:
-        notes.append(f"Travel history entries considered: {len(visited)}")
-
-    itinerary = Itinerary(
-        request=request,
-        days=days,
-        total_estimated_cost=total,
-        used_travel_history=used_history,
-        notes=notes,
-    )
+    itinerary = render_itinerary(request, _chosen_stay(stays), visited, used_history, notes)
+    itinerary = revise_itinerary(request, stays, itinerary, visited, used_history)
     return {"itinerary": itinerary}
 
 
