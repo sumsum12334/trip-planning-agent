@@ -64,3 +64,20 @@ def test_api_mode_raises(monkeypatch):
         search_stays(destination="Tokyo", budget=200, days=2)
     monkeypatch.delenv("TOOL_STAYS_MODE", raising=False)
     settings_mod.get_settings.cache_clear()
+
+
+def test_city_level_history_does_not_drop_all_stays():
+    req = TripRequest(destination="Tokyo", budget=800, days=4)
+    all_stays = run(req)
+    kept = run(req, excluded_locations=["Tokyo", "tokyo"])
+    assert [stay.location for stay in kept] == [stay.location for stay in all_stays]
+    narrowed = run(req, excluded_locations=["shibuya"])
+    assert all("shibuya" not in stay.location.casefold() for stay in narrowed)
+    assert len(narrowed) < len(all_stays)
+
+
+def test_empty_destination_fails_closed():
+    with pytest.raises(ValueError, match="destination"):
+        search_stays(destination="")
+    with pytest.raises(ValueError, match="destination"):
+        search_stays(destination="   ")

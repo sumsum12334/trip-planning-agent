@@ -386,7 +386,7 @@ CASES: list[EvalCase] = [
     },
     {
         "id": "tokyo_history_city_too_broad",
-        "description": "History location is just 'Tokyo'. A city-level visit should not exclude every Tokyo stay. Known matcher gap: substring overlap currently drops the whole catalog.",
+        "description": "History location is just 'Tokyo'. A city-level visit should not exclude every Tokyo stay.",
         "request": {
             "destination": "Tokyo",
             "origin": "Tokyo Shinjuku",
@@ -400,19 +400,19 @@ CASES: list[EvalCase] = [
             {"location": "Tokyo", "city": "Tokyo", "country": "Japan"},
         ],
         "expect": {
-            "min_stays": 0,
+            "min_stays": 1,
             "stay_location_contains": ["tokyo"],
             "nightly_cost_within_budget": True,
             "transport_required": True,
             "expected_days": 4,
             "history_avoidance": False,
-            "allow_generic_fallback": True,
+            "allow_generic_fallback": False,
             "city_level_history": True,
         },
     },
     {
         "id": "paris_airport_not_hk_catalog",
-        "description": "Paris Charles de Gaulle to the Eiffel Tower must not reuse the Hong Kong Airport Express catalog row. Known stub gap: the 'airport' token can match HK.",
+        "description": "Paris Charles de Gaulle to the Eiffel Tower must not reuse the Hong Kong Airport Express catalog row.",
         "request": {
             "destination": "Paris",
             "origin": "Paris Charles de Gaulle Airport",
@@ -439,7 +439,7 @@ CASES: list[EvalCase] = [
     },
     {
         "id": "empty_destination_fail_closed",
-        "description": "An empty destination should fail closed instead of silently returning generic stays. Known gap: the stub currently falls back to the generic catalog.",
+        "description": "An empty destination should fail closed at request validation instead of silently returning generic stays.",
         "request": {
             "destination": "",
             "origin": "",
@@ -451,11 +451,7 @@ CASES: list[EvalCase] = [
         },
         "history": [],
         "expect": {
-            "min_stays": 0,
-            "transport_required": False,
-            "expected_days": 3,
-            "history_avoidance": False,
-            "allow_generic_fallback": True,
+            "expect_error": True,
             "expect_fail_closed": True,
         },
     },

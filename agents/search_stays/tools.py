@@ -225,6 +225,8 @@ def search_stays(
     interests: Optional[list[str]] = None,
 ) -> list[StayCandidate]:
     """Find stay candidates under a derived nightly budget near destination."""
+    if not (destination or "").strip():
+        raise ValueError("search_stays requires a destination.")
     settings = get_settings()
     mode = settings.tool_stays_mode
     if mode == "stub":

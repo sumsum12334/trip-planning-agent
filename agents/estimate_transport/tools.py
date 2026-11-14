@@ -201,19 +201,39 @@ def _places_same(a: str, b: str) -> bool:
     return union > 0 and (inter / union) >= 0.8
 
 
+# Tokens that describe a place type, not a city. Matching only on these
+# (e.g. "airport") would let a Hong Kong catalog row win for Paris CDG.
+_GENERIC_CITY_TOKENS = frozenset({
+    "airport",
+    "central",
+    "station",
+    "museum",
+    "downtown",
+    "hotel",
+    "generic",
+    "harbour",
+    "harbor",
+    "canal",
+    "park",
+    "city",
+    "area",
+})
+
+
+def _distinctive_city_tokens(row: dict[str, Any]) -> list[str]:
+    return [
+        token
+        for token in (row.get("city_tokens") or [])
+        if token and _normalize(token) not in _GENERIC_CITY_TOKENS
+    ]
+
+
 def _score_row(row: dict[str, Any], from_place: str, to_place: str) -> float:
-    """Higher is better. City-token hits + hint overlap with from/to."""
+    """Higher is better. Distinctive city-token hits + hint overlap with from/to."""
     if row.get("generic"):
         return -1.0
-    blob = " ".join(
-        [
-            " ".join(row.get("city_tokens") or []),
-            str(row.get("from_hint") or ""),
-            str(row.get("to_hint") or ""),
-        ]
-    )
-    place_blob = f"{from_place} {to_place}"
-    city_hits = sum(1 for tok in row.get("city_tokens") or [] if tok in _normalize(place_blob))
+    place_blob = _normalize(f"{from_place} {to_place}")
+    city_hits = sum(1 for tok in _distinctive_city_tokens(row) if tok in place_blob)
     if city_hits == 0:
         return 0.0
     from_toks = _tokens(from_place)

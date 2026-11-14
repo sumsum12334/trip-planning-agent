@@ -92,18 +92,22 @@ def test_alias_history_and_validation_cases():
 
     broad = by_id["tokyo_history_city_too_broad"]
     assert broad["history_contrast"] is None
-    # Baseline still has Tokyo stays; Proposed currently drops all of them.
     assert broad["variants"]["baseline_a"]["agent1"]["stay_count"] >= 1
+    assert broad["variants"]["proposed"]["agent1"]["stay_count"] >= 1
     proposed_plan = broad["variants"]["proposed"]["plan"] or {}
-    assert proposed_plan["checks"]["city_level_keeps_stays"] is False
+    assert proposed_plan["checks"]["city_level_keeps_stays"] is True
+    proposed_stays = broad["variants"]["proposed"]["agent1"]["stay_locations"]
+    assert any("tokyo" in loc.casefold() for loc in proposed_stays)
 
     paris = by_id["paris_airport_not_hk_catalog"]
-    assert paris["variants"]["proposed"]["agent2"]["mode"] == "airport_express"
-    assert paris["variants"]["proposed"]["agent2"]["checks"]["city_consistent"] is False
+    assert paris["variants"]["proposed"]["agent2"]["mode"] != "airport_express"
+    assert "hong kong" not in (paris["variants"]["proposed"]["agent2"].get("notes") or "").casefold()
+    assert paris["variants"]["proposed"]["agent2"]["checks"]["city_consistent"] is True
 
     empty = by_id["empty_destination_fail_closed"]
-    assert empty["variants"]["proposed"]["error"] is None
-    assert empty["variants"]["proposed"]["plan"]["checks"]["fail_closed"] is False
+    assert empty["variants"]["proposed"]["error"]
+    assert empty["variants"]["proposed"]["plan"]["checks"]["expect_error"] is True
+    assert empty["variants"]["proposed"]["plan"]["checks"]["fail_closed"] is True
 
     days0 = by_id["invalid_days_zero"]
     assert days0["variants"]["proposed"]["error"]

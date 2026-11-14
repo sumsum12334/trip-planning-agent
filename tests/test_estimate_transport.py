@@ -74,3 +74,14 @@ def test_api_mode_raises(monkeypatch):
         estimate_transport("Central", "Kowloon", destination="Hong Kong")
     monkeypatch.delenv("TOOL_MAPS_MODE", raising=False)
     settings_mod.get_settings.cache_clear()
+
+
+def test_paris_airport_does_not_use_hong_kong_catalog():
+    req = TripRequest(destination="Paris")
+    leg = run(req, "Paris Charles de Gaulle Airport", "Paris Eiffel Tower")
+    assert leg.mode != "airport_express"
+    assert "hong kong" not in (leg.notes or "").casefold()
+    assert match_catalog_row("Paris Charles de Gaulle Airport", "Paris Eiffel Tower") is None
+    # Hong Kong airport transfer must still hit its own catalog row.
+    hk = run(TripRequest(destination="Hong Kong"), "Hong Kong Airport", "Central")
+    assert hk.mode == "airport_express"

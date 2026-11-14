@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from agents.search_stays.tools import nightly_budget_cap
+from shared.history_match import stay_overlaps_places
 from shared.schemas import Itinerary, StayCandidate, TransportLeg, TripRequest
 
 
@@ -14,12 +15,7 @@ def _norm(value: str) -> str:
 
 def stay_overlaps_history(stay: StayCandidate, history_places: list[str]) -> bool:
     """True if stay name or location overlaps a visited place (same rule as Agent 1)."""
-    excluded = [_norm(place) for place in history_places if place and place.strip()]
-    if not excluded:
-        return False
-    name = _norm(stay.name)
-    location = _norm(stay.location)
-    return any(place in name or place in location for place in excluded)
+    return stay_overlaps_places(stay.name, stay.location, history_places)
 
 
 def _location_ok(stay: StayCandidate, tokens: list[str], allow_generic: bool) -> bool:
