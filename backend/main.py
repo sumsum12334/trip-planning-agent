@@ -22,7 +22,7 @@ from agents.chat_tools import (
     execute_agent_tool,
 )
 from agents.coordinator import run as coordinate
-from agents.coordinator.agent import health as coordinator_health
+from agents.coordinator.agent import NoFeasiblePlanError, health as coordinator_health
 from agents.estimate_transport.agent import health as transport_health
 from agents.search_stays.agent import health as stays_health
 from agents.travel_history.agent import health as history_health
@@ -136,7 +136,10 @@ def health() -> dict:
 
 @app.post("/plan", response_model=Itinerary)
 def plan(request: TripRequest) -> Itinerary:
-    return coordinate(request, session_id=f"plan-{uuid.uuid4()}")
+    try:
+        return coordinate(request, session_id=f"plan-{uuid.uuid4()}")
+    except NoFeasiblePlanError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.post("/agents/search_stays", response_model=list[StayCandidate])

@@ -6,7 +6,7 @@ from datetime import date
 
 import pytest
 
-from agents.coordinator.agent import run, trip_length
+from agents.coordinator.agent import NoFeasiblePlanError, run, trip_length
 from shared.schemas import TripRequest
 
 
@@ -142,4 +142,22 @@ def test_under_budget_plan_is_not_revised():
     assert itinerary.total_estimated_cost <= 400
     assert all("Revised stay" not in note for note in itinerary.notes)
     assert all("Revise could not meet budget" not in note for note in itinerary.notes)
+
+
+def test_fail_closed_when_all_stays_over_budget():
+    req = TripRequest(destination="Hong Kong", origin="Hong Kong Airport", days=1, budget=30)
+    with pytest.raises(NoFeasiblePlanError, match="all candidates over budget"):
+        run(req)
+
+
+def test_fail_closed_when_revise_cannot_meet_budget():
+    req = TripRequest(
+        destination="Tokyo",
+        origin="Narita Airport",
+        budget=400,
+        days=3,
+    )
+    with pytest.raises(NoFeasiblePlanError, match="still exceeds budget after revise"):
+        run(req)
+
 

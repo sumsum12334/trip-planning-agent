@@ -21,6 +21,10 @@ from trip_planning_agent.observability import (
 from trip_planning_agent.tacc_client import TACCClient
 
 
+class NoFeasiblePlanError(ValueError):
+    """Raised when the coordinator cannot meet the request constraints."""
+
+
 class CoordinatorState(TypedDict, total=False):
     request: TripRequest
     session_id: str
@@ -178,8 +182,17 @@ def _coordinate_node(state: CoordinatorState) -> CoordinatorState:
         trace_context=state.get("trace_context"),
     )
 
+    if not stays:
+        raise NoFeasiblePlanError(
+            "no feasible stay: all candidates over budget or none matched"
+        )
+
     itinerary = render_itinerary(request, _chosen_stay(stays), visited, used_history, notes)
     itinerary = revise_itinerary(request, stays, itinerary, visited, used_history)
+    if _over_budget(itinerary):
+        raise NoFeasiblePlanError(
+            "no feasible stay: plan still exceeds budget after revise"
+        )
     return {"itinerary": itinerary}
 
 

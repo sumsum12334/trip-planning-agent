@@ -9,3 +9,5 @@ The coordinator also packs unique stub POIs across those days, preferring intere
 
 If the first plan exceeds the total budget, the coordinator revises by stepping down to a cheaper stay that still fits, and records that change in `notes`. If no stay can meet the budget, it notes that revise could not meet budget.
 
+If no stay is feasible, or the plan is still over budget after revise, the coordinator fail-closes with `NoFeasiblePlanError` (HTTP 422 on `/plan`) instead of returning a silent overspend.
+
