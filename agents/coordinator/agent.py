@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, Optional, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from agents.coordinator.pois import pack_pois
 from agents.estimate_transport import run as estimate_transport
 from agents.search_stays import run as search_stays
 from agents.travel_history import run as travel_history
 from config.settings import get_settings
-from shared.schemas import DayPlan, Itinerary, TripRequest
+from shared.schemas import DayPlan, Itinerary, StayCandidate, TransportLeg, TripRequest
 from shared.prompts import TRIP_PLANNING_SYSTEM_PROMPT
 from trip_planning_agent.observability import (
     end_trace,
@@ -20,6 +21,10 @@ from trip_planning_agent.observability import (
 from trip_planning_agent.tacc_client import TACCClient
 
 
+class NoFeasiblePlanError(ValueError):
+    """Raised when the coordinator cannot meet the request constraints."""
+
+
 class CoordinatorState(TypedDict, total=False):
     request: TripRequest
     session_id: str
@@ -27,6 +32,118 @@ class CoordinatorState(TypedDict, total=False):
     visited: list[str]
     stays: list[Any]
     itinerary: Itinerary
+
+
+def trip_length(request: TripRequest) -> int:
+    """Number of itinerary days: `days`, else inclusive start/end dates, else 1."""
+    if request.days is not None and request.days >= 1:
+        return request.days
+    if request.start_date and request.end_date:
+        return max((request.end_date - request.start_date).days + 1, 1)
+    return 1
+
+
+def _chosen_stay(stays: list[StayCandidate]) -> Optional[StayCandidate]:
+    """Prefer the highest-rated candidate; later revise may step down to fit budget."""
+    if not stays:
+        return None
+    return max(stays, key=lambda stay: ((stay.rating or 0), -(stay.nightly_cost or 0)))
+
+
+def _arrival_transport(request: TripRequest, stay: Optional[StayCandidate]) -> TransportLeg:
+    origin = request.origin or request.destination
+    stay_loc = stay.location if stay else request.destination
+    return estimate_transport(request, origin, stay_loc)
+
+
+def _day_cost(stay: Optional[StayCandidate], transports: list[TransportLeg]) -> float:
+    stay_cost = (stay.nightly_cost or 0) if stay else 0
+    return stay_cost + sum((leg.cost or 0) for leg in transports)
+
+
+def render_days(
+    request: TripRequest,
+    stays: list[StayCandidate],
+    transport: TransportLeg,
+    pois_by_day: list[list[str]] | None = None,
+) -> list[DayPlan]:
+    """Emit one DayPlan per requested day, charging one night on each day."""
+    stay = _chosen_stay(stays)
+    packed = pois_by_day or []
+    days: list[DayPlan] = []
+    for index in range(1, trip_length(request) + 1):
+        transports = [transport] if index == 1 else []
+        pois = packed[index - 1] if index - 1 < len(packed) else []
+        days.append(
+            DayPlan(
+                day_index=index,
+                stays=[stay] if stay else [],
+                transports=transports,
+                pois=list(pois),
+                estimated_cost=_day_cost(stay, transports),
+            )
+        )
+    return days
+
+
+def render_itinerary(
+    request: TripRequest,
+    stay: Optional[StayCandidate],
+    visited: list[str],
+    used_history: bool,
+    notes: list[str],
+) -> Itinerary:
+    """Render a complete itinerary around one chosen stay."""
+    transport = _arrival_transport(request, stay)
+    excluded = visited if request.avoid_visited else []
+    packed = pack_pois(
+        request.destination,
+        trip_length(request),
+        interests=request.interests,
+        excluded=excluded,
+    )
+    days = render_days(request, [stay] if stay else [], transport, packed)
+    return Itinerary(
+        request=request,
+        days=days,
+        total_estimated_cost=sum((day.estimated_cost or 0) for day in days),
+        used_travel_history=used_history,
+        notes=list(notes),
+    )
+
+
+def _over_budget(itinerary: Itinerary) -> bool:
+    budget = itinerary.request.budget
+    return budget is not None and (itinerary.total_estimated_cost or 0) > budget
+
+
+def revise_itinerary(
+    request: TripRequest,
+    stays: list[StayCandidate],
+    itinerary: Itinerary,
+    visited: list[str],
+    used_history: bool,
+) -> Itinerary:
+    """If the plan exceeds budget, step down to a cheaper stay that still fits."""
+    if not _over_budget(itinerary):
+        return itinerary
+    current = itinerary.days[0].stays[0] if itinerary.days and itinerary.days[0].stays else None
+    alternatives = [
+        stay
+        for stay in stays
+        if current is None or stay.name != current.name
+    ]
+    alternatives.sort(key=lambda stay: (-(stay.rating or 0), stay.nightly_cost or 0))
+    for stay in alternatives:
+        trial = render_itinerary(request, stay, visited, used_history, itinerary.notes)
+        if not _over_budget(trial):
+            started = current.name if current else "no stay"
+            trial.notes = list(itinerary.notes) + [
+                f"Revised stay from {started} to {stay.name} to fit budget"
+            ]
+            return trial
+    itinerary.notes = list(itinerary.notes) + ["Revise could not meet budget"]
+    return itinerary
 
 
 def _travel_history_node(state: CoordinatorState) -> CoordinatorState:
@@ -49,14 +166,15 @@ def _coordinate_node(state: CoordinatorState) -> CoordinatorState:
     visited = state.get("visited", [])
     stays = state.get("stays", [])
     used_history = settings.enable_travel_history
-    origin = request.origin or request.destination
-    stay_loc = stays[0].location if stays else request.destination
-    transport = estimate_transport(request, origin, stay_loc)
-    nights = max(request.days or 1, 1)
+    notes: list[str] = []
+    if settings.baseline_a:
+        notes.append("Baseline A: Agent 4 disabled (ENABLE_TRAVEL_HISTORY=0)")
+    if used_history:
+        notes.append(f"Travel history entries considered: {len(visited)}")
 
     # Optional LLM nudge via TACC (stub-safe)
     _ = tacc.complete(
-        f"Outline a day plan for {request.destination} "
+        f"Outline a {trip_length(request)}-day plan for {request.destination} "
         f"budget={request.budget} interests={request.interests} "
         f"avoid={visited if request.avoid_visited else []}",
         system=TRIP_PLANNING_SYSTEM_PROMPT,
@@ -64,30 +182,17 @@ def _coordinate_node(state: CoordinatorState) -> CoordinatorState:
         trace_context=state.get("trace_context"),
     )
 
-    day = DayPlan(
-        day_index=1,
-        stays=stays,
-        transports=[transport],
-        pois=[],  # Coordinator owns POI for MVP
-        estimated_cost=(
-            ((stays[0].nightly_cost or 0) * nights) + (transport.cost or 0)
-            if stays
-            else (transport.cost or 0)
-        ),
-    )
-    notes = []
-    if settings.baseline_a:
-        notes.append("Baseline A: Agent 4 disabled (ENABLE_TRAVEL_HISTORY=0)")
-    if used_history:
-        notes.append(f"Travel history entries considered: {len(visited)}")
+    if not stays:
+        raise NoFeasiblePlanError(
+            "no feasible stay: all candidates over budget or none matched"
+        )
 
-    itinerary = Itinerary(
-        request=request,
-        days=[day],
-        total_estimated_cost=day.estimated_cost,
-        used_travel_history=used_history,
-        notes=notes,
-    )
+    itinerary = render_itinerary(request, _chosen_stay(stays), visited, used_history, notes)
+    itinerary = revise_itinerary(request, stays, itinerary, visited, used_history)
+    if _over_budget(itinerary):
+        raise NoFeasiblePlanError(
+            "no feasible stay: plan still exceeds budget after revise"
+        )
     return {"itinerary": itinerary}
 
 
