@@ -5,13 +5,13 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class TripRequest(BaseModel):
     """User-specified destination and dates (no hard-coded region requirement)."""
 
-    destination: str
+    destination: str = Field(min_length=1)
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     days: Optional[int] = Field(default=None, ge=1, description="Alternative to start/end dates")
@@ -20,6 +20,13 @@ class TripRequest(BaseModel):
     origin: Optional[str] = None  # optional; form default only
     avoid_visited: bool = False
     user_id: Optional[str] = None
+
+    @field_validator("destination", mode="before")
+    @classmethod
+    def _strip_destination(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
 
 
 class StayCandidate(BaseModel):
