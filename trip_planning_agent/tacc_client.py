@@ -35,6 +35,38 @@ class TACCClient:
     def configured(self) -> bool:
         return bool(self.base_url)
 
+
+    @staticmethod
+    def _response_body(response: httpx.Response) -> str:
+        """Read an HTTP error body without assuming the stream is complete."""
+        try:
+            content = response.read()
+        except Exception:
+            return response.text or ""
+        if isinstance(content, bytes):
+            return content.decode("utf-8", "replace")
+        return str(content or "")
+
+    @classmethod
+    def _missing_tool_support(cls, response: httpx.Response) -> bool:
+        body = cls._response_body(response).lower()
+        return "enable-auto-tool-choice" in body or "tool-call-parser" in body
+
+    @classmethod
+    def _raise_for_status(cls, response: httpx.Response) -> None:
+        if response.is_success:
+            return
+        body = cls._response_body(response)
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = body.strip().replace("\n", " ")[:800]
+            raise httpx.HTTPStatusError(
+                f"{exc} body={detail}",
+                request=exc.request,
+                response=exc.response,
+            ) from exc
+
     def complete(
         self,
         prompt: str,
@@ -112,7 +144,19 @@ class TACCClient:
                         headers=headers,
                         json=payload,
                     )
-                    response.raise_for_status()
+                    if (
+                        response.status_code == 400
+                        and payload.get("tools")
+                        and self._missing_tool_support(response)
+                    ):
+                        payload = dict(payload)
+                        payload.pop("tools", None)
+                        response = client.post(
+                            self.base_url.rstrip("/") + "/chat/completions",
+                            headers=headers,
+                            json=payload,
+                        )
+                    self._raise_for_status(response)
                     data = response.json()
                 text = data["choices"][0]["message"]["content"]
                 finish_generation(generation, output=text)
@@ -208,7 +252,22 @@ class TACCClient:
                             headers=headers,
                             json=payload,
                         ) as response:
-                            response.raise_for_status()
+                            if (
+                                response.status_code == 400
+                                and tools
+                                and self._missing_tool_support(response)
+                            ):
+                                if on_event:
+                                    on_event(
+                                        {
+                                            "type": "model",
+                                            "label": "Model server has no tool calling; retrying without tools",
+                                            "status": "completed",
+                                        }
+                                    )
+                                tools = None
+                                continue
+                            self._raise_for_status(response)
                             for line in response.iter_lines():
                                 if cancel_event is not None and cancel_event.is_set():
                                     cancelled = True
