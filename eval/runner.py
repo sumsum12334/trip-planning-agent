@@ -118,13 +118,13 @@ def run_variant(
     from_place, to_place = _first_transport_from_expect(case, request)
     transport = estimate_transport_run(request, from_place, to_place)
 
-    apply_filter = bool(expect.get("history_avoidance")) and enable_history and request.avoid_visited
+    apply_filter = bool(expect.get("history_avoidance") or expect.get("poi_history_avoidance")) and enable_history and request.avoid_visited
     agent1 = score_stays(
         stays,
         request,
         expect,
         history_places,
-        apply_history_filter=apply_filter,
+        apply_history_filter=bool(expect.get("history_avoidance")) and enable_history and request.avoid_visited,
     )
     agent2 = score_transport(transport, expect)
     plan = None
@@ -136,6 +136,13 @@ def run_variant(
             history_places,
             apply_history_filter=apply_filter,
         )
+    elif expect_error and error is not None:
+        plan = {
+            "pass": True,
+            "checks": {"expect_error": True, "fail_closed": True},
+            "warnings": [],
+            "error": error,
+        }
 
     if expect_error:
         passed = error is not None
@@ -151,6 +158,44 @@ def run_variant(
         "agent2": agent2,
         "plan": plan,
         "pass": passed,
+    }
+
+
+def _collect_pois(variant: dict[str, Any]) -> list[str]:
+    plan = variant.get("plan") or {}
+    pois = plan.get("pois")
+    if pois:
+        return list(pois)
+    return []
+
+
+def _poi_contrast(case: EvalCase, results: dict[str, Any]) -> dict[str, Any] | None:
+    expect = case.get("expect") or {}
+    if not expect.get("poi_history_avoidance"):
+        return None
+    forbidden = [place.casefold().strip() for place in (expect.get("forbidden_pois") or []) if place]
+    if not forbidden:
+        return None
+    baseline_pois = _collect_pois(results["baseline_a"])
+    proposed_pois = _collect_pois(results["proposed"])
+
+    def _hit(name: str) -> bool:
+        folded = name.casefold()
+        return any(place == folded or place in folded for place in forbidden)
+
+    baseline_overlap = [name for name in baseline_pois if _hit(name)]
+    proposed_overlap = [name for name in proposed_pois if _hit(name)]
+    passed = bool(baseline_overlap) and not proposed_overlap
+    return {
+        "forbidden_pois": expect.get("forbidden_pois") or [],
+        "baseline_overlap": baseline_overlap,
+        "proposed_overlap": proposed_overlap,
+        "pass": passed,
+        "detail": (
+            "Proposed avoided visited POIs while Baseline A still included them"
+            if passed
+            else "Expected Baseline A to still include a visited POI, and Proposed to drop all of them"
+        ),
     }
 
 
@@ -186,9 +231,12 @@ def _history_contrast(case: EvalCase, results: dict[str, Any]) -> dict[str, Any]
 def run_case(case: EvalCase, database_url: str) -> dict[str, Any]:
     variants = {name: run_variant(case, variant=name, database_url=database_url) for name in VARIANTS}
     contrast = _history_contrast(case, variants)
+    poi_contrast = _poi_contrast(case, variants)
     passed = all(variants[name]["pass"] for name in VARIANTS)
     if contrast is not None:
         passed = passed and contrast["pass"]
+    if poi_contrast is not None:
+        passed = passed and poi_contrast["pass"]
     return {
         "kind": "plan",
         "id": case["id"],
@@ -196,6 +244,7 @@ def run_case(case: EvalCase, database_url: str) -> dict[str, Any]:
         "request": case["request"],
         "variants": variants,
         "history_contrast": contrast,
+        "poi_contrast": poi_contrast,
         "pass": passed,
     }
 
@@ -389,8 +438,14 @@ def print_summary(report: dict[str, Any], json_path: Path, csv_path: Path) -> No
         days = plan.get("day_count")
         expected = plan.get("expected_days")
         contrast = case.get("history_contrast")
+        poi_contrast = case.get("poi_contrast")
         revise = (plan.get("checks") or {}).get("budget_revise")
-        extra = contrast["pass"] if contrast is not None else revise
+        if contrast is not None:
+            extra = contrast["pass"]
+        elif poi_contrast is not None:
+            extra = poi_contrast["pass"]
+        else:
+            extra = revise
         print(
             f"{case['id']:<36} {'plan':<8} "
             f"{_fmt_bool(baseline['pass']):<10} "
@@ -416,13 +471,22 @@ def print_summary(report: dict[str, Any], json_path: Path, csv_path: Path) -> No
             if contrast and not contrast["pass"]:
                 reasons.append(contrast["detail"])
             if info_flags.get("city_level_keeps_stays") is False:
-                reasons.append("known gap: city-level history dropped destination stays")
+                reasons.append("city-level history dropped destination stays")
             if info_flags.get("transport_city_consistent") is False:
-                reasons.append("known gap: transport matched another city's catalog")
+                reasons.append("transport matched another city's catalog")
             if info_flags.get("fail_closed") is False:
-                reasons.append("known gap: invalid request did not fail closed")
+                reasons.append("invalid or infeasible request did not fail closed")
+            if info_flags.get("day_coverage") is False:
+                reasons.append("itinerary day count did not match the request")
+            if revise is False:
+                reasons.append("coordinator did not revise an over-budget plan")
+            if info_flags.get("revise_noted") is False:
+                reasons.append("revise succeeded but was not noted")
             if info_flags.get("cost_scale_ok") is False and warnings:
                 reasons.append("cost-scale warning: " + ", ".join(warnings))
+            poi_contrast = case.get("poi_contrast")
+            if poi_contrast and not poi_contrast["pass"]:
+                reasons.append(poi_contrast["detail"])
             if reasons:
                 print("    " + " | ".join(reasons))
     print()

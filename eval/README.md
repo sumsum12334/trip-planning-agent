@@ -36,9 +36,11 @@ Reports are written to `eval/results/` as JSON and CSV.
 See `cases.py`. They are written against the stub catalogs in
 `agents/search_stays/tools.py` and `agents/estimate_transport/tools.py`.
 
-The coordinator currently emits a **single day** even when the request asks
-for more. The report still shows `days (exp)` so that gap is visible; it does
-not fail the case on its own.
+After Agent 3, the coordinator emits **one day plan per requested day** (or
+per inclusive start/end dates), packs stub POIs across those days, revises to a
+cheaper stay when the total is over budget, and fail-closes when no feasible
+stay fits. `expected_days`, revise, POI packing, and fail-closed are hard
+checks. The report still shows `days (exp)`.
 
 ## Add a case
 
@@ -81,3 +83,13 @@ Append a dict to `CASES` in `cases.py` with:
 - Cost-scale warning (`tokyo_airport_cost_scale`): Narita train cost 3200 vs a
   400 stay budget is flagged, but does not fail the case.
 - Determinism is checked in `tests/test_eval_runner.py` (same stub case twice).
+
+- Agent 3 hard checks: multi-day coverage (`expected_days`), revise-to-cheaper-stay
+  (`tokyo_revise_cheaper_stay`), and fail-closed when no stay fits or revise cannot
+  meet the total (`empty_catalog_tight_budget`, `hk_over_budget_transport`,
+  `tokyo_airport_cost_scale`).
+- POI packing: existing multi-day cases require unique POIs on every day.
+  `tokyo_pois_interest_food` checks interest ranking; `tokyo_history_avoid_poi`
+  checks that Proposed drops a visited POI while Baseline A still includes it.
+- `tokyo_dates_span_three_days` uses inclusive start/end dates with no `days`
+  field and still expects a 3-day itinerary.

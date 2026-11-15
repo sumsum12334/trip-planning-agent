@@ -36,6 +36,12 @@ class CaseExpect(TypedDict, total=False):
     transport_notes_forbid: list[str]
     ignore_total_budget: bool
     cost_scale_check: bool
+    min_pois_per_day: int
+    min_total_pois: int
+    unique_pois: bool
+    first_pois_in: list[str]
+    forbidden_pois: list[str]
+    poi_history_avoidance: bool
 
 
 class EvalCase(TypedDict, total=False):
@@ -68,6 +74,9 @@ CASES: list[EvalCase] = [
             "expected_days": 4,
             "history_avoidance": False,
             "allow_generic_fallback": False,
+            "min_pois_per_day": 2,
+            "min_total_pois": 8,
+            "unique_pois": True,
         },
     },
     {
@@ -239,7 +248,7 @@ CASES: list[EvalCase] = [
     },
     {
         "id": "empty_catalog_tight_budget",
-        "description": "Budget below every catalog nightly rate; Agent 1 may return no stays, itinerary should still be produced.",
+        "description": "Budget below every catalog nightly rate; Agent 3 must fail closed with NoFeasiblePlanError instead of emitting an empty itinerary.",
         "request": {
             "destination": "Tokyo",
             "origin": "Tokyo Shinjuku",
@@ -251,12 +260,8 @@ CASES: list[EvalCase] = [
         },
         "history": [],
         "expect": {
-            "min_stays": 0,
-            "nightly_cost_within_budget": True,
-            "transport_required": True,
-            "expected_days": 3,
-            "history_avoidance": False,
-            "allow_generic_fallback": True,
+            "expect_error": True,
+            "expect_fail_closed": True,
         },
     },
     {
@@ -337,7 +342,7 @@ CASES: list[EvalCase] = [
     },
     {
         "id": "hk_over_budget_transport",
-        "description": "Tight total budget can be blown by transport even when nightly stay cap is met. Tracks whether Coordinator revises; current Agent 3 has no revise loop.",
+        "description": "Harbour View Hostel for 3 nights plus Airport Express (115) still exceeds a 150 total; Agent 3 must fail closed after revise cannot meet the budget.",
         "request": {
             "destination": "Hong Kong",
             "origin": "Hong Kong Airport",
@@ -349,14 +354,8 @@ CASES: list[EvalCase] = [
         },
         "history": [],
         "expect": {
-            "min_stays": 1,
-            "stay_location_contains": ["hong kong"],
-            "nightly_cost_within_budget": True,
-            "transport_required": True,
-            "expected_days": 3,
-            "history_avoidance": False,
-            "allow_generic_fallback": False,
-            "expect_revise": True,
+            "expect_error": True,
+            "expect_fail_closed": True,
         },
     },
     {
@@ -474,7 +473,7 @@ CASES: list[EvalCase] = [
     },
     {
         "id": "tokyo_airport_cost_scale",
-        "description": "Narita airport-train stub costs 3200 against a 400 stay budget; records a cost-scale warning without failing the case.",
+        "description": "Narita airport-train stub costs 3200 against a 400 total; Agent 3 must fail closed after revise cannot bring the plan under budget.",
         "request": {
             "destination": "Tokyo",
             "origin": "Tokyo Narita Airport",
@@ -486,17 +485,114 @@ CASES: list[EvalCase] = [
         },
         "history": [],
         "expect": {
+            "expect_error": True,
+            "expect_fail_closed": True,
+        },
+    },
+    {
+        "id": "tokyo_revise_cheaper_stay",
+        "description": "Tokyo 3-day trip starts on the highest-rated stay and must revise down to a cheaper stay so the total fits the 400 budget.",
+        "request": {
+            "destination": "Tokyo",
+            "origin": "Tokyo Shinjuku",
+            "days": 3,
+            "budget": 400,
+            "interests": [],
+            "avoid_visited": False,
+            "user_id": "eval-tokyo-revise",
+        },
+        "history": [],
+        "expect": {
             "min_stays": 1,
             "stay_location_contains": ["tokyo"],
             "nightly_cost_within_budget": True,
             "transport_required": True,
-            "transport_from": "Tokyo Narita Airport",
-            "transport_to": "Tokyo Shibuya",
-            "expected_days": 4,
+            "expected_days": 3,
             "history_avoidance": False,
             "allow_generic_fallback": False,
-            "ignore_total_budget": True,
-            "cost_scale_check": True,
+            "expect_revise": True,
+            "min_pois_per_day": 2,
+            "unique_pois": True,
+        },
+    },
+    {
+        "id": "tokyo_pois_interest_food",
+        "description": "A one-day Tokyo food trip should pack food-tagged POIs first (Tsukiji Outer Market or Ichiran Shibuya).",
+        "request": {
+            "destination": "Tokyo",
+            "origin": "Tokyo Shinjuku",
+            "days": 1,
+            "budget": 400,
+            "interests": ["food"],
+            "avoid_visited": False,
+            "user_id": "eval-tokyo-food-pois",
+        },
+        "history": [],
+        "expect": {
+            "min_stays": 1,
+            "stay_location_contains": ["tokyo"],
+            "nightly_cost_within_budget": True,
+            "transport_required": True,
+            "expected_days": 1,
+            "history_avoidance": False,
+            "allow_generic_fallback": False,
+            "min_pois_per_day": 2,
+            "first_pois_in": ["Tsukiji Outer Market", "Ichiran Shibuya"],
+        },
+    },
+    {
+        "id": "tokyo_history_avoid_poi",
+        "description": "History includes Shibuya Crossing; Proposed should drop that POI while Baseline A still includes it.",
+        "request": {
+            "destination": "Tokyo",
+            "origin": "Tokyo Shinjuku",
+            "days": 3,
+            "budget": 400,
+            "interests": [],
+            "avoid_visited": True,
+            "user_id": "eval-tokyo-poi-history",
+        },
+        "history": [
+            {"location": "Shibuya Crossing", "city": "Tokyo", "country": "Japan"},
+        ],
+        "expect": {
+            "min_stays": 1,
+            "stay_location_contains": ["tokyo"],
+            "nightly_cost_within_budget": True,
+            "transport_required": True,
+            "expected_days": 3,
+            "history_avoidance": False,
+            "allow_generic_fallback": False,
+            "min_pois_per_day": 2,
+            "unique_pois": True,
+            "forbidden_pois": ["Shibuya Crossing"],
+            "poi_history_avoidance": True,
+        },
+    },
+    {
+        "id": "tokyo_dates_span_three_days",
+        "description": "When days is omitted, inclusive start and end dates must still produce a 3-day itinerary with packed POIs.",
+        "request": {
+            "destination": "Tokyo",
+            "origin": "Tokyo Shinjuku",
+            "start_date": "2026-01-01",
+            "end_date": "2026-01-03",
+            "budget": 800,
+            "interests": [],
+            "avoid_visited": False,
+            "user_id": "eval-tokyo-dates",
+        },
+        "history": [],
+        "expect": {
+            "min_stays": 1,
+            "stay_location_contains": ["tokyo"],
+            "nightly_cost_within_budget": True,
+            "transport_required": True,
+            "expected_days": 3,
+            "history_avoidance": False,
+            "allow_generic_fallback": False,
+            "min_pois_per_day": 2,
+            "unique_pois": True,
         },
     },
 ]

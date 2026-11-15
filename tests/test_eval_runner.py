@@ -114,9 +114,10 @@ def test_alias_history_and_validation_cases():
     assert days0["variants"]["proposed"]["plan"]["checks"]["expect_error"] is True
 
     scale = by_id["tokyo_airport_cost_scale"]
-    warnings = scale["variants"]["proposed"]["plan"].get("warnings") or []
-    assert "transport_cost_exceeds_budget" in warnings
-    assert scale["variants"]["proposed"]["plan"]["checks"]["cost_scale_ok"] is False
+    assert scale["variants"]["proposed"]["error"]
+    assert "NoFeasiblePlanError" in scale["variants"]["proposed"]["error"]
+    assert scale["variants"]["proposed"]["plan"]["checks"]["expect_error"] is True
+    assert scale["variants"]["proposed"]["plan"]["checks"]["fail_closed"] is True
 
 
 def test_stub_plan_is_deterministic():
@@ -140,3 +141,67 @@ def test_stub_plan_is_deterministic():
         return rows
 
     assert _sig(first) == _sig(second)
+
+def test_agent3_day_revise_and_poi_cases():
+    report = run_suite(
+        [
+            "tokyo_budget_ok",
+            "empty_catalog_tight_budget",
+            "hk_over_budget_transport",
+            "tokyo_revise_cheaper_stay",
+            "tokyo_pois_interest_food",
+            "tokyo_history_avoid_poi",
+            "tokyo_dates_span_three_days",
+        ],
+        include_tools=False,
+    )
+    by_id = {case["id"]: case for case in report["cases"]}
+    assert all(case["pass"] for case in report["cases"])
+
+    days = by_id["tokyo_budget_ok"]
+    proposed = days["variants"]["proposed"]["plan"]
+    assert proposed["day_count"] == 4
+    assert proposed["checks"]["day_coverage"] is True
+    assert proposed["checks"]["pois_per_day"] is True
+    assert proposed["checks"]["unique_pois"] is True
+    assert len(proposed["pois"]) >= 8
+
+    empty = by_id["empty_catalog_tight_budget"]
+    assert "NoFeasiblePlanError" in empty["variants"]["proposed"]["error"]
+    assert empty["variants"]["proposed"]["plan"]["checks"]["fail_closed"] is True
+
+    overrun = by_id["hk_over_budget_transport"]
+    assert "NoFeasiblePlanError" in overrun["variants"]["proposed"]["error"]
+    assert "still exceeds budget after revise" in overrun["variants"]["proposed"]["error"]
+
+    revise = by_id["tokyo_revise_cheaper_stay"]
+    plan = revise["variants"]["proposed"]["plan"]
+    assert plan["checks"]["budget_revise"] is True
+    assert plan["checks"]["revise_noted"] is True
+    assert plan["total_estimated_cost"] <= 400
+    assert plan["day_count"] == 3
+    stays = plan["stays"]["stay_names"]
+    assert "Shinjuku Business Hotel" in stays
+    assert any("Revised stay from Asakusa Traditional Ryokan" in note for note in plan["notes"])
+
+    food = by_id["tokyo_pois_interest_food"]
+    food_plan = food["variants"]["proposed"]["plan"]
+    assert food_plan["day_count"] == 1
+    assert food_plan["pois"][0] in {"Tsukiji Outer Market", "Ichiran Shibuya"}
+    assert food_plan["checks"]["interest_ranked_pois"] is True
+
+    poi = by_id["tokyo_history_avoid_poi"]
+    assert poi["poi_contrast"]["pass"] is True
+    assert poi["poi_contrast"]["baseline_overlap"]
+    assert poi["poi_contrast"]["proposed_overlap"] == []
+    assert all(
+        "shibuya crossing" not in name.casefold()
+        for name in poi["variants"]["proposed"]["plan"]["pois"]
+    )
+
+    dates = by_id["tokyo_dates_span_three_days"]
+    dates_plan = dates["variants"]["proposed"]["plan"]
+    assert dates_plan["day_count"] == 3
+    assert dates_plan["checks"]["day_coverage"] is True
+    assert dates_plan["checks"]["pois_per_day"] is True
+

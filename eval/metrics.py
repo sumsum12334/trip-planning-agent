@@ -127,12 +127,9 @@ def score_transport(leg: TransportLeg | None, expect: dict[str, Any]) -> dict[st
 
 
 
+# cost_scale_ok stays informational: it flags catalog scale mismatches
+# that Agent 3 now fail-closes when the total cannot be revised down.
 INFORMATIONAL_CHECKS = {
-    "day_coverage",
-    "budget_revise",
-    "city_level_keeps_stays",
-    "transport_city_consistent",
-    "fail_closed",
     "cost_scale_ok",
 }
 
@@ -153,6 +150,15 @@ def cost_scale_warnings(
         if stay_cost > 0 and leg.cost > 5 * stay_cost:
             warnings.append("transport_cost_dwarfs_stay_cost")
     return warnings
+
+
+
+def _all_pois(itinerary: Itinerary) -> list[str]:
+    return [poi for day in itinerary.days for poi in day.pois]
+
+
+def _poi_matches(name: str, needle: str) -> bool:
+    return _norm(needle) == _norm(name) or _norm(needle) in _norm(name)
 
 
 def score_itinerary(
@@ -207,11 +213,35 @@ def score_itinerary(
         )
     if expect.get("expect_fail_closed"):
         checks["fail_closed"] = not stays and not transports
+    if expect_revise:
+        checks["revise_noted"] = any("Revised stay" in note for note in (itinerary.notes or []))
+
+    pois = _all_pois(itinerary)
+    min_pois_per_day = expect.get("min_pois_per_day")
+    if min_pois_per_day:
+        checks["pois_per_day"] = all(
+            len(day.pois) >= int(min_pois_per_day) for day in itinerary.days
+        )
+    min_total_pois = expect.get("min_total_pois")
+    if min_total_pois:
+        checks["min_total_pois"] = len(pois) >= int(min_total_pois)
+    if expect.get("unique_pois"):
+        checks["unique_pois"] = len(pois) == len(set(pois))
+    first_pois_in = expect.get("first_pois_in") or []
+    if first_pois_in:
+        checks["interest_ranked_pois"] = bool(pois) and pois[0] in set(first_pois_in)
+    forbidden_pois = expect.get("forbidden_pois") or []
+    if forbidden_pois and apply_history_filter:
+        checks["avoids_visited_pois"] = not any(
+            _poi_matches(poi, place) for poi in pois for place in forbidden_pois
+        )
+
     warnings = cost_scale_warnings(transports[0] if transports else None, stays, request)
     if expect.get("cost_scale_check"):
         checks["cost_scale_ok"] = not warnings
-    # Informational checks are reported (Agent 3 day/revise gaps, matcher and
-    # stub-catalog issues) but do not fail the case on their own.
+    # Informational checks are reported in the summary but do not fail the case
+    # on their own. Agent 3 day coverage, revise, POI packing, and fail-closed
+    # are hard checks.
     applicable = {
         key: value
         for key, value in checks.items()
@@ -227,6 +257,7 @@ def score_itinerary(
         "warnings": warnings,
         "stays": stay_score,
         "transport": transport_score,
+        "pois": pois,
         "checks": checks,
         "pass": all(applicable.values()) if applicable else True,
     }
