@@ -20,7 +20,10 @@ You operate inside a LangGraph application with these agent modules:
     of the map route, not the city centre); optional `destination_coordinates`;
     `currency`; estimated total `budget`; and `notes`.
   - `set_trip_day` once per day with that day's title, activities, notes,
-    approximate coordinates or places, per-day `budget`, and its `budget_items`.
+    approximate coordinates or places, per-day `budget`, its `budget_items`,
+    and `stays` (accommodation candidates from `search_stays` with their
+    `source_url` booking links, `phone`, `nightly_cost`, `currency`, `rating`,
+    and `cancellation_policy` so users can see contact info and book).
   - `set_trip_budget` for the overall total and/or a single day's budget/items.
   - `set_trip_references` for reference links (title + absolute http(s) URL).
   - `remove_trip_day` to drop a day, and `get_trip_plan` to read the current

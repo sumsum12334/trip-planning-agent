@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     enable_travel_history: bool = Field(default=True, alias="ENABLE_TRAVEL_HISTORY")
 
     # Tools
-    tool_stays_mode: Literal["stub", "api"] = Field(default="stub", alias="TOOL_STAYS_MODE")
+    tool_stays_mode: Literal["stub", "overpass", "api"] = Field(default="stub", alias="TOOL_STAYS_MODE")
     tool_maps_mode: Literal["stub", "api"] = Field(default="stub", alias="TOOL_MAPS_MODE")
     web_search_mode: Literal["stub", "duckduckgo"] = Field(
         default="stub", alias="WEB_SEARCH_MODE"
@@ -50,6 +50,26 @@ class Settings(BaseSettings):
 
     # Optional form default only — not a hard product requirement
     default_origin: str = Field(default="", alias="DEFAULT_ORIGIN")
+
+    # --- OpenStreetMap Overpass API (Agent 1, used when TOOL_STAYS_MODE=overpass) ---
+    # Free, no authentication required. Queries OSM for hotels/motels/hostels near
+    # the destination. Returns real names, coordinates, and addresses — but no
+    # nightly cost or real-time availability.
+    overpass_api_url: str = Field(
+        default="https://overpass-api.de/api/interpreter", alias="OVERPASS_API_URL"
+    )
+    overpass_timeout: float = Field(default=30.0, alias="OVERPASS_TIMEOUT")
+    overpass_radius_meters: int = Field(default=5000, alias="OVERPASS_RADIUS_METERS")
+
+    # --- Stay search provider (Agent 1, used when TOOL_STAYS_MODE=api) ---
+    # OBO Travel MCP API (https://onebookingonline.com/mcp) — free, no auth
+    # required for keyless access (30 req/min, 500 req/day). Set
+    # STAYS_API_KEY for higher limits (60 req/min, 2000 req/day).
+    stays_api_base_url: str = Field(
+        default="https://onebookingonline.com/mcp", alias="STAYS_API_BASE_URL"
+    )
+    stays_api_key: str = Field(default="", alias="STAYS_API_KEY")
+    stays_api_timeout: float = Field(default=30.0, alias="STAYS_API_TIMEOUT")
 
     @property
     def baseline_a(self) -> bool:

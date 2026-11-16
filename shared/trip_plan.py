@@ -138,6 +138,29 @@ TRIP_PLAN_TOOLS: list[dict[str, Any]] = [
                     "notes": {"type": "array", "items": {"type": "string"}},
                     "coordinates": _COORDINATE_SCHEMA,
                     "places": {"type": "array", "items": _PLACE_SCHEMA},
+                    "stays": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "location": {"type": "string"},
+                                "nightly_cost": {"type": "number"},
+                                "currency": {"type": "string"},
+                                "rating": {"type": "number"},
+                                "property_type": {"type": "string"},
+                                "check_in": {"type": "string"},
+                                "check_out": {"type": "string"},
+                                "cancellation_policy": {"type": "string"},
+                                "amenities": {"type": "array", "items": {"type": "string"}},
+                                "source_url": {"type": "string"},
+                                "phone": {"type": "string"},
+                                "coordinates": _COORDINATE_SCHEMA,
+                                "notes": {"type": "string"},
+                            },
+                            "required": ["name"],
+                        },
+                    },
                     "budget": {"type": "number", "minimum": 0, "description": "Estimated cost for this day."},
                     "budget_items": _BUDGET_ITEMS_SCHEMA,
                 },
@@ -288,6 +311,51 @@ def _places(value: Any, *, day_number: int) -> list[dict[str, Any]]:
     return places
 
 
+def _stays(value: Any, *, day_number: int) -> list[dict[str, Any]]:
+    """Normalize an optional list of stay candidates with booking URLs."""
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise ValueError("Each trip day's stays must be a list.")
+    stays: list[dict[str, Any]] = []
+    for item in value[:MAX_PLACES_PER_DAY]:
+        if not isinstance(item, dict):
+            raise ValueError(f"Day {day_number} has a stay that is not an object.")
+        name = str(item.get("name", "")).strip()
+        if not name:
+            raise ValueError(f"Day {day_number} has a stay without a name.")
+        raw_url = item.get("source_url")
+        stays.append(
+            {
+                "name": name,
+                "location": str(item.get("location", "")).strip() or None,
+                "nightly_cost": _number_or_none(item.get("nightly_cost")),
+                "currency": str(item.get("currency", "")).strip() or None,
+                "rating": _number_or_none(item.get("rating")),
+                "property_type": str(item.get("property_type", "")).strip() or None,
+                "check_in": str(item.get("check_in", "")).strip() or None,
+                "check_out": str(item.get("check_out", "")).strip() or None,
+                "cancellation_policy": str(
+                    item.get("cancellation_policy", "")
+                ).strip()
+                or None,
+                "amenities": list(item.get("amenities") or []),
+                "source_url": _url(raw_url, field=f"Day {day_number} stay URL")
+                if raw_url not in (None, "")
+                else None,
+                "phone": str(item.get("phone", "")).strip() or None,
+                "coordinates": _coordinate(
+                    item.get("coordinates"),
+                    field=f"Day {day_number} stay coordinates",
+                )
+                if item.get("coordinates")
+                else None,
+                "notes": str(item.get("notes", "")).strip() or None,
+            }
+        )
+    return stays
+
+
 def _airport(value: Any) -> dict[str, Any] | None:
     """Normalize the optional arrival airport (the first route point)."""
     if value in (None, ""):
@@ -382,6 +450,7 @@ def assemble_trip_plan(plan: dict[str, Any] | None) -> dict[str, Any]:
                 "notes": _clean_strings(day.get("notes", [])),
                 "coordinates": day.get("coordinates") if isinstance(day.get("coordinates"), dict) else None,
                 "places": day.get("places") if isinstance(day.get("places"), list) else [],
+                "stays": day.get("stays") if isinstance(day.get("stays"), list) else [],
                 "budget": _number_or_none(day.get("budget")),
                 "budget_items": day.get("budget_items") if isinstance(day.get("budget_items"), list) else [],
             }
@@ -463,6 +532,7 @@ def apply_trip_plan_tool(
             "notes": _clean_strings(arguments.get("notes", [])),
             "coordinates": _coordinate(arguments.get("coordinates"), field=f"Day {number} coordinates"),
             "places": _places(arguments.get("places"), day_number=number),
+            "stays": _stays(arguments.get("stays"), day_number=number),
             "budget": _optional_number(arguments.get("budget"), field=f"Day {number} budget"),
             "budget_items": _budget_items(arguments.get("budget_items"), currency=currency),
         }

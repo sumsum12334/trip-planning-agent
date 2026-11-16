@@ -195,6 +195,32 @@ Test it with `POST /api/tools/web-search` and a JSON body such as
 `{"query":"things to do in Tokyo","limit":5}`. Search results are not treated
 as reservations or verified live availability.
 
+### Stay search (Agent 1)
+
+`search_stays` returns accommodation candidates under budget near the
+destination. Three modes are controlled by `TOOL_STAYS_MODE`:
+
+| Mode | Source | Returns |
+|------|--------|---------|
+| `stub` | Curated local catalog | Name, location, nightly cost, phone, website, rating, amenities |
+| `overpass` | OpenStreetMap Overpass API | Real names, coordinates, addresses, star ratings (no cost/availability) |
+| `api` | OBO Travel MCP | Live nightly rates, booking URLs, star ratings, cancellation policy |
+
+Set `TOOL_STAYS_MODE` in `.env` (default: `stub`). For `api` mode, also set
+`STAYS_API_BASE_URL=https://onebookingonline.com/mcp`. The OBO Travel API is
+free for anonymous use (30 req/min, 500 req/day); no signup or credit card
+required.
+
+Example:
+```bash
+POST /agents/search_stays
+{"destination":"Tokyo","budget":500,"days":3,"interests":["temples","food"],"check_in":"2026-12-10","check_out":"2026-12-13"}
+```
+
+See [`agents/search_stays/README.md`](./agents/search_stays/README.md) for
+full details on all three modes and environment variables.
+
+
 For reasoning-capable models such as NVIDIA Nemotron, the streaming client
 requests thinking output and displays the returned `reasoning_content` (or
 `reasoning`) in a separate collapsed **Model reasoning** block. Providers that
@@ -308,9 +334,16 @@ errors.
 ### Key `.env` knobs
 | Variable | Notes |
 |----------|--------|
-| `QWEN_BASE_URL` / `QWEN_MODEL` / `QWEN_API_KEY` | Course Qwen OpenAI-compatible endpoint, model, and API key |
+| `QWEN_BASE_URL` / `QWEN_MODEL` / `QWEN_API_KEY` | Model-serving endpoint. Default `QWEN_BASE_URL=https://api.kilo.ai/api/gateway` (Kilo Code Auto Free, no key required). `QWEN_MODEL=kilo-auto/free`. |
 | `ENABLE_TRAVEL_HISTORY` | `1` = proposed (Agent1–4); `0` = Baseline A (Agent1–3) |
-| `TOOL_STAYS_MODE` / `TOOL_MAPS_MODE` | `stub` or `api` |
+| `TOOL_STAYS_MODE` | `stub` (default, offline-safe), `overpass` (OpenStreetMap, no auth), `api` (OBO Travel, live prices) |
+| `TOOL_MAPS_MODE` | `stub` or `api` |
+| `STAYS_API_BASE_URL` | OBO Travel MCP base URL, e.g. `https://onebookingonline.com/mcp` (used when `TOOL_STAYS_MODE=api`) |
+| `STAYS_API_KEY` | Optional OBO Travel API key for higher rate limits |
+| `STAYS_API_TIMEOUT` | Request timeout seconds (default 30) |
+| `OVERPASS_API_URL` | Comma-separated Overpass mirror URLs (used when `TOOL_STAYS_MODE=overpass`) |
+| `OVERPASS_TIMEOUT` | Overpass request timeout seconds (default 30) |
+| `OVERPASS_RADIUS_METERS` | Overpass search radius in meters (default 5000) |
 | `DATABASE_URL` | Travel history DB. Default SQLite: `sqlite:///./data/travel_history.sqlite`. Local Docker Postgres: `postgresql://trip:trip@localhost:5432/travel_history` (`pip install ".[db]"`, `docker compose up -d postgres`). Neon: pooled URL from `.env` after `neon init` / `neon deploy` (refresh with `neon env pull`). Chat stays on SQLite. `GET /health` → `agents.travel_history.storage` = `sqlite` \| `postgres`. |
 | `DATABASE_URL_UNPOOLED` | Optional Neon direct URL (migrations/admin). App runtime uses pooled `DATABASE_URL`. |
 | `NEON_BRANCH` | Optional Neon branch name (e.g. `production`) when using Neon. |

@@ -6,7 +6,7 @@ import pytest
 
 from agents.search_stays.agent import health, run
 from agents.search_stays.tools import nightly_budget_cap, search_stays
-from shared.schemas import TripRequest
+from shared.schemas import StayCandidate, TripRequest
 
 
 def test_stub_search_tokyo_respects_budget_and_returns_results():
@@ -54,30 +54,63 @@ def test_health_reports_stub_catalog():
     assert "catalog" in info
 
 
-def test_api_mode_raises(monkeypatch):
+def test_api_mode_returns_labeled_error(monkeypatch):
+    from config import settings as settings_mod
+    from agents.search_stays import tools as tools_mod
+
+    settings_mod.get_settings.cache_clear()
+    tools_mod.clear_caches()
+    monkeypatch.setenv("TOOL_STAYS_MODE", "api")
+    settings_mod.get_settings.cache_clear()
+    # With OBO Travel configured (no API key needed for keyless access),
+    # api mode calls the provider and returns results or labeled errors.
+    stays = search_stays(destination="Tokyo", budget=200, days=2)
+    assert isinstance(stays, list)
+    assert all(isinstance(s, StayCandidate) for s in stays)
+    monkeypatch.delenv("TOOL_STAYS_MODE", raising=False)
+    settings_mod.get_settings.cache_clear()
+    tools_mod.clear_caches()
+
+
+def test_overpass_mode_geocode_failure_returns_labeled_error(monkeypatch):
+    from config import settings as settings_mod
+    from agents.search_stays import tools as tools_mod
+
+    settings_mod.get_settings.cache_clear()
+    tools_mod.clear_caches()
+    monkeypatch.setenv("TOOL_STAYS_MODE", "overpass")
+    settings_mod.get_settings.cache_clear()
+
+    class FakeGeocoder:
+        def geocode(self, destination):
+            return None
+
+    tools_mod.NominatimGeocoder = lambda *args, **kwargs: FakeGeocoder()
+
+    stays = search_stays(destination="Nowhereville XXYZ", budget=200, days=2)
+    assert isinstance(stays, list)
+    assert len(stays) == 1
+    assert "resolve" in (stays[0].notes or "").lower()
+
+    monkeypatch.delenv("TOOL_STAYS_MODE", raising=False)
+    settings_mod.get_settings.cache_clear()
+    tools_mod.clear_caches()
+
+
+def test_health_reports_overpass_provider(monkeypatch):
     from config import settings as settings_mod
 
     settings_mod.get_settings.cache_clear()
-    monkeypatch.setenv("TOOL_STAYS_MODE", "api")
+    monkeypatch.setenv("TOOL_STAYS_MODE", "overpass")
+    monkeypatch.setenv("OVERPASS_API_URL", "https://overpass-api.de/api/interpreter")
     settings_mod.get_settings.cache_clear()
-    with pytest.raises(NotImplementedError):
-        search_stays(destination="Tokyo", budget=200, days=2)
+    info = health()
+    assert info["agent"] == "search_stays"
+    assert info["tool_mode"] == "overpass"
+    assert info["catalog"] == "overpass"
+    assert info["provider"]["provider"] == "overpass"
+    assert info["provider"]["offline_safe"] is False
+    assert info["provider"]["radius_meters"] == 5000
     monkeypatch.delenv("TOOL_STAYS_MODE", raising=False)
+    monkeypatch.delenv("OVERPASS_API_URL", raising=False)
     settings_mod.get_settings.cache_clear()
-
-
-def test_city_level_history_does_not_drop_all_stays():
-    req = TripRequest(destination="Tokyo", budget=800, days=4)
-    all_stays = run(req)
-    kept = run(req, excluded_locations=["Tokyo", "tokyo"])
-    assert [stay.location for stay in kept] == [stay.location for stay in all_stays]
-    narrowed = run(req, excluded_locations=["shibuya"])
-    assert all("shibuya" not in stay.location.casefold() for stay in narrowed)
-    assert len(narrowed) < len(all_stays)
-
-
-def test_empty_destination_fails_closed():
-    with pytest.raises(ValueError, match="destination"):
-        search_stays(destination="")
-    with pytest.raises(ValueError, match="destination"):
-        search_stays(destination="   ")

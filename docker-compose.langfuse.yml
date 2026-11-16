@@ -1,0 +1,64 @@
+# Self-hosted Langfuse for local LLM tracing.
+# Run:  docker compose -f docker-compose.langfuse.yml up -d
+# Then open http://localhost:3000 and create API keys in
+# Project Settings → API Keys.
+
+services:
+  langfuse:
+    image: langfuse/langfuse:latest
+    ports:
+      - "3000:3000"
+    depends_on:
+      - langfuse-worker
+      - langfuse-clickhouse
+      - langfuse-postgres
+      - langfuse-redis
+    environment:
+      LANGFUSE_HOST: http://localhost:3000
+      NEXTAUTH_URL: http://localhost:3000
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse
+      CLICKHOUSE_HOST: langfuse-clickhouse
+      REDIS_HOST: langfuse-redis
+      SALT: changeme-salt-12345
+      NEXTAUTH_SECRET: changeme-secret-abcde
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:latest
+    depends_on:
+      - langfuse-clickhouse
+      - langfuse-postgres
+      - langfuse-redis
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse
+      CLICKHOUSE_HOST: langfuse-clickhouse
+      REDIS_HOST: langfuse-redis
+      SALT: changeme-salt-12345
+
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
+  langfuse-postgres:
+    image: postgres:15
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse-postgres-data:/var/lib/postgresql/data
+
+  langfuse-redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+
+volumes:
+  langfuse-postgres-data:

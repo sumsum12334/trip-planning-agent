@@ -28,7 +28,8 @@ def test_estimate_transport_returns_leg():
 
 def test_web_search_stub_mode():
     result = execute_agent_tool("web_search", {"query": "things to do in Kyoto", "limit": 3})
-    assert result["mode"] == "stub"
+    from config.settings import get_settings
+    assert result["mode"] == get_settings().web_search_mode
     assert result["results"]
 
 

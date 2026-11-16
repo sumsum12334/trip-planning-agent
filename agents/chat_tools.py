@@ -108,6 +108,8 @@ def execute_agent_tool(name: str, arguments: dict[str, Any]) -> Any:
             budget=arguments.get("budget"),
             days=_optional_int(arguments.get("days"), minimum=1, maximum=30),
             interests=_clean_strings(arguments.get("interests")),
+            start_date=arguments.get("check_in"),
+            end_date=arguments.get("check_out"),
         )
         try:
             stays = search_stays_run(request)
