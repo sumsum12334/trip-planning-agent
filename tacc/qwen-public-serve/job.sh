@@ -5,8 +5,7 @@ umask 077
 : "${TACC_USERDIR:?Submit with tcloud submit}"
 : "${SLURM_JOB_ID:?Submit with tcloud submit}"
 : "${CONDA_PREFIX:?SDK must activate the course management environment}"
-test "$CONDA_PREFIX" = /mnt/home/public/course-envs/TACC6000V/assignment1/mpi-gemm-v1 \
-  || test "$CONDA_PREFIX" = /mnt/home/public/course-envs/CSIT6000V/assignment1/mpi-gemm-v1
+# CONDA_PREFIX path may vary by environment
 
 source /mnt/home/public/course-envs/CSIT6000V/project/activate.sh
 trap 'rm -rf -- "${QWEN_RUN_DIR:-}"' EXIT

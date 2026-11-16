@@ -22,6 +22,18 @@ class TripRequest(BaseModel):
     user_id: Optional[str] = None
 
 
+class EstimateTransportRequest(BaseModel):
+    """Transport estimate request between two places."""
+
+    destination: Optional[str] = None
+    origin: Optional[str] = None
+    from_place: str
+    to_place: str
+    days: Optional[int] = None
+    budget: Optional[float] = None
+    interests: list[str] = Field(default_factory=list)
+
+
 class StayCandidate(BaseModel):
     name: str
     location: str
