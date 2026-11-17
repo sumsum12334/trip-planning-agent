@@ -115,15 +115,15 @@ def test_avoid_visited_skips_named_pois(tmp_path, monkeypatch):
 def test_revise_steps_down_from_over_budget_stay():
     req = TripRequest(
         destination="Tokyo",
-        origin="Tokyo Shinjuku",
-        budget=400,
+        origin="Tokyo Haneda Airport",
+        budget=370,
         days=3,
     )
     itinerary = run(req)
     stay = itinerary.days[0].stays[0]
     assert stay.name == "Shinjuku Business Hotel"
     assert itinerary.total_estimated_cost is not None
-    assert itinerary.total_estimated_cost <= 400
+    assert itinerary.total_estimated_cost <= 370
     assert any(
         "Revised stay from Asakusa Traditional Ryokan to Shinjuku Business Hotel" in note
         for note in itinerary.notes
@@ -154,10 +154,72 @@ def test_fail_closed_when_revise_cannot_meet_budget():
     req = TripRequest(
         destination="Tokyo",
         origin="Narita Airport",
-        budget=400,
+        budget=180,
         days=3,
     )
     with pytest.raises(NoFeasiblePlanError, match="still exceeds budget after revise"):
         run(req)
+
+
+def test_plan_currency_is_single_per_city():
+    hk = run(
+        TripRequest(destination="Hong Kong", origin="Hong Kong Airport", days=1, budget=400)
+    )
+    assert hk.currency == "HKD"
+    tokyo = run(
+        TripRequest(destination="Tokyo", origin="Tokyo Shinjuku", budget=400, days=3)
+    )
+    assert tokyo.currency == "USD"
+    for day in tokyo.days:
+        for stay in day.stays:
+            assert stay.currency == "USD"
+        for leg in day.transports:
+            assert leg.currency in (None, "USD")
+
+
+def test_mixed_currency_components_fail_closed(monkeypatch):
+    from agents.coordinator import agent as coordinator_agent
+    from shared.schemas import StayCandidate
+
+    def fake_search(request, excluded_locations=()):
+        return [
+            StayCandidate(
+                name="Euro Hotel",
+                location="Tokyo Asakusa",
+                nightly_cost=90.0,
+                currency="EUR",
+                rating=4.0,
+                source_url="https://example.com/stays/euro",
+            )
+        ]
+
+    monkeypatch.setattr(coordinator_agent, "search_stays", fake_search)
+    with pytest.raises(NoFeasiblePlanError, match="mix currencies"):
+        coordinator_agent.run(
+            TripRequest(destination="Tokyo", origin="Tokyo Shinjuku", budget=400, days=3)
+        )
+
+
+def test_unlabeled_costs_skip_budget_enforcement(monkeypatch):
+    from agents.coordinator import agent as coordinator_agent
+    from shared.schemas import StayCandidate
+
+    def fake_search(request, excluded_locations=()):
+        return [
+            StayCandidate(
+                name="No-Currency Hotel",
+                location="Tokyo Central",
+                nightly_cost=90.0,
+                currency=None,
+                rating=4.0,
+            )
+        ]
+
+    monkeypatch.setattr(coordinator_agent, "search_stays", fake_search)
+    itinerary = coordinator_agent.run(
+        TripRequest(destination="Tokyo", origin="Tokyo Shinjuku", budget=10, days=3)
+    )
+    assert itinerary.currency is None
+    assert any("Budget not enforced" in note for note in itinerary.notes)
 
 

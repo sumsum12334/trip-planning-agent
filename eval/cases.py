@@ -266,12 +266,12 @@ CASES: list[EvalCase] = [
     },
     {
         "id": "transport_same_place_walk",
-        "description": "Direct Agent 2 check: identical from/to should be a short walk with zero cost.",
+        "description": "Direct Agent 2 check: identical from/to should be a short walk with zero cost; a 150 budget keeps the plan on the Shibuya walk so the day-1 leg is that walk.",
         "request": {
             "destination": "Tokyo",
             "origin": "Tokyo Shibuya",
             "days": 2,
-            "budget": 200,
+            "budget": 150,
             "interests": [],
             "avoid_visited": False,
             "user_id": "eval-walk",
@@ -473,12 +473,12 @@ CASES: list[EvalCase] = [
     },
     {
         "id": "tokyo_airport_cost_scale",
-        "description": "Narita airport-train stub costs 3200 against a 400 total; Agent 3 must fail closed after revise cannot bring the plan under budget.",
+        "description": "The cheapest Tokyo stay for 3 nights plus the Narita Express stub (~21 USD) still exceeds a 180 total; Agent 3 must fail closed after revise cannot bring the plan under budget.",
         "request": {
             "destination": "Tokyo",
             "origin": "Tokyo Narita Airport",
-            "days": 4,
-            "budget": 400,
+            "days": 3,
+            "budget": 180,
             "interests": [],
             "avoid_visited": False,
             "user_id": "eval-tokyo-cost-scale",
@@ -491,12 +491,12 @@ CASES: list[EvalCase] = [
     },
     {
         "id": "tokyo_revise_cheaper_stay",
-        "description": "Tokyo 3-day trip starts on the highest-rated stay and must revise down to a cheaper stay so the total fits the 400 budget.",
+        "description": "Tokyo 3-day trip from Haneda starts on the highest-rated stay and must revise down to a cheaper stay so the total fits the 370 budget.",
         "request": {
             "destination": "Tokyo",
-            "origin": "Tokyo Shinjuku",
+            "origin": "Tokyo Haneda Airport",
             "days": 3,
-            "budget": 400,
+            "budget": 370,
             "interests": [],
             "avoid_visited": False,
             "user_id": "eval-tokyo-revise",

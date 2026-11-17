@@ -23,7 +23,13 @@ def test_estimate_transport_returns_leg():
     leg = execute_agent_tool("estimate_transport", {"from_place": "A", "to_place": "B"})
     assert leg["from_place"] == "A"
     assert leg["to_place"] == "B"
-    assert leg["mode"] == "stub"
+    # `mode` is the travel mode; the stub source is labeled in `notes`.
+    assert leg["mode"] in {"metro", "bus", "walk", "taxi"}
+    assert leg["mode"] != "unknown"
+    assert "stub" in (leg.get("notes") or "").casefold()
+    assert leg["duration_minutes"] is not None
+    assert leg["cost"] is not None
+    assert leg.get("currency") == "USD"
 
 
 def test_web_search_stub_mode():

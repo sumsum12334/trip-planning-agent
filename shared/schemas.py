@@ -66,6 +66,7 @@ class TransportLeg(BaseModel):
     mode: str = "unknown"
     duration_minutes: Optional[float] = None
     cost: Optional[float] = None
+    currency: Optional[str] = None
     source_url: Optional[str] = None
     notes: Optional[str] = None
 
@@ -82,6 +83,7 @@ class Itinerary(BaseModel):
     request: TripRequest
     days: list[DayPlan] = Field(default_factory=list)
     total_estimated_cost: Optional[float] = None
+    currency: Optional[str] = None
     used_travel_history: bool = False
     notes: list[str] = Field(default_factory=list)
 

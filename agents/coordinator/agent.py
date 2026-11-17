@@ -61,6 +61,41 @@ def _day_cost(stay: Optional[StayCandidate], transports: list[TransportLeg]) -> 
     return stay_cost + sum((leg.cost or 0) for leg in transports)
 
 
+def _components_currency(
+    stays: list[StayCandidate], transports: list[TransportLeg]
+) -> Optional[str]:
+    """Single currency across all costed components, or None when unknown.
+
+    Raises NoFeasiblePlanError when costed components carry different
+    currencies: summing them would make the budget check meaningless. Returns
+    None when nothing is costed, or when a positive cost has no currency label
+    (the caller notes that the budget was not enforced).
+    """
+    known: set[str] = set()
+    has_unlabeled_cost = False
+    for stay in stays:
+        if (stay.nightly_cost or 0) > 0:
+            if stay.currency:
+                known.add(stay.currency)
+            else:
+                has_unlabeled_cost = True
+    for leg in transports:
+        if (leg.cost or 0) > 0:
+            if leg.currency:
+                known.add(leg.currency)
+            else:
+                has_unlabeled_cost = True
+    if len(known) > 1:
+        raise NoFeasiblePlanError(
+            "no feasible stay: plan components mix currencies ("
+            + ", ".join(sorted(known))
+            + "); the budget cannot be checked honestly"
+        )
+    if has_unlabeled_cost:
+        return None
+    return next(iter(known)) if known else None
+
+
 def render_days(
     request: TripRequest,
     stays: list[StayCandidate],
@@ -103,10 +138,12 @@ def render_itinerary(
         excluded=excluded,
     )
     days = render_days(request, [stay] if stay else [], transport, packed)
+    currency = _components_currency([stay] if stay else [], [transport])
     return Itinerary(
         request=request,
         days=days,
         total_estimated_cost=sum((day.estimated_cost or 0) for day in days),
+        currency=currency,
         used_travel_history=used_history,
         notes=list(notes),
     )
@@ -114,7 +151,10 @@ def render_itinerary(
 
 def _over_budget(itinerary: Itinerary) -> bool:
     budget = itinerary.request.budget
-    return budget is not None and (itinerary.total_estimated_cost or 0) > budget
+    if budget is None or itinerary.currency is None:
+        # Without a known plan currency the total cannot be compared honestly.
+        return False
+    return (itinerary.total_estimated_cost or 0) > budget
 
 
 def revise_itinerary(
@@ -135,7 +175,11 @@ def revise_itinerary(
     ]
     alternatives.sort(key=lambda stay: (-(stay.rating or 0), stay.nightly_cost or 0))
     for stay in alternatives:
-        trial = render_itinerary(request, stay, visited, used_history, itinerary.notes)
+        try:
+            trial = render_itinerary(request, stay, visited, used_history, itinerary.notes)
+        except NoFeasiblePlanError:
+            # The alternative mixes currencies; it cannot be cost-checked.
+            continue
         if not _over_budget(trial):
             started = current.name if current else "no stay"
             trial.notes = list(itinerary.notes) + [
@@ -192,6 +236,10 @@ def _coordinate_node(state: CoordinatorState) -> CoordinatorState:
     if _over_budget(itinerary):
         raise NoFeasiblePlanError(
             "no feasible stay: plan still exceeds budget after revise"
+        )
+    if request.budget is not None and itinerary.currency is None:
+        itinerary.notes.append(
+            "Budget not enforced: some cost components have no currency label"
         )
     return {"itinerary": itinerary}
 

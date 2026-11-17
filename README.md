@@ -76,6 +76,16 @@ most-recent-first order and is disabled for Baseline A when
 visit through `TravelHistoryStore.record_visit`. Chat conversations remain on
 local SQLite even when travel history points at Postgres.
 
+#### Plan currency (`/plan` workflow)
+
+The coordinator enforces the budget in a single currency: it derives one plan
+currency from the costed stay and transport components and sets
+`Itinerary.currency`. When costed components carry different currencies the
+request fails closed with `NoFeasiblePlanError` instead of silently summing
+them, and when a positive cost has no currency label the plan notes that the
+budget was not enforced. The stub catalogs are consistent per city
+(Hong Kong in HKD; Tokyo, Amsterdam, and the generic catalog in USD).
+
 #### Travel history database (`DATABASE_URL`)
 
 | Backend | When to use | Connection |
