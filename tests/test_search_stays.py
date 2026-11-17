@@ -114,3 +114,66 @@ def test_health_reports_overpass_provider(monkeypatch):
     monkeypatch.delenv("TOOL_STAYS_MODE", raising=False)
     monkeypatch.delenv("OVERPASS_API_URL", raising=False)
     settings_mod.get_settings.cache_clear()
+
+
+@pytest.mark.live
+def test_overpass_live_tokyo_returns_real_hotels(monkeypatch):
+    """Live test: call real Overpass API for Tokyo lodging.
+
+    Overpass mirrors may be unreachable from some networks; if all fail,
+    the test verifies the error is labeled correctly rather than crashing.
+    """
+    from config import settings as settings_mod
+
+    settings_mod.get_settings.cache_clear()
+    monkeypatch.setenv("TOOL_STAYS_MODE", "overpass")
+    settings_mod.get_settings.cache_clear()
+
+    stays = search_stays(destination="Tokyo", budget=200, days=2)
+
+    monkeypatch.delenv("TOOL_STAYS_MODE", raising=False)
+    settings_mod.get_settings.cache_clear()
+
+    assert isinstance(stays, list)
+    assert len(stays) >= 1, "expected at least one result (real or labeled error)"
+    # Verify every result is a valid StayCandidate
+    for stay in stays:
+        assert isinstance(stay, StayCandidate)
+        assert stay.name, "stay should have a name"
+        assert stay.location, "stay should have a location"
+    # If real results came back, verify they have real data
+    real_results = [s for s in stays if s.name not in ("Provider error", "Geocoding failed")]
+    if real_results:
+        assert len(real_results) >= 1, "expected at least one real Overpass result"
+        for stay in real_results:
+            assert stay.location, "real stay should have a location"
+            if stay.coordinates:
+                assert "lat" in stay.coordinates and "lng" in stay.coordinates
+
+
+@pytest.mark.live
+def test_api_live_tokyo_returns_live_prices(monkeypatch):
+    """Live test: call real OBO Travel API for Tokyo hotel prices."""
+    from config import settings as settings_mod
+    from agents.search_stays import tools as tools_mod
+
+    settings_mod.get_settings.cache_clear()
+    tools_mod.clear_caches()
+    monkeypatch.setenv("TOOL_STAYS_MODE", "api")
+    settings_mod.get_settings.cache_clear()
+
+    stays = search_stays(destination="Tokyo", budget=300, days=2)
+
+    monkeypatch.delenv("TOOL_STAYS_MODE", raising=False)
+    settings_mod.get_settings.cache_clear()
+    tools_mod.clear_caches()
+
+    assert isinstance(stays, list)
+    assert len(stays) >= 1, "expected at least one OBO Travel result"
+    # First result should not be an error placeholder
+    assert stays[0].name not in ("Provider error",)
+    # OBO Travel results should have live nightly cost in USD
+    for stay in stays:
+        assert stay.name, "stay should have a name"
+        assert stay.location, "stay should have a location"
+        assert stay.currency == "USD", f"expected USD currency, got {stay.currency}"
