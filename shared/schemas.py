@@ -88,6 +88,13 @@ class Itinerary(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class PlanReviseRequest(BaseModel):
+    """Revise loop input: the previous plan plus the updated trip constraints."""
+
+    itinerary: Itinerary
+    request: TripRequest
+
+
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=12000)
     conversation: list[dict[str, str]] = Field(default_factory=list)

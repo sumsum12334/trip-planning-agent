@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from config import settings as settings_mod
-from eval.cases import CASES
+from eval.cases import CASES, REVISE_CASES
 from eval import runner as runner_mod
 from eval.runner import run_suite
 from eval.tool_cases import TOOL_CASES
@@ -56,7 +56,11 @@ def test_model_call_uses_configured_qwen_model_and_api_key(monkeypatch):
 
 
 def test_eval_cases_have_unique_ids():
-    ids = [case["id"] for case in CASES] + [case["id"] for case in TOOL_CASES]
+    ids = (
+        [case["id"] for case in CASES]
+        + [case["id"] for case in TOOL_CASES]
+        + [case["id"] for case in REVISE_CASES]
+    )
     assert ids
     assert len(ids) == len(set(ids))
 
@@ -253,3 +257,17 @@ def test_agent3_day_revise_and_poi_cases():
     assert dates_plan["checks"]["day_coverage"] is True
     assert dates_plan["checks"]["pois_per_day"] is True
 
+
+
+def test_revise_cases_pass():
+    report = run_suite(
+        ["hk_revise_budget_cut", "tokyo_revise_shorter_trip"],
+        include_tools=False,
+    )
+    assert report["case_count"] == 2
+    assert all(case["pass"] for case in report["cases"])
+    for case in report["cases"]:
+        assert case["kind"] == "revise"
+        for variant in case["variants"].values():
+            assert variant["plan"]["checks"]["revision_note"] is True
+            assert variant["plan"]["checks"]["day_coverage"] is True

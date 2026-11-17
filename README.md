@@ -45,7 +45,7 @@ Frontend  ──HTTP──►  Backend (FastAPI)
 | Piece | Role |
 |-------|------|
 | **Frontend** | Collect constraints; show itinerary |
-| **Backend** | Session, orchestration, `/plan` + `/health` |
+| **Backend** | Session, orchestration, `/plan` + `/plan/revise` + `/health` |
 | **Agent 1 `search_stays`** | Accommodation under budget / location |
 | **Agent 2 `estimate_transport`** | Travel time & cost between points |
 | **Agent 3 `coordinator`** | Distribute work, cost check, render, revise; POI for MVP |
@@ -85,6 +85,25 @@ request fails closed with `NoFeasiblePlanError` instead of silently summing
 them, and when a positive cost has no currency label the plan notes that the
 budget was not enforced. The stub catalogs are consistent per city
 (Hong Kong in HKD; Tokyo, Amsterdam, and the generic catalog in USD).
+
+#### Revise loop (`POST /plan/revise`)
+
+When the user changes budget, dates, or interests on an existing `/plan`
+result, `POST /plan/revise` re-enters the agent pipeline (Agent 4 travel
+history, Agent 1 stay search, coordinator cost check, render) with the updated
+`TripRequest` instead of appending ad-hoc chat text. The request carries the
+previous `Itinerary` plus the new constraints; the response notes what changed
+(`Revised for new budget: 350.0 (was 600.0)`, `Revised for new trip length: ...
+`) and re-applies the stay step-down and fail-closed cost check to the new
+figures. Revisions keep the same destination (a destination change returns 422;
+start a new plan instead). On the chat side, constraint changes already flow
+back through `plan_context` on the next turn.
+
+The coordinator also uses the model for its proposal role: after the plan is
+feasible it asks the configured endpoint for 1-3 short user-facing summary
+notes (returned as labeled `Model summary:` notes in `Itinerary.notes`). Stub
+mode, network errors, and malformed output leave the deterministic notes
+unchanged, and the summary is never hidden chain-of-thought.
 
 #### Travel history database (`DATABASE_URL`)
 

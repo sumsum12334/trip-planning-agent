@@ -21,6 +21,7 @@ from agents.chat_tools import (
     AGENT_TOOL_SCHEMAS,
     execute_agent_tool,
 )
+from agents.coordinator import revise as revise_plan
 from agents.coordinator import run as coordinate
 from agents.coordinator.agent import NoFeasiblePlanError, health as coordinator_health
 from agents.estimate_transport.agent import health as transport_health
@@ -44,6 +45,7 @@ from shared.schemas import (
     Itinerary,
     ModelSettingsResponse,
     ModelSettingsUpdate,
+    PlanReviseRequest,
     TripRequest,
     TravelHistoryCreate,
     TravelHistoryEntry,
@@ -139,6 +141,25 @@ def plan(request: TripRequest) -> Itinerary:
     try:
         return coordinate(request, session_id=f"plan-{uuid.uuid4()}")
     except NoFeasiblePlanError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/plan/revise", response_model=Itinerary)
+def plan_revise(body: PlanReviseRequest) -> Itinerary:
+    """Revise loop: re-run the agent pipeline for changed budget/dates/interests.
+
+    The agents execute again (travel history, stay search, cost check, render)
+    instead of appending ad-hoc chat text; the response notes what changed.
+    """
+    try:
+        return revise_plan(
+            body.request,
+            body.itinerary,
+            session_id=f"plan-revise-{uuid.uuid4()}",
+        )
+    except NoFeasiblePlanError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
 

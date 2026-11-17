@@ -6,7 +6,7 @@ from datetime import date
 
 import pytest
 
-from agents.coordinator.agent import NoFeasiblePlanError, run, trip_length
+from agents.coordinator.agent import NoFeasiblePlanError, revise, run, trip_length
 from shared.schemas import TripRequest
 
 
@@ -221,5 +221,113 @@ def test_unlabeled_costs_skip_budget_enforcement(monkeypatch):
     )
     assert itinerary.currency is None
     assert any("Budget not enforced" in note for note in itinerary.notes)
+
+
+def test_revise_reenters_pipeline_and_notes_budget_change():
+    initial = run(
+        TripRequest(
+            destination="Hong Kong",
+            origin="Hong Kong Airport",
+            days=3,
+            budget=600,
+        )
+    )
+    revised = revise(
+        TripRequest(
+            destination="Hong Kong",
+            origin="Hong Kong Airport",
+            days=3,
+            budget=350,
+        ),
+        initial,
+    )
+    assert any(
+        "budget" in note.casefold() and "350" in note for note in revised.notes
+    )
+    assert revised.request.budget == 350
+    assert revised.total_estimated_cost is not None
+    assert revised.total_estimated_cost <= 350
+    assert len(revised.days) == 3
+
+
+def test_revise_notes_trip_length_change():
+    initial = run(
+        TripRequest(destination="Tokyo", origin="Tokyo Shinjuku", days=4, budget=800)
+    )
+    revised = revise(
+        TripRequest(destination="Tokyo", origin="Tokyo Shinjuku", days=2, budget=800),
+        initial,
+    )
+    assert any(
+        "trip length" in note.casefold() and "2" in note for note in revised.notes
+    )
+    assert len(revised.days) == 2
+
+
+def test_revise_rejects_destination_change():
+    initial = run(
+        TripRequest(destination="Tokyo", origin="Tokyo Shinjuku", days=2, budget=400)
+    )
+    with pytest.raises(ValueError, match="same destination"):
+        revise(
+            TripRequest(destination="Hong Kong", origin="Hong Kong Airport", days=2, budget=400),
+            initial,
+        )
+
+
+def test_summary_notes_from_model(monkeypatch):
+    from agents.coordinator import agent as coordinator_agent
+
+    class FakeTACC:
+        configured = True
+
+        def complete(self, prompt, **kwargs):
+            assert "JSON" in prompt
+            return {
+                "ok": True,
+                "stub": False,
+                "text": '{"notes": ["Stay fits the budget", "Arrival by metro"]}',
+            }
+
+    monkeypatch.setattr(coordinator_agent, "TACCClient", lambda settings=None: FakeTACC())
+    itinerary = run(
+        TripRequest(destination="Hong Kong", origin="Hong Kong Airport", days=1, budget=400)
+    )
+    assert any(
+        note.startswith("Model summary: Stay fits the budget")
+        for note in itinerary.notes
+    )
+
+
+def test_summary_skipped_for_stub_response(monkeypatch):
+    from agents.coordinator import agent as coordinator_agent
+
+    class FakeTACC:
+        configured = True
+
+        def complete(self, prompt, **kwargs):
+            return {"ok": False, "stub": True, "text": "[Model stub] set endpoint"}
+
+    monkeypatch.setattr(coordinator_agent, "TACCClient", lambda settings=None: FakeTACC())
+    itinerary = run(
+        TripRequest(destination="Hong Kong", origin="Hong Kong Airport", days=1, budget=400)
+    )
+    assert all(not note.startswith("Model summary:") for note in itinerary.notes)
+
+
+def test_summary_tolerates_malformed_model_output(monkeypatch):
+    from agents.coordinator import agent as coordinator_agent
+
+    class FakeTACC:
+        configured = True
+
+        def complete(self, prompt, **kwargs):
+            return {"ok": True, "stub": False, "text": "not json at all"}
+
+    monkeypatch.setattr(coordinator_agent, "TACCClient", lambda settings=None: FakeTACC())
+    itinerary = run(
+        TripRequest(destination="Hong Kong", origin="Hong Kong Airport", days=1, budget=400)
+    )
+    assert all(not note.startswith("Model summary:") for note in itinerary.notes)
 
 

@@ -11,6 +11,12 @@ It measures per-agent constraints (stay budget/location, transport fields) and
 `avoid_visited=true`, Proposed must drop visited stays while Baseline A still
 recommends at least one of them.
 
+**Revise cases** (`REVISE_CASES`) run a plan first and then re-enter the agent
+pipeline with changed constraints (a budget cut or a shorter trip) through
+`agents.coordinator.agent.revise`. The revised itinerary must fit the new
+constraints, cover the requested days, and carry a note describing the change
+(`note_contains`).
+
 The runner uses stub stay/maps tools and an isolated SQLite file. Stub mode is
 offline and does not call a live model endpoint. API mode sends a trip-planning
 prompt to the configured OpenAI-compatible `QWEN_BASE_URL` using `QWEN_MODEL`

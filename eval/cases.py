@@ -52,6 +52,16 @@ class EvalCase(TypedDict, total=False):
     expect: CaseExpect
 
 
+class ReviseCase(TypedDict, total=False):
+    id: str
+    description: str
+    request: dict[str, Any]
+    revised_request: dict[str, Any]
+    history: list[HistorySeed]
+    expect: CaseExpect
+    note_contains: list[str]
+
+
 CASES: list[EvalCase] = [
     {
         "id": "tokyo_budget_ok",
@@ -594,5 +604,78 @@ CASES: list[EvalCase] = [
             "min_pois_per_day": 2,
             "unique_pois": True,
         },
+    },
+]
+
+# Revise-loop cases: run a plan, then re-enter the agent pipeline with changed
+# constraints (budget / days) and score the revised itinerary.
+REVISE_CASES: list[ReviseCase] = [
+    {
+        "id": "hk_revise_budget_cut",
+        "description": "Budget cut 600 -> 350 re-enters the pipeline: the revised plan must fit 350 over 3 days, note the budget change, and (Proposed) still avoid the visited Hong Kong Central stay.",
+        "request": {
+            "destination": "Hong Kong",
+            "origin": "Hong Kong Airport",
+            "days": 3,
+            "budget": 600,
+            "interests": [],
+            "avoid_visited": True,
+            "user_id": "eval-hk-revise",
+        },
+        "revised_request": {
+            "destination": "Hong Kong",
+            "origin": "Hong Kong Airport",
+            "days": 3,
+            "budget": 350,
+            "interests": [],
+            "avoid_visited": True,
+            "user_id": "eval-hk-revise",
+        },
+        "history": [
+            {"location": "Hong Kong Central", "city": "Hong Kong", "country": "HK"},
+        ],
+        "expect": {
+            "min_stays": 1,
+            "stay_location_contains": ["hong kong"],
+            "nightly_cost_within_budget": True,
+            "transport_required": True,
+            "expected_days": 3,
+            "history_avoidance": True,
+            "allow_generic_fallback": False,
+        },
+        "note_contains": ["budget"],
+    },
+    {
+        "id": "tokyo_revise_shorter_trip",
+        "description": "Shortening a Tokyo trip from 4 days to 2 at the same budget re-renders exactly 2 days and notes the length change.",
+        "request": {
+            "destination": "Tokyo",
+            "origin": "Tokyo Shinjuku",
+            "days": 4,
+            "budget": 800,
+            "interests": [],
+            "avoid_visited": False,
+            "user_id": "eval-tokyo-shorten",
+        },
+        "revised_request": {
+            "destination": "Tokyo",
+            "origin": "Tokyo Shinjuku",
+            "days": 2,
+            "budget": 800,
+            "interests": [],
+            "avoid_visited": False,
+            "user_id": "eval-tokyo-shorten",
+        },
+        "history": [],
+        "expect": {
+            "min_stays": 1,
+            "stay_location_contains": ["tokyo"],
+            "nightly_cost_within_budget": True,
+            "transport_required": True,
+            "expected_days": 2,
+            "history_avoidance": False,
+            "allow_generic_fallback": False,
+        },
+        "note_contains": ["trip length"],
     },
 ]
