@@ -59,6 +59,7 @@ class TransportLeg(BaseModel):
     duration_minutes: Optional[float] = None
     cost: Optional[float] = None
     source_url: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class DayPlan(BaseModel):
