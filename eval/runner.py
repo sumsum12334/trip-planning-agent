@@ -56,7 +56,7 @@ def _set_runtime(
     os.environ["TOOL_MAPS_MODE"] = "stub"
     os.environ["WEB_SEARCH_MODE"] = "stub"
     if mode == "api":
-        os.environ["QWEN_BASE_URL"] = model_url.rstrip("/").rsplit("/", 1)[0] if "/" in model_url.rstrip("/") else model_url.rstrip("/")
+        os.environ["QWEN_BASE_URL"] = model_url.rstrip("/")
     else:
         os.environ["QWEN_BASE_URL"] = ""
         os.environ["QWEN_API_KEY"] = ""
@@ -311,7 +311,7 @@ def run_variant(
 
     if mode == "api":
         stays = itinerary.get("stays", []) if isinstance(itinerary, dict) else []
-        model_metrics = itinerary.get("model_metrics", {}) if isinstance(itinerary, dict) else {}
+        model_metrics = (itinerary.get("model_metrics") or {}) if isinstance(itinerary, dict) else {}
 
         agent1 = {
             "pass": len(stays) > 0,
@@ -600,7 +600,7 @@ def _write_outputs(report: dict[str, Any], cases: list[dict[str, Any]], out_dir:
             plan = variant.get("plan") or {}
             stays = (plan.get("stays") or variant.get("agent1") or {})
             transport = (plan.get("transport") or variant.get("agent2") or {})
-            model_metrics = plan.get("model_metrics", {}) if isinstance(plan, dict) else {}
+            model_metrics = plan.get("checks", {}) if isinstance(plan, dict) else {}
             rows.append(
                 {
                     "case_id": case["id"],
