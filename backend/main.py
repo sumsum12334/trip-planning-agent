@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -73,12 +73,19 @@ from trip_planning_agent.observability import (
 )
 
 app = FastAPI(title="trip-planning-agent", version="0.1.0")
+# The shipped UI is served same-origin from this app, so cross-origin access
+# is only needed for the Vite dev server and local tooling. Note "testclient"
+# is the client address FastAPI's TestClient reports; it is localhost-equivalent.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|testclient)(:\d+)?$",
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Model-settings changes repoint the shared model endpoint, so they are only
+# accepted from the local machine (see update_model_settings).
+_LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 
 # Cooperative cancellation for in-flight streaming turns lives in
 # trip_planning_agent.cancellation. The client sends a `request_id` with the
@@ -255,7 +262,15 @@ def search_web(request: WebSearchRequest) -> dict:
 
 
 @app.put("/api/settings/model", response_model=ModelSettingsResponse)
-def update_model_settings(request: ModelSettingsUpdate) -> ModelSettingsResponse:
+def update_model_settings(
+    request: ModelSettingsUpdate, http_request: Request
+) -> ModelSettingsResponse:
+    client_host = (http_request.client.host if http_request.client else "") or ""
+    if client_host not in _LOCAL_HOSTS:
+        raise HTTPException(
+            status_code=403,
+            detail="Model settings can only be changed from the local machine.",
+        )
     endpoint = request.endpoint_url.strip()
     if endpoint:
         parsed = urlparse(endpoint)

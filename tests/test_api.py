@@ -315,3 +315,14 @@ def test_trip_plan_update_unknown_conversation(client: TestClient) -> None:
         "/api/conversations/does-not-exist/trip-plan", json={"budget": 100}
     )
     assert response.status_code == 404
+
+
+def test_model_settings_reject_remote_client() -> None:
+    from backend.main import app
+
+    remote = TestClient(app, client=("203.0.113.5", 12345))
+    response = remote.put(
+        "/api/settings/model",
+        json={"endpoint_url": "http://127.0.0.1:9999/v1", "model": "test-model"},
+    )
+    assert response.status_code == 403

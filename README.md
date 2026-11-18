@@ -311,6 +311,20 @@ the running process. The key is write-only and is not returned by the API.
 These changes are not persisted across restarts; use `.env` for persistent
 deployment defaults.
 
+### Security notes (local development scope)
+
+- The UI is served same-origin; CORS is limited to `localhost`/`127.0.0.1`
+  origins, and `PUT /api/settings/model` is only accepted from the local
+  machine because it repoints the shared model endpoint.
+- Cancellation (`/api/chat/stop`), the in-process model-configuration
+  overrides, and the conversation store locks are **per-process**: run the
+  backend with a single uvicorn worker (the default) for these to behave.
+- There is no authentication: `user_id` is client-supplied, so travel history
+  and conversations are only as isolated as the host allows. Treat a deployed
+  instance as single-user/group-internal (course scope).
+- Chat conversations and travel history live in local SQLite files under
+  `data/`; Docker is local-debug only and is not the TACC deployment path.
+
 Stop the server with `Ctrl+C` in that terminal.
 
 The UI is built with React and Vite. During UI development, run `npm run dev`
