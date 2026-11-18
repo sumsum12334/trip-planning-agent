@@ -172,6 +172,107 @@ def _call_model_stream(
     return full_text, metrics
 
 
+def _judge_model_response(
+    message: str,
+    response: str,
+    model_url: str,
+    metrics: dict[str, Any],
+    user_id: str,
+    timeout: float = 60.0,
+) -> dict[str, Any] | None:
+    """Use the model itself to judge response quality (LLM-as-a-judge).
+
+    Asks the model to rate its own response on relevance, completeness,
+    helpfulness, and accuracy. Returns a dict with scores (1-5 scale) and
+    reasoning, or None if judging fails.
+    """
+def _judge_model_response(
+    message: str,
+    response: str,
+    model_url: str,
+    metrics: dict[str, Any],
+    user_id: str,
+    timeout: float = 60.0,
+) -> dict[str, Any] | None:
+    """Use the model itself to judge response quality (LLM-as-a-judge).
+
+    Asks the model to rate its own response on relevance, completeness,
+    helpfulness, and accuracy. Returns a dict with scores (1-5 scale) and
+    reasoning, or None if judging fails.
+    """
+    judge_prompt = (
+        "You are an impartial judge evaluating a model's response to a user "
+        "request. Rate the response on a 1-5 scale for each criterion below.\n"
+        "\n"
+        "USER REQUEST:\n{message}\n\n"
+        "MODEL RESPONSE:\n{response}\n\n"
+        "METRICS:\n- TTFT: {ttft_ms} ms\n"
+        "- Token count: {token_count}\n"
+        "- TPS: {tps} tokens/sec\n"
+        "- TPOT: {tpot_ms} ms/token\n\n"
+        "Rate each criterion 1-5 (5 = best):\n"
+        "1. relevance: Does the response directly address the user's request?\n"
+        "2. completeness: Does it fully answer all parts of the request?\n"
+        "3. helpfulness: Is the response useful and actionable?\n"
+        "4. accuracy: Is the information factually correct and consistent?\n\n"
+        "Respond with a JSON object containing relevance, completeness, "
+        "helpfulness, accuracy (integers 1-5), and reasoning (brief text).\n"
+        "Example: {{\"relevance\": 4, \"completeness\": 3, \"helpfulness\": 4, "
+        "\"accuracy\": 3, \"reasoning\": \"...\"}}"
+    ).format(
+        message=message,
+        response=response[:2000],
+        ttft_ms=metrics.get("ttft_ms", "N/A"),
+        token_count=metrics.get("token_count", "N/A"),
+        tps=metrics.get("tps", "N/A"),
+        tpot_ms=metrics.get("tpot_ms", "N/A"),
+    )
+
+    try:
+        judge_text, _ = _call_model_stream(
+            message=judge_prompt,
+            model_url=model_url,
+            user_id=user_id,
+            timeout=timeout,
+        )
+        import re as _re
+
+        # Try to extract JSON from the response
+        json_match = _re.search(r"\{.*\}", judge_text, _re.DOTALL)
+        if json_match:
+            try:
+                parsed = json.loads(json_match.group(0))
+                if all(k in parsed for k in ("relevance", "completeness", "helpfulness", "accuracy")):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+        # Fallback: try to extract individual scores from text
+        scores: dict[str, Any] = {}
+        for key in ("relevance", "completeness", "helpfulness", "accuracy"):
+            m = _re.search(
+                rf'{key}\D{{0,20}}(\d)',
+                judge_text,
+                _re.IGNORECASE,
+            )
+            if m:
+                scores[key] = int(m.group(1))
+        if len(scores) == 4:
+            scores["reasoning"] = "Extracted from judge response text"
+            return scores
+        # Last resort: store raw text as reasoning
+        scores = {
+            "relevance": None,
+            "completeness": None,
+            "helpfulness": None,
+            "accuracy": None,
+            "reasoning": judge_text[:500] if judge_text else "",
+        }
+        return scores
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def _extract_hotels_from_text(text: str) -> list[dict[str, Any]]:
     """Extract hotel/stay mentions from model response text.
 
@@ -291,6 +392,17 @@ def run_variant(
                 f"Format: Hotel Name - $price/night - reason"
             )
             model_response, model_metrics = _call_model_stream(message=prompt, model_url=model_url, user_id=request.user_id or "eval-user")
+
+            # LLM-as-a-judge: evaluate response quality
+            judge_metrics = _judge_model_response(
+                message=prompt,
+                response=model_response,
+                model_url=model_url,
+                metrics=model_metrics,
+                user_id=request.user_id or "eval-user",
+            )
+            if judge_metrics:
+                model_metrics["model_judge"] = judge_metrics
 
             stays = _extract_hotels_from_text(model_response)
 
@@ -602,7 +714,7 @@ def _write_outputs(report: dict[str, Any], cases: list[dict[str, Any]], out_dir:
             plan = variant.get("plan") or {}
             stays = (plan.get("stays") or variant.get("agent1") or {})
             transport = (plan.get("transport") or variant.get("agent2") or {})
-            model_metrics = plan.get("checks", {}) if isinstance(plan, dict) else {}
+            model_metrics = plan.get("model_metrics", {}) if isinstance(plan, dict) else {}
             rows.append(
                 {
                     "case_id": case["id"],
@@ -630,6 +742,26 @@ def _write_outputs(report: dict[str, Any], cases: list[dict[str, Any]], out_dir:
                     "tps": model_metrics.get("tps", ""),
                     "tpot_ms": model_metrics.get("tpot_ms", ""),
                     "token_count": model_metrics.get("token_count", ""),
+                    "judge_relevance": (
+                        model_metrics.get("model_metrics", {}).get("relevance", "")
+                        if isinstance(model_metrics.get("model_metrics"), dict)
+                        else ""
+                    ),
+                    "judge_completeness": (
+                        model_metrics.get("model_metrics", {}).get("completeness", "")
+                        if isinstance(model_metrics.get("model_metrics"), dict)
+                        else ""
+                    ),
+                    "judge_helpfulness": (
+                        model_metrics.get("model_metrics", {}).get("helpfulness", "")
+                        if isinstance(model_metrics.get("model_metrics"), dict)
+                        else ""
+                    ),
+                    "judge_accuracy": (
+                        model_metrics.get("model_metrics", {}).get("accuracy", "")
+                        if isinstance(model_metrics.get("model_metrics"), dict)
+                        else ""
+                    ),
                 }
             )
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
