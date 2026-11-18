@@ -292,6 +292,88 @@ def _judge_model_response(
     return None
 
 
+def _judge_model_response_nemotron(
+    message: str,
+    response: str,
+    model_url: str,
+    metrics: dict[str, Any],
+    user_id: str,
+    timeout: float = 60.0,
+) -> dict[str, Any] | None:
+    """Use NVIDIA Nemotron model as judge for response quality.
+
+    Uses Nemotron-3.5-Bolt-E4B via NVIDIA NIM API to rate response quality
+    on relevance, completeness, helpfulness, and accuracy (1-5 scale each).
+
+    Returns dict with scores and reasoning, or None if judging fails.
+    """
+    from config.settings import get_settings
+
+    s = get_settings()
+    api_key = s.nemotron_api_key
+    if not api_key:
+        return None
+
+    judge_prompt = (
+        "Rate this response 1-5:\n\n"
+        f"USER: {message}\n\n"
+        f"MODEL: {response}\n\n"
+        "Reply with ONLY four numbers separated by commas: "
+        "relevance,completeness,helpfulness,accuracy"
+    )
+
+    try:
+        client = httpx.Client(timeout=timeout)
+        resp = client.post(
+            s.nemotron_api_url,
+            json={
+                "model": "nvidia/nemotron-3.5-bolt-e4b",
+                "messages": [{"role": "user", "content": judge_prompt}],
+                "max_tokens": 100,
+                "stream": False,
+                "temperature": 0.0,
+            },
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        if resp.status_code != 200:
+            return None
+
+        data = resp.json()
+        text = data["choices"][0]["message"]["content"].strip()
+
+        # Extract four digits
+        import re as _re
+
+        digits = _re.findall(r"\b([1-5])\b", text)
+        if len(all_digits := digits) >= 4:
+            return {
+                "relevance": int(all_digits[0]),
+                "completeness": int(all_digits[1]),
+                "helpfulness": int(all_digits[2]),
+                "accuracy": int(all_digits[3]),
+                "reasoning": "Extracted from Nemotron response",
+            }
+
+        # Fallback: try any digits
+        digits = _re.findall(r"\b([1-5])\b", text)
+        if len(digits) >= 4:
+            return {
+                "relevance": int(digits[0]),
+                "completeness": int(digits[1]),
+                "helpfulness": int(digits[2]),
+                "accuracy": int(digits[3]),
+                "reasoning": "Extracted from Nemotron response",
+            }
+
+        return None
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def _extract_hotels_from_text(text: str) -> list[dict[str, Any]]:
     """Extract hotel/stay mentions from model response text.
 
@@ -412,11 +494,11 @@ def run_variant(
             )
             model_response, model_metrics = _call_model_stream(message=prompt, model_url=model_url, user_id=request.user_id or "eval-user")
 
-            # LLM-as-a-judge: evaluate response quality
-            judge_metrics = _judge_model_response(
+            # LLM-as-a-judge: evaluate response quality using Nemotron model
+            judge_metrics = _judge_model_response_nemotron(
                 message=prompt,
                 response=model_response,
-                model_url=model_url,
+                model_url=settings.nemotron_api_url,
                 metrics=model_metrics,
                 user_id=request.user_id or "eval-user",
             )
