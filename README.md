@@ -268,7 +268,6 @@ The chat endpoints are:
 - `GET /api/conversations`
 - `GET /api/conversations/{conversation_id}`
 - `DELETE /api/conversations/{conversation_id}`
-- `POST /api/chat` (accepts an optional `conversation_id`)
 - `POST /api/chat/stream` (accepts an optional `request_id` used for cancellation and `plan_context`)
 - `POST /api/chat/stop` (body `{"request_id": "..."}`; sets the turn's cancel event)
 - `PUT /api/conversations/{conversation_id}/trip-plan` (persist edited `budget`, `currency`, and `budget_items` onto the latest plan)

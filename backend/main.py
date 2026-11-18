@@ -277,97 +277,6 @@ def update_model_settings(request: ModelSettingsUpdate) -> ModelSettingsResponse
     )
 
 
-@app.post("/api/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> ChatResponse:
-    store = ConversationStore(get_settings().database_url)
-    conversation = list(request.conversation[-20:])
-    events: list[ChatEvent] = [
-        ChatEvent(type="agent", label="Agent request queued", status="completed"),
-    ]
-    plan_context = format_plan_context(request.plan_context)
-    prompt = request.message
-    if conversation:
-        prompt = "\n".join(
-            f"{item.get('role', 'user')}: {item.get('content', '')}" for item in conversation
-        ) + f"\nuser: {request.message}"
-    if plan_context:
-        prompt = f"{plan_context}\n\n{prompt}"
-    conversation.append({"role": "user", "content": request.message})
-    conversation_id = store.save(
-        request.conversation_id,
-        conversation,
-        [event.model_dump() for event in events],
-    )
-    memory_user_id = request.user_id or conversation_id
-    remembered_places = remember_from_message(memory_user_id, request.message)
-    if remembered_places:
-        events.append(
-            ChatEvent(
-                type="agent",
-                label="Travel history updated",
-                detail=", ".join(remembered_places),
-                status="completed",
-            )
-        )
-    client = TACCClient()
-    trace = start_trace(
-        name="chat.turn",
-        input={
-            "message": request.message,
-            "history_turns": max(len(conversation) - 1, 0),
-        },
-        session_id=conversation_id,
-        metadata={"stream": False, "model": client.model},
-    )
-    try:
-        result = client.complete(
-            prompt,
-            system=TRIP_PLANNING_SYSTEM_PROMPT,
-            on_event=lambda event: events.append(ChatEvent(**event)),
-            session_id=conversation_id,
-            trace_context=trace_context_for(trace),
-        )
-        if not result.get("ok") and not result.get("stub"):
-            raise ValueError("The model service returned an invalid response.")
-    except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
-        end_trace(trace, output={"error": str(error)}, error=error)
-        failure_event = ChatEvent(
-            type="model",
-            label="Model request failed",
-            detail=str(error),
-            status="error",
-        )
-        store.save(
-            conversation_id,
-            conversation,
-            [event.model_dump() for event in events[1:]]
-            + [failure_event.model_dump()],
-        )
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "message": "The model request failed. The user message was saved and can be retried.",
-                "conversation_id": conversation_id,
-            },
-        ) from error
-    end_trace(trace, output=str(result["text"]))
-    conversation.extend(
-        [{"role": "assistant", "content": str(result["text"])}]
-    )
-    conversation_id = store.save(
-        conversation_id,
-        conversation,
-        [event.model_dump() for event in events[1:]],
-    )
-    return ChatResponse(
-        text=str(result["text"]),
-        stub=bool(result.get("stub")),
-        model=client.model,
-        conversation_id=conversation_id,
-        events=events,
-    )
-
-
 @app.post("/api/chat/stop")
 def stop_chat(request: ChatStopRequest) -> dict:
     """Cooperatively stop a streaming turn started with the same request_id."""
@@ -930,7 +839,8 @@ def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
         )
 
     updated_plan = dict(plan)
-    updated_plan["budget"] = request.budget
+    if request.budget is not None:
+        updated_plan["budget"] = request.budget
     if currency is not None:
         updated_plan["currency"] = currency
     if request.mode != "day":

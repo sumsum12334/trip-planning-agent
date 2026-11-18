@@ -122,6 +122,12 @@ def update_model_config(*, base_url: str, model: str, api_key: str | None) -> No
             _model_overrides["api_key"] = api_key
 
 
+def reset_model_config() -> None:
+    """Drop process-local model overrides (used by tests and reloads)."""
+    with _model_override_lock:
+        _model_overrides.clear()
+
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
