@@ -215,10 +215,10 @@ def _judge_model_response(
         "2. completeness: Does it fully answer all parts of the request?\n"
         "3. helpfulness: Is the response useful and actionable?\n"
         "4. accuracy: Is the information factually correct and consistent?\n\n"
-        "Respond with a JSON object containing relevance, completeness, "
-        "helpfulness, accuracy (integers 1-5), and reasoning (brief text).\n"
+        "Respond with ONLY a JSON object containing these four scores and "
+        "a brief reasoning string. Do NOT include any other text.\n"
         "Example: {{\"relevance\": 4, \"completeness\": 3, \"helpfulness\": 4, "
-        "\"accuracy\": 3, \"reasoning\": \"...\"}}"
+        "\"accuracy\": 3, \"reasoning\": \"Good coverage but missed some details\"}}"
     ).format(
         message=message,
         response=response[:2000],
@@ -250,12 +250,31 @@ def _judge_model_response(
         scores: dict[str, Any] = {}
         for key in ("relevance", "completeness", "helpfulness", "accuracy"):
             m = _re.search(
-                rf'{key}\D{{0,20}}(\d)',
+                rf'{key}[\s"=:]*(\d)',
                 judge_text,
                 _re.IGNORECASE,
             )
             if m:
                 scores[key] = int(m.group(1))
+        # Also try pattern like "rating of 4" or "score of 5" or "give it a 3"
+        if len(scores) < 4:
+            for key in ("relevance", "completeness", "helpfulness", "accuracy"):
+                if key in scores:
+                    continue
+                m = _re.search(
+                    rf'(?:rating|score|give (?:it|them))\s*(?:of|is|:)?\s*{key[0]}',
+                    judge_text,
+                    _re.IGNORECASE,
+                )
+                if m:
+                    scores[key] = int(m.group(1))
+        # If still missing scores, extract all digits from text in order
+        if len(scores) < 4:
+            all_digits = _re.findall(r'\b([1-5])\b', judge_text)
+            remaining = [k for k in ("relevance", "completeness", "helpfulness", "accuracy") if k not in scores]
+            for i, key in enumerate(remaining):
+                if i < len(all_digits):
+                    scores[key] = int(all_digits[i])
         if len(scores) == 4:
             scores["reasoning"] = "Extracted from judge response text"
             return scores
