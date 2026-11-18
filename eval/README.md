@@ -27,7 +27,9 @@ and `QWEN_API_KEY`, and may use the optional Nemotron judge configuration.
 From the repository root:
 
 ```powershell
-cd C:\dev\trip-planning-agent
+# From the repository root (PowerShell on Windows; on macOS/Linux use
+# `source .venv/bin/activate` and `python -m eval.runner`).
+cd trip-planning-agent
 .\.venv\Scripts\python.exe -m eval.runner
 ```
 

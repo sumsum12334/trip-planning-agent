@@ -35,7 +35,9 @@ AGENT_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "properties": {
                     "destination": {"type": "string"},
                     "budget": {"type": "number", "description": "Optional total trip budget."},
-                    "days": {"type": "integer", "minimum": 1, "maximum": 30},
+                    # No fixed day limit (proposal scope); requests of any
+                    # length are accepted and rendered one day per day.
+                    "days": {"type": "integer", "minimum": 1},
                     "interests": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": ["destination"],
@@ -82,10 +84,13 @@ AGENT_TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 
-def _optional_int(value: Any, *, minimum: int, maximum: int) -> int | None:
+def _optional_int(value: Any, *, minimum: int, maximum: int | None = None) -> int | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return max(minimum, min(maximum, int(value)))
+    result = max(minimum, int(value))
+    if maximum is not None:
+        result = min(maximum, result)
+    return result
 
 
 def _clean_strings(value: Any) -> list[str]:
@@ -106,7 +111,7 @@ def execute_agent_tool(name: str, arguments: dict[str, Any]) -> Any:
         request = TripRequest(
             destination=destination,
             budget=arguments.get("budget"),
-            days=_optional_int(arguments.get("days"), minimum=1, maximum=30),
+            days=_optional_int(arguments.get("days"), minimum=1),
             interests=_clean_strings(arguments.get("interests")),
             start_date=arguments.get("check_in"),
             end_date=arguments.get("check_out"),

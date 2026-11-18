@@ -60,6 +60,10 @@ def _arrival_transport(request: TripRequest, stay: Optional[StayCandidate]) -> T
 
 
 def _day_cost(stay: Optional[StayCandidate], transports: list[TransportLeg]) -> float:
+    # Charging model: each itinerary day carries one night of the chosen stay
+    # (nights == days, i.e. the checkout day still counts a night), plus the
+    # arrival transport on day 1 only. Costs share one plan currency
+    # (see _components_currency).
     stay_cost = (stay.nightly_cost or 0) if stay else 0
     return stay_cost + sum((leg.cost or 0) for leg in transports)
 

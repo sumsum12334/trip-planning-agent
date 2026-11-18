@@ -278,7 +278,10 @@ The chat endpoints are:
 From PowerShell:
 
 ```powershell
-cd C:\dev\trip-planning-agent
+# From the repository root (PowerShell on Windows; the equivalent bash
+# commands work on macOS/Linux, e.g. `copy` -> `cp`, `.\.venv\Scripts\Activate.ps1`
+# -> `source .venv/bin/activate`).
+cd trip-planning-agent
 
 # 1. Env file (fill QWEN_* when you have course credentials; stubs work with blanks)
 copy .env.example .env

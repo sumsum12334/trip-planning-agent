@@ -893,7 +893,8 @@ def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
             {"category": category, "amount": float(amount), "currency": currency or ""}
         )
     day_budgets: list[dict[str, Any]] = []
-    for item in request.day_budgets[:30]:
+    # No fixed day limit on trip length; only per-item payload guards below.
+    for item in request.day_budgets:
         if not isinstance(item, dict):
             raise HTTPException(status_code=422, detail="Each day budget must be an object.")
         day = item.get("day")
@@ -937,7 +938,7 @@ def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
 
     # Full day edits (itinerary + budget together) from the merged day editor.
     if request.mode != "category":
-        for entry in request.days[:30]:
+        for entry in request.days:
             if not isinstance(entry, dict):
                 raise HTTPException(status_code=422, detail="Each day must be an object.")
             try:

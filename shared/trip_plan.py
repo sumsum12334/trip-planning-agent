@@ -21,7 +21,6 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlparse
 
-MAX_DAYS = 14
 MAX_PLACES_PER_DAY = 12
 MAX_REFERENCES = 20
 MAX_BUDGET_ITEMS = 12
