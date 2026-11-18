@@ -328,6 +328,8 @@ def run_variant(
             "checks": {
                 "has_stays": len(stays) > 0,
                 "budget_respectful": all((s.get("nightly_cost") or 0) <= (request.budget or 9999) for s in stays),
+            },
+            "model_metrics": {
                 "ttft_ms": model_metrics.get("ttft_ms"),
                 "tps": model_metrics.get("tps"),
                 "tpot_ms": model_metrics.get("tpot_ms"),
@@ -722,7 +724,7 @@ def print_summary(report: dict[str, Any], json_path: Path, csv_path: Path) -> No
             for name in VARIANTS:
                 plan_variant = case["variants"][name].get("plan") or {}
                 checks = plan_variant.get("checks") or {}
-                failed_checks = [key for key, ok in checks.items() if not ok]
+                failed_checks = [key for key, ok in checks.items() if isinstance(ok, bool) and not ok]
                 if failed_checks:
                     reasons.append(f"{name}: {', '.join(failed_checks)}")
             if contrast and not contrast["pass"]:
