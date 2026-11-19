@@ -30,7 +30,7 @@ _WEATHER_STUB: dict[str, dict[str, Any]] = {
 }
 
 
-def run(destination: str) -> dict[str, Any]:
+def run(destination: str, start_date: Optional[str] = None, end_date: Optional[str] = None) -> dict[str, Any]:
     """Return weather info for a destination (stub)."""
     settings = get_settings()
     mode = getattr(settings, "weather_mode", "stub")
@@ -47,7 +47,7 @@ def run(destination: str) -> dict[str, Any]:
             "notes": f"No weather data for {destination} (stub)",
         }
 
-    return {
+    result = {
         "destination": destination,
         "mode": mode,
         "condition": data["condition"],
@@ -57,6 +57,11 @@ def run(destination: str) -> dict[str, Any]:
         "notes": data["notes"],
         "stub": mode == "stub",
     }
+    if start_date:
+        result["start_date"] = start_date
+    if end_date:
+        result["end_date"] = end_date
+    return result
 
 
 def health() -> dict[str, str]:

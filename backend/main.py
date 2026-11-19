@@ -31,6 +31,7 @@ from agents.travel_history.agent import remember_from_message
 from agents.travel_history.agent import TravelHistoryStore
 from agents.web_search.agent import health as web_search_health
 from agents.web_search import run as web_search
+from agents.weather.agent import run as weather_run
 from config.settings import get_model_config, get_settings, update_model_config
 from shared.schemas import (
     ChatEvent,
@@ -192,6 +193,12 @@ def agent_estimate_transport(body: EstimateTransportRequest) -> TransportLeg:
         interests=body.interests,
     )
     return estimate_transport_run(request, body.from_place, body.to_place)
+
+
+@app.post("/agents/weather")
+def agent_weather(request: TripRequest) -> dict:
+    """Direct weather tool for a destination."""
+    return weather_run(request.destination, request.start_date.isoformat() if request.start_date else None, request.end_date.isoformat() if request.end_date else None)
 
 
 

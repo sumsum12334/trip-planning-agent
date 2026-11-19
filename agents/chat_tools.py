@@ -94,6 +94,8 @@ AGENT_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "destination": {"type": "string"},
+                    "start_date": {"type": "string", "format": "date", "description": "Optional start date (YYYY-MM-DD)"},
+                    "end_date": {"type": "string", "format": "date", "description": "Optional end date (YYYY-MM-DD)"},
                 },
                 "required": ["destination"],
             },
@@ -169,6 +171,8 @@ def execute_agent_tool(name: str, arguments: dict[str, Any]) -> Any:
         destination = str(arguments.get("destination", "")).strip()
         if not destination:
             raise ValueError("weather requires a destination.")
-        return weather_run(destination)
+        start_date = arguments.get("start_date")
+        end_date = arguments.get("end_date")
+        return weather_run(destination, start_date, end_date)
 
     raise ValueError(f"Unknown agent tool requested: {name}")

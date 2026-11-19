@@ -178,7 +178,7 @@ export function Activity({ events }) {
     <>
       <details className="activity-card" onToggle={(e) => { if (e.currentTarget.open) scrollToLatest(); }}>
         <summary className="activity-heading">
-          <span>◈</span>
+          <span className="activity-icon">◈</span>
           <strong>Live workflow</strong>
           <span className={`agent-chip ${working ? "working" : "idle"}`}>{working ? `▶ ${working}` : "Idle"}</span>
           <small>{events.length} events</small>

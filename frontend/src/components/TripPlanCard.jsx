@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+/* eslint-disable react-hooks/set-state-in-effect -- sync weather dates with plan props */
+import { useMemo, useState, useEffect } from "react";
 import {
   formatBudget,
   markerNumbersForDay,
@@ -40,6 +41,26 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
   const [expandedDays, setExpandedDays] = useState({});
   const allDaysOpen = days.length > 0 && days.every((day) => expandedDays[day.day]);
 
+  // Weather state
+  const [weatherData, setWeatherData] = useState(null);
+  const [weatherLoading, setWeatherLoading] = useState(false);
+  const [weatherError, setWeatherError] = useState("");
+  const [weatherFromDate, setWeatherFromDate] = useState(() => plan.start_date ? String(plan.start_date) : "");
+  const [weatherToDate, setWeatherToDate] = useState(() => plan.end_date ? String(plan.end_date) : "");
+
+  // Accommodation state
+  const [staysData, setStaysData] = useState(null);
+  const [staysLoading, setStaysLoading] = useState(false);
+  const [staysError, setStaysError] = useState("");
+
+  // Sync weather dates with plan changes
+  useEffect(() => {
+    if (plan.start_date && plan.end_date) {
+      setWeatherFromDate(String(plan.start_date));
+      setWeatherToDate(String(plan.end_date));
+    }
+  }, [plan.start_date, plan.end_date]);
+
   function startCategoryEdit() {
     setEditingDay(null);
     setEditingCategory(true);
@@ -54,6 +75,59 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
     onSaveBudget?.({ mode: "day", budget: estimate, currency, days: [dayObject] });
     setEditingDay(null);
     setNotice("Day saved. The assistant will use this on your next message.");
+  }
+
+  async function fetchWeather() {
+    if (!weatherFromDate || !weatherToDate) {
+      setWeatherError("Please select both from and to dates");
+      return;
+    }
+    setWeatherLoading(true);
+    setWeatherError("");
+    try {
+      const response = await fetch("/agents/weather", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          destination: plan.destination,
+          start_date: weatherFromDate,
+          end_date: weatherToDate,
+        }),
+      });
+      if (!response.ok) throw new Error("Failed to fetch weather");
+      const data = await response.json();
+      setWeatherData(data);
+    } catch (error) {
+      setWeatherError(error.message);
+      setWeatherData(null);
+    } finally {
+      setWeatherLoading(false);
+    }
+  }
+
+  async function fetchStays() {
+    setStaysLoading(true);
+    setStaysError("");
+    try {
+      const response = await fetch("/agents/search_stays", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          destination: plan.destination,
+          budget: plan.budget,
+          days: days.length || 3,
+          interests: plan.interests || [],
+        }),
+      });
+      if (!response.ok) throw new Error("Failed to fetch stays");
+      const data = await response.json();
+      setStaysData(data);
+    } catch (error) {
+      setStaysError(error.message);
+      setStaysData(null);
+    } finally {
+      setStaysLoading(false);
+    }
   }
 
   return <div className="trip-plan-card">
@@ -73,8 +147,8 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
         </div>
       )}
       {planView === "days" && days.length > 0 && (
-        <button type="button" className="plan-tool" onClick={() => setExpandedDays(allDaysOpen ? {} : Object.fromEntries(days.map((day) => [day.day, true])))}>
-          {allDaysOpen ? "Collapse all" : "Expand all"}
+        <button type="button" className="plan-tool" onClick={() => setExpandedDays(allDaysOpen ? {} : Object.fromEntries(days.map((day) => [day.day, true])))}> 
+          {allDaysOpen ? "Collapse all" : "Expand all"} 
         </button>
       )}
       <button type="button" className="plan-tool" onClick={() => downloadPlanMarkdown(plan)}>⬇ Markdown</button>
@@ -147,6 +221,93 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
         </div>
       )}
     </div>
+
+    {/* Weather Section */}
+    <div className="trip-weather-block">
+      <div className="trip-weather-head">
+        <span>🌤 WEATHER FORECAST</span>
+        <div className="weather-date-inputs">
+          <label>
+            From
+            <input type="date" value={weatherFromDate} onChange={(e) => setWeatherFromDate(e.target.value)} />
+          </label>
+          <label>
+            To
+            <input type="date" value={weatherToDate} onChange={(e) => setWeatherToDate(e.target.value)} />
+          </label>
+          <button type="button" className="plan-tool primary" onClick={fetchWeather} disabled={weatherLoading || !weatherFromDate || !weatherToDate}>
+            {weatherLoading ? "Loading..." : "Get Weather"}
+          </button>
+        </div>
+      </div>
+      {weatherError && <div className="weather-error">{weatherError}</div>}
+      {weatherData && (
+        <div className="weather-result">
+          <div className="weather-main">
+            <span className="weather-condition">{weatherData.condition || "Unknown"}</span>
+            <span className="weather-temp">
+              {weatherData.temperature_c != null ? `${weatherData.temperature_c}°C` : ""}
+              {weatherData.temperature_f != null ? ` (${weatherData.temperature_f}°F)` : ""}
+            </span>
+          </div>
+          <div className="weather-details">
+            {weatherData.humidity != null && <span>💧 Humidity: {weatherData.humidity}%</span>}
+            {weatherData.notes && <span className="weather-notes">{weatherData.notes}</span>}
+            {weatherData.stub && <span className="weather-stub">(Stub data - not live)</span>}
+          </div>
+        </div>
+      )}
+      {!weatherData && !weatherLoading && !weatherError && (
+        <small className="budget-notice">Select date range and click "Get Weather" to see forecast.</small>
+      )}
+    </div>
+
+    {/* Accommodation Section */}
+    <div className="trip-stays-block">
+      <div className="trip-stays-head">
+        <span>🏨 ACCOMMODATION OPTIONS</span>
+        <button type="button" className="plan-tool" onClick={fetchStays} disabled={staysLoading}>
+          {staysLoading ? "Loading..." : staysData ? "Refresh" : "Find Stays"}
+        </button>
+      </div>
+      {staysError && <div className="weather-error">{staysError}</div>}
+      {staysData && staysData.length > 0 && (
+        <ul className="stays-list">
+          {staysData.map((stay, index) => (
+            <li key={`${stay.name}-${index}`} className="stay-item">
+              <div className="stay-info">
+                <strong>{stay.name}</strong>
+                <span className="stay-location">📍 {stay.location}</span>
+                {stay.nightly_cost != null && (
+                  <span className="stay-price">{formatBudget(stay.nightly_cost, stay.currency || "USD")}/night</span>
+                )}
+                {stay.rating != null && (
+                  <span className="stay-rating">⭐ {stay.rating}</span>
+                )}
+                {stay.amenities?.length > 0 && (
+                  <span className="stay-amenities">{stay.amenities.join(", ")}</span>
+                )}
+                {stay.cancellation_policy && (
+                  <span className="stay-cancellation">🔄 {stay.cancellation_policy}</span>
+                )}
+              </div>
+              {stay.source_url && (
+                <a href={stay.source_url} target="_blank" rel="noopener noreferrer" className="stay-book-link">
+                  View / Book
+                </a>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {staysData && staysData.length === 0 && !staysLoading && (
+        <small className="budget-notice">No stays found for this destination.</small>
+      )}
+      {!staysData && !staysLoading && !staysError && (
+        <small className="budget-notice">Click "Find Stays" to search for accommodation options.</small>
+      )}
+    </div>
+
     <div className="trip-budget-block">
       <div className="trip-budget-head">
         <span>ESTIMATED BUDGET</span>
@@ -156,7 +317,7 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
       {editingCategory ? (
         <CategoryBudgetEditor plan={plan} currency={currency} onCancel={() => setEditingCategory(false)} onSave={saveCategory} />
       ) : (
-        items.length > 0 ? <>
+        items.length > 0 ? <> 
           <div className="budget-subhead">Category items</div>
           <ul className="budget-items">
             {items.map((item, index) => <li key={`${item.category}-${index}`}>

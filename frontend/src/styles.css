@@ -294,6 +294,7 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 /* Live workflow text + current-agent chip (light) */
 .activity-card{background:#f8fafc}
 .activity-heading{display:flex;align-items:center;justify-content:space-between;min-width:0;gap:8px}
+.activity-icon{display:grid;place-items:center;width:28px;height:28px;border-radius:8px;background:#eef0ff;color:#6c63ff;font-size:14px;flex:0 0 auto}
 .activity-heading strong{color:#2f3d5c}
 .activity-heading small{color:#8a95aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .event{color:#5d6983;display:block;width:100%;min-width:0}
@@ -311,6 +312,7 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 /* Live workflow text + current-agent chip (dark) */
 .app[data-color-mode="dark"] .activity-card{background:#141b2e}
 .app[data-color-mode="dark"] .activity-heading strong{color:#e8ecf8}
+.app[data-color-mode="dark"] .activity-icon{background:rgba(106,168,255,0.18);color:#9db8ff}
 .app[data-color-mode="dark"] .event{color:#9aa6c4}
 .app[data-color-mode="dark"] .event strong{color:#dbe3ff}
 .app[data-color-mode="dark"] .event small{color:#9aa6c4}
@@ -329,11 +331,16 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 
 /* Live workflow scrolls to the latest event */
 .chat-panel>.activity-card .activity-items{flex:1 1 auto;width:100%;min-width:0;overflow:auto;overflow-x:hidden;padding-right:4px;scroll-behavior:smooth;min-height:0}
-.chat-panel>.activity-card .activity-items::-webkit-scrollbar{width:6px}
-.chat-panel>.activity-card .activity-items::-webkit-scrollbar-thumb{background:#c7d2e0;border-radius:3px}
+.chat-panel>.activity-card .activity-items::-webkit-scrollbar{width:8px}
+.chat-panel>.activity-card .activity-items::-webkit-scrollbar-track{background:transparent}
+.chat-panel>.activity-card .activity-items::-webkit-scrollbar-thumb{background:#c7d2e0;border-radius:4px;border:2px solid transparent;background-clip:content-box}
 .chat-panel>.activity-card .activity-items::-webkit-scrollbar-thumb:hover{background:#9fb0c8}
 .app[data-color-mode="dark"] .chat-panel>.activity-card .activity-items::-webkit-scrollbar-thumb{background:#3d4a66}
 .app[data-color-mode="dark"] .chat-panel>.activity-card .activity-items::-webkit-scrollbar-thumb:hover{background:#5c6b8a}
+
+/* Ensure activity card doesn't push content down - fixed height with internal scroll */
+.chat-panel>.activity-card{flex:0 0 auto;max-height:50vh;overflow:hidden}
+.chat-panel>.activity-card[open] .activity-items{max-height:calc(50vh - 60px)}
 
 /* Budget: day/category view toggle + per-day breakdown */
 .budget-view-toggle{display:inline-flex;gap:2px;margin-top:10px;padding:2px;border-radius:999px;background:#eef1f8;border:1px solid #e0e5f0}
@@ -396,12 +403,54 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .app[data-color-mode="dark"] .day-editor-field input,.app[data-color-mode="dark"] .day-editor-field textarea{background:#12192c;border-color:rgba(154,166,196,0.2);color:#e8ecf8}
 .app[data-color-mode="dark"] .trip-day-head-actions .plan-tool{background:#1c2740;border-color:rgba(154,166,196,0.2);color:#cfd8f5}
 
+/* Weather section */
+.trip-weather-block{margin-top:14px;padding-top:12px;border-top:1px solid #e2ebf8}
+.trip-weather-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.trip-weather-head>span{font-size:10px;font-weight:800;letter-spacing:1px;color:#7a83a0;text-transform:uppercase}
+.weather-date-inputs{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto}
+.weather-date-inputs label{display:flex;align-items:center;gap:4px;font-size:11px;color:#5f6d8c}
+.weather-date-inputs input{padding:6px 8px;border:1px solid #cfdcf3;border-radius:6px;font-size:12px;background:#fff}
+.app[data-color-mode="dark"] .weather-date-inputs input{background:#12192c;border-color:rgba(154,166,196,0.2);color:#e8ecf8}
+.weather-error{color:#a23f50;font-size:12px;margin-top:8px;padding:8px 10px;background:#fff5f6;border:1px solid #f1c5ce;border-radius:8px}
+.weather-result{padding:12px;background:#f7fbff;border:1px solid #d9e6fb;border-radius:10px}
+.app[data-color-mode="dark"] .weather-result{background:#12192c;border-color:rgba(106,168,255,0.28)}
+.weather-main{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.weather-condition{font-size:16px;font-weight:600;color:#334568;text-transform:capitalize}
+.app[data-color-mode="dark"] .weather-condition{color:#dbe3ff}
+.weather-temp{font-size:18px;font-weight:700;color:#3b5ecb}
+.app[data-color-mode="dark"] .weather-temp{color:#9db8ff}
+.weather-details{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:#5f6d8c}
+.app[data-color-mode="dark"] .weather-details{color:#aab5d0}
+.weather-notes{font-style:italic}
+.weather-stub{color:#aa6c16;font-size:11px;font-weight:600}
+
+/* Stays/Accommodation section */
+.trip-stays-block{margin-top:14px;padding-top:12px;border-top:1px solid #e2ebf8}
+.trip-stays-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.trip-stays-head>span{font-size:10px;font-weight:800;letter-spacing:1px;color:#7a83a0;text-transform:uppercase}
+.stays-list{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.stay-item{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:12px;background:#fff;border:1px solid #e6eefb;border-radius:10px}
+.app[data-color-mode="dark"] .stay-item{background:#12192c;border-color:rgba(154,166,196,0.14)}
+.stay-info{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0}
+.stay-info strong{color:#334568;font-size:14px}
+.app[data-color-mode="dark"] .stay-info strong{color:#dbe3ff}
+.stay-location{font-size:12px;color:#65728c}
+.app[data-color-mode="dark"] .stay-location{color:#aab5d0}
+.stay-price{font-size:12px;font-weight:700;color:#3b5ecb}
+.app[data-color-mode="dark"] .stay-price{color:#9db8ff}
+.stay-rating{font-size:12px;color:#f0ad4e}
+.stay-amenities{font-size:11px;color:#8995a9}
+.app[data-color-mode="dark"] .stay-amenities{color:#9aa6c4}
+.stay-cancellation{font-size:11px;color:#2f9e6f}
+.app[data-color-mode="dark"] .stay-cancellation{color:#37b37e}
+.stay-book-link{flex:0 0 auto;padding:6px 12px;background:#6c63ff;color:#fff;border-radius:8px;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap}
+.stay-book-link:hover{background:#5b52e6;text-decoration:none;color:#fff}
+
 /* Chat header (hero moved into the chat panel) */
 .chat-header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:18px 22px 12px;border-bottom:1px solid #eef1f7}
 .chat-header .eyebrow{margin:0 0 4px}
 .chat-title{margin:0;font-size:clamp(19px,1.8vw,24px);font-weight:700;letter-spacing:-0.02em;color:#17233d}
 .chat-summary{margin:4px 0 0;color:#74809b;font-size:13px;max-width:70ch}
-.chat-header .hero-icon{width:44px;height:44px;font-size:22px;border-radius:14px;flex:0 0 auto}
 .plan-collapsed-toggle-header{display:flex;align-items:center;justify-content:center;min-width:110px;padding:6px 12px;border:1px solid #dbe6f7;border-radius:10px;background:linear-gradient(135deg,#f1f7ff,#fff);color:#3f5f95;font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px #4c83c212;flex:0 0 auto}
 .plan-collapsed-toggle-header:hover{background:linear-gradient(135deg,#e8f0ff,#fff);border-color:#a9c4ec}
 .app[data-color-mode="dark"] .plan-collapsed-toggle-header{background:linear-gradient(135deg,#152033,#171e33);border-color:rgba(106,168,255,0.28);color:#9db8ff}
@@ -409,6 +458,34 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .app[data-color-mode="dark"] .chat-header{border-bottom-color:rgba(154,166,196,0.12)}
 .app[data-color-mode="dark"] .chat-title{color:#f2f5ff}
 .app[data-color-mode="dark"] .chat-summary{color:#9aa6c4}
+
+/* Floating chat panel */
+.chat-panel.floating{position:fixed;z-index:100;box-shadow:0 20px 60px rgba(15,23,42,0.25);border-radius:16px;overflow:hidden;display:flex;flex-direction:column;background:#fff;border:1px solid #e1e5ef}
+.chat-panel.floating.minimized{height:auto;min-height:0}
+.app[data-color-mode="dark"] .chat-panel.floating{background:#171e33;border-color:rgba(154,166,196,0.14);box-shadow:0 20px 60px rgba(0,0,0,0.4)}
+.floating-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;background:linear-gradient(135deg,#f1f7ff,#fff);border-bottom:1px solid #e1e5ef;cursor:move;user-select:none}
+.app[data-color-mode="dark"] .floating-header{background:linear-gradient(135deg,#152033,#171e33);border-bottom-color:rgba(154,166,196,0.12)}
+.drag-handle{display:grid;place-items:center;width:28px;height:28px;border-radius:8px;background:#eef0ff;color:#6c63ff;flex:0 0 auto}
+.app[data-color-mode="dark"] .drag-handle{background:rgba(106,168,255,0.18);color:#9db8ff}
+.floating-title{flex:1 1 auto;min-width:0}
+.floating-title .eyebrow{margin:0 0 2px;font-size:11px}
+.floating-title .chat-title{font-size:16px;margin:0}
+.floating-controls{display:flex;gap:4px;flex:0 0 auto}
+.floating-controls .MuiIconButton-root{color:#5d6983}
+.app[data-color-mode="dark"] .floating-controls .MuiIconButton-root{color:#9aa6c4}
+.resize-handles{position:absolute;inset:0;pointer-events:none;z-index:10}
+.resize-handle{position:absolute;background:transparent;pointer-events:auto;z-index:10}
+.resize-handle.se{bottom:0;right:0;width:16px;height:16px;cursor:se-resize}
+.resize-handle.sw{bottom:0;left:0;width:16px;height:16px;cursor:sw-resize}
+.resize-handle.ne{top:0;right:0;width:16px;height:16px;cursor:ne-resize}
+.resize-handle.nw{top:0;left:0;width:16px;height:16px;cursor:nw-resize}
+.resize-handle.e{top:0;bottom:0;right:0;width:8px;cursor:e-resize}
+.resize-handle.w{top:0;bottom:0;left:0;width:8px;cursor:w-resize}
+.resize-handle.s{left:0;right:0;bottom:0;height:8px;cursor:s-resize}
+.resize-handle.n{left:0;right:0;top:0;height:8px;cursor:n-resize}
+
+/* When floating, the chat panel should not affect layout */
+.chat-workspace.has-plan .chat-panel.floating{position:fixed}
 
 /* Trip plan: overview / day-by-day view + collapsible days */
 .plan-view-toggle{display:inline-flex;gap:2px;padding:2px;border-radius:999px;background:#eef1f8;border:1px solid #e0e5f0}
