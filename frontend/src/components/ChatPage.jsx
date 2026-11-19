@@ -549,30 +549,72 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
               </div>
             </>
           ) : (
-            // No trip plan yet - show welcome/chat
+            // No trip plan yet - show inline chat box
             <div className="welcome-chat-area">
               <div className="welcome-content">
                 <span className="welcome-icon">✦</span>
                 <h2>Where will you go next?</h2>
                 <p>Ask me to plan an itinerary, search accommodation, check weather, or estimate transport.</p>
                 <NextSteps suggestions={suggestions} onSelect={(text) => sendMessage(null, false, text)} disabled={streaming || answering} />
+                {/* Inline chat box for landing page */}
+                <div className="inline-chat-box">
+                  <Box className="messages" ref={messagesRef} sx={{ display: "flex", flexDirection: "column", gap: 0.5, maxHeight: 400, overflowY: "auto", marginBottom: 16 }}>
+                    {!current.messages.length && <div className="welcome-inline"><span>✦</span><p>No messages yet. Send your first message above or click a suggestion.</p></div>}
+                    {(() => {
+                      const output = [];
+                      current.messages.forEach((item, index) => {
+                        output.push(
+                          <MessageBubble
+                            key={`${item.role}-${index}`}
+                            role={item.role}
+                            content={item.content}
+                            reasoning={item.reasoning}
+                          />,
+                        );
+                      });
+                      return (
+                        <Stack spacing={2} sx={{ width: "100%" }}>
+                          {output}
+                        </Stack>
+                      );
+                    })()}
+                  </Box>
+                  <Box className="composer inline-composer" component="form" onSubmit={sendMessage} sx={{ display: "flex", flexDirection: "column", gap: 1.25, alignItems: "stretch", p: 2.5, borderTop: "1px solid #edf0f6" }}>
+                    <TextField
+                      multiline
+                      minRows={2}
+                      maxRows={5}
+                      value={message}
+                      onChange={(e) => setMessage(e.target.value)}
+                      placeholder="Plan a 3-day trip to Kyoto for $800..."
+                    />
+                    <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
+                      {streaming || answering
+                        ? <Button className="stop-button" type="button" variant="contained" color="error" onClick={stopStreaming}>Stop</Button>
+                        : <Button className="send-button" type="submit" variant="contained" endIcon={<SendIcon />}>Send</Button>}
+                    </Box>
+                  </Box>
+                  <div className="composer-footer"><span>{status || "Markdown supported"}</span>{retryText && <Button className="retry" size="small" color="warning" variant="outlined" disabled={streaming} onClick={(event) => sendMessage(event, true)}>Retry</Button>}</div>
+                </div>
               </div>
             </div>
           )}
         </main>
 
-        {/* Floating chat panel */}
-        {renderFloatingChatPanel()}
+        {/* Floating chat panel - only when trip plan exists */}
+        {latestPlan && renderFloatingChatPanel()}
 
-        {/* Bottom-right chat FAB */}
-        <Fab
-          className="chat-fab"
-          onClick={() => { setChatPanelOpen(true); setChatPanelMinimized(false); }}
-          aria-label="Open chat"
-          size="large"
-        >
-          <AutoAwesomeIcon />
-        </Fab>
+        {/* Bottom-right chat FAB - only when trip plan exists */}
+        {latestPlan && (
+          <Fab
+            className="chat-fab"
+            onClick={() => { setChatPanelOpen(true); setChatPanelMinimized(false); }}
+            aria-label="Open chat"
+            size="large"
+          >
+            <AutoAwesomeIcon />
+          </Fab>
+        )}
       </div>
     </section>
   );

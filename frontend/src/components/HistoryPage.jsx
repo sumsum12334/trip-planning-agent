@@ -27,6 +27,8 @@ export function HistoryPage({ userId }) {
   const [status, setStatus] = useState("");
   const [editingCountry, setEditingCountry] = useState(null); // { originalCountry, newCountry }
   const [editForm, setEditForm] = useState("");
+  const [editingCity, setEditingCity] = useState(null); // { country, originalCity }
+  const [editCityForm, setEditCityForm] = useState("");
   
   async function load() {
     const response = await fetch(`/api/travel-history?user_id=${encodeURIComponent(userId)}`);
@@ -82,7 +84,37 @@ export function HistoryPage({ userId }) {
     setEditingCountry({ originalCountry: country });
     setEditForm(country);
   }
-  
+
+  async function updateCity(country, originalCity, newCity) {
+    if (!newCity.trim() || newCity.trim() === originalCity) {
+      setEditingCity(null);
+      return;
+    }
+    const entriesToUpdate = entries.filter(
+      (e) => (e.country || "").trim() === country.trim() &&
+             (e.city || "").trim() === originalCity.trim()
+    );
+    for (const entry of entriesToUpdate) {
+      const response = await fetch(`/api/travel-history/${entry.id}?user_id=${encodeURIComponent(userId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...entry, city: newCity.trim() }),
+      });
+      if (!response.ok) {
+        setStatus(`Failed to update ${entry.location}`);
+        return;
+      }
+    }
+    setEditingCity(null);
+    setStatus(`Updated ${entriesToUpdate.length} entries to city "${newCity.trim()}"`);
+    await load();
+  }
+
+  function startEditCity(country, city) {
+    setEditingCity({ country, originalCity: city });
+    setEditCityForm(city);
+  }
+
   const countries = useMemo(() => {
     const map = new Map();
     entries.forEach((entry) => {
@@ -162,20 +194,56 @@ export function HistoryPage({ userId }) {
                   )}
                 </AccordionSummary>
                 <AccordionDetails>
-                  {group.cities.map((cityGroup) => (
-                    <Box key={cityGroup.city} className="history-city">
-                      <Typography variant="caption" className="history-city-name">{cityGroup.city}</Typography>
-                      {cityGroup.items.map((entry) => (
-                        <div className="history-entry" key={entry.id}>
-                          <span className="place-pin">●</span>
-                          <div><strong>{entry.location}</strong></div>
-                          <IconButton className="icon-button danger" color="error" title="Remove visit" onClick={() => remove(entry.id)} sx={{ ml: "auto" }}>
-                            <DeleteOutlinedIcon fontSize="small" />
-                          </IconButton>
-                        </div>
-                      ))}
-                    </Box>
-                  ))}
+                  {group.cities.map((cityGroup) => {
+                    const isEditingCity = editingCity?.country === group.country && editingCity?.originalCity === cityGroup.city;
+                    return (
+                      <Box key={cityGroup.city} className="history-city">
+                        {isEditingCity ? (
+                          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 2 }}>
+                            <TextField
+                              size="small"
+                              value={editCityForm}
+                              onChange={(e) => setEditCityForm(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') updateCity(group.country, cityGroup.city, editCityForm);
+                                if (e.key === 'Escape') setEditingCity(null);
+                              }}
+                              sx={{ flex: 1, minWidth: 150 }}
+                              autoFocus
+                            />
+                            <Tooltip title="Save">
+                              <IconButton size="small" onClick={() => updateCity(group.country, cityGroup.city, editCityForm)}>
+                                <SaveIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Cancel">
+                              <IconButton size="small" onClick={() => setEditingCity(null)}>
+                                <CancelIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          </Box>
+                        ) : (
+                          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 2 }}>
+                            <Typography variant="caption" className="history-city-name">{cityGroup.city}</Typography>
+                            <Tooltip title="Edit city">
+                              <IconButton size="small" onClick={() => startEditCity(group.country, cityGroup.city)}>
+                                <EditIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          </Box>
+                        )}
+                        {cityGroup.items.map((entry) => (
+                          <div className="history-entry" key={entry.id}>
+                            <span className="place-pin">●</span>
+                            <div><strong>{entry.location}</strong></div>
+                            <IconButton className="icon-button danger" color="error" title="Remove visit" onClick={() => remove(entry.id)} sx={{ ml: "auto" }}>
+                              <DeleteOutlinedIcon fontSize="small" />
+                            </IconButton>
+                          </div>
+                        ))}
+                      </Box>
+                    );
+                  })}
                 </AccordionDetails>
               </Accordion>
             );

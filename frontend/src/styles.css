@@ -535,3 +535,10 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .app[data-color-mode="dark"] .history-country-edit input{background:#12192c;border-color:rgba(154,166,196,0.2);color:#e8ecf8}
 .history-country-edit button{padding:6px 12px;background:#6c63ff;color:#fff;border-radius:6px;font-size:12px;font-weight:600;white-space:nowrap}
 .history-country-edit button:hover{background:#5b52e6}
+
+/* Inline chat box for landing page */
+.inline-chat-box{max-width:700px;margin:0 auto;padding:0 24px}
+.inline-composer{border-top-color:#e1e5ef}
+.welcome-inline{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;text-align:center;color:#74809b}
+.welcome-inline>span{font-size:40px;margin-bottom:12px}
+.welcome-inline>p{margin:0;font-size:14px}
