@@ -11,8 +11,10 @@ It measures per-agent constraints (stay budget/location, transport fields) and
 `avoid_visited=true`, Proposed must drop visited stays while Baseline A still
 recommends at least one of them.
 
-The runner always uses stub stay/maps tools and an isolated SQLite file. It
-does not call your `.env` database or a live model endpoint.
+The runner uses stub stay/maps tools and an isolated SQLite file. Stub mode is
+offline and does not call a live model endpoint. API mode sends a trip-planning
+prompt to the configured OpenAI-compatible `QWEN_BASE_URL` using `QWEN_MODEL`
+and `QWEN_API_KEY`, and may use the optional Nemotron judge configuration.
 
 ## Run
 
@@ -28,6 +30,16 @@ One case only:
 ```powershell
 .\.venv\Scripts\python.exe -m eval.runner --case tokyo_history_avoid_shibuya
 ```
+
+To evaluate a live model, configure `QWEN_BASE_URL` (including `/v1`) and run:
+
+```powershell
+.\.venv\Scripts\python.exe -m eval.runner --mode api
+```
+
+You can override the configured base URL with `--model-url`. API mode is
+separate from the deterministic baseline/proposed tool checks; it requests
+model-suggested stays and records response metrics.
 
 Reports are written to `eval/results/` as JSON and CSV.
 

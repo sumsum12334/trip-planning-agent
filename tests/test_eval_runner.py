@@ -2,9 +2,57 @@
 
 from __future__ import annotations
 
+from config import settings as settings_mod
 from eval.cases import CASES
+from eval import runner as runner_mod
 from eval.runner import run_suite
 from eval.tool_cases import TOOL_CASES
+
+
+def test_model_call_uses_configured_qwen_model_and_api_key(monkeypatch):
+    request: dict = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self):
+            return iter(
+                [
+                    'data: {"choices":[{"delta":{"content":"Hotel suggestion"}}]}',
+                    "data: [DONE]",
+                ]
+            )
+
+    def fake_stream(method, url, **kwargs):
+        request.update(method=method, url=url, **kwargs)
+        return FakeResponse()
+
+    with monkeypatch.context() as patch:
+        patch.setenv("QWEN_MODEL", "configured-model")
+        patch.setenv("QWEN_API_KEY", "test-key")
+        patch.setattr(runner_mod.httpx, "stream", fake_stream)
+        settings_mod.get_settings.cache_clear()
+        try:
+            text, metrics = runner_mod._call_model_stream(
+                "Plan a trip",
+                "https://model.example/v1",
+                "eval-user",
+            )
+        finally:
+            settings_mod.get_settings.cache_clear()
+    settings_mod.get_settings.cache_clear()
+
+    assert text == "Hotel suggestion"
+    assert request["json"]["model"] == "configured-model"
+    assert request["headers"]["Authorization"] == "Bearer test-key"
+    assert metrics["token_count"] == 2
 
 
 def test_eval_cases_have_unique_ids():

@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     # Optional form default only — not a hard product requirement
     default_origin: str = Field(default="", alias="DEFAULT_ORIGIN")
 
+    # Geocoding for Overpass provider (free Nominatim, rate-limited)
+    geocoding_enabled: bool = Field(default=False, alias="GEOCODING_ENABLED")
+
     # --- OpenStreetMap Overpass API (Agent 1, used when TOOL_STAYS_MODE=overpass) ---
     # Free, no authentication required. Queries OSM for hotels/motels/hostels near
     # the destination. Returns real names, coordinates, and addresses — but no
@@ -70,6 +73,15 @@ class Settings(BaseSettings):
     )
     stays_api_key: str = Field(default="", alias="STAYS_API_KEY")
     stays_api_timeout: float = Field(default=30.0, alias="STAYS_API_TIMEOUT")
+
+    # --- NVIDIA Nemotron API (Agent 6, used when EVENTS_MODE=ticketmaster) ---
+    # Get a free API key from https://build.nvidia.com/
+    # Rate limits: 5 requests/second, 10000 requests/day (free tier).
+    nemotron_api_key: str = Field(default="", alias="NEMOTRON_API_KEY")
+    nemotron_api_url: str = Field(
+        default="https://integrate.api.nvidia.com/v1/chat/completions",
+        alias="NEMOTRON_API_URL",
+    )
 
     @property
     def baseline_a(self) -> bool:
