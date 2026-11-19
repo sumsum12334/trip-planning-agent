@@ -1,19 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from "react";
-import {
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
-  Typography,
-  Chip,
-  Box,
-  Button,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  Paper,
-  IconButton,
-} from "@mui/material";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import { Box, Button, Chip, Dialog, DialogTitle, DialogContent, Paper, IconButton, Typography } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
 import { eventIcon } from "../lib/planUtils.js";
 import { agentForEvent, currentAgent } from "../lib/workflow.js";
@@ -49,13 +35,6 @@ function formatToolResult(result) {
     return JSON.stringify(result, null, 2).slice(0, 500);
   }
   return String(result).slice(0, 500);
-}
-
-function formatDuration(start, end) {
-  if (!start || !end) return "";
-  const ms = new Date(end) - new Date(start);
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 function EventDetailDialog({ event, agent, open, onClose }) {
@@ -125,7 +104,6 @@ export function Activity({ events }) {
   const itemsRef = useRef(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [selectedAgent, setSelectedAgent] = useState(null);
-  const [viewMode, setViewMode] = useState("timeline");
 
   const scrollToLatest = () => {
     const element = itemsRef.current;
@@ -135,44 +113,19 @@ export function Activity({ events }) {
 
   const working = currentAgent(events);
 
-  const { rows, byAgent } = useMemo(() => {
+  // Compute agent handovers for the timeline
+  const rows = useMemo(() => {
     const rows = [];
-    const byAgent = {};
     let lastAgent = null;
     events.forEach((event, index) => {
       const agent = agentForEvent(event);
       const handover = Boolean(agent) && agent !== lastAgent;
       const key = `${event.label}-${index}`;
       rows.push({ key, event, agent, handover, index });
-      if (agent) {
-        if (!byAgent[agent]) byAgent[agent] = [];
-        byAgent[agent].push({ key, event, index });
-      }
       lastAgent = agent || lastAgent;
     });
-    return { rows, byAgent };
+    return rows;
   }, [events]);
-
-  const agentStatsMemo = useMemo(() => {
-    const stats = {};
-    Object.entries(byAgent).forEach(([agent, evs]) => {
-      const tools = evs.filter(({ event }) => event.type === "tool" || event.label.toLowerCase().includes("tool"));
-      const errors = evs.filter(({ event }) => event.status === "error");
-      const completed = evs.filter(({ event }) => event.status === "completed");
-      const running = evs.filter(({ event }) => event.status === "running");
-      const first = evs[0]?.event;
-      const last = evs[evs.length - 1]?.event;
-      stats[agent] = {
-        count: evs.length,
-        tools: tools.length,
-        errors: errors.length,
-        completed: completed.length,
-        running: running.length > 0,
-        duration: formatDuration(first?.timestamp, last?.timestamp),
-      };
-    });
-    return stats;
-  }, [byAgent]);
 
   if (!events.length) return null;
 
@@ -219,187 +172,6 @@ export function Activity({ events }) {
     );
   };
 
-  const renderTimeline = () => (
-    <div className="activity-items" ref={itemsRef}>
-      {rows.map(renderEvent)}
-    </div>
-  );
-
-  const renderByAgent = () => (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {Object.entries(byAgent).map(([agent, evs]) => {
-        const stats = agentStatsMemo[agent];
-        const color = agentColor(agent);
-
-        const toolCalls = evs.filter(({ event }) => event.label.toLowerCase().includes("call") || event.label.toLowerCase().startsWith("calling"));
-        const toolResults = evs.filter(({ event }) => event.label.toLowerCase().includes("result received"));
-        const agentEvents = evs.filter(({ event }) => event.type === "agent");
-        const modelEvents = evs.filter(({ event }) => event.type === "model");
-        const otherEvents = evs.filter(({ event }) => !toolCalls.includes({ key: "", event }) && !toolResults.includes({ key: "", event }) && !agentEvents.includes({ key: "", event }) && !modelEvents.includes({ key: "", event }));
-
-        return (
-          <Accordion key={agent} defaultExpanded={false} sx={{ border: `1px solid ${color.border}`, borderRadius: 12, background: color.light, overflow: "hidden" }}>
-            <AccordionSummary
-              expandIcon={<ExpandMoreIcon />}
-              sx={{ background: color.light, borderBottom: `1px solid ${color.border}` }}
-            >
-              <Box sx={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0 }}>
-                <Chip
-                  label={agent}
-                  size="small"
-                  sx={{
-                    background: color.border,
-                    color: "#fff",
-                    fontWeight: 700,
-                    flex: "0 0 auto",
-                    minWidth: 0,
-                    textOverflow: "ellipsis",
-                    overflow: "hidden",
-                  }}
-                />
-                <Box sx={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 11, color: color.text }}>
-                  <span>📋 {stats.count} events</span>
-                  <span>⚙ {stats.tools} tools</span>
-                  <span>✓ {stats.completed} done</span>
-                  {stats.errors > 0 && <span style={{ color: "#c62828" }}>⚠ {stats.errors} errors</span>}
-                  {stats.running && <span style={{ color: "#1976d2" }}>▶ running</span>}
-                  {stats.duration && <span>⏱ {stats.duration}</span>}
-                </Box>
-              </Box>
-            </AccordionSummary>
-            <AccordionDetails sx={{ p: 1.5, display: "flex", flexDirection: "column", gap: 10 }}>
-              {toolCalls.length > 0 && (
-                <Box sx={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <Typography variant="caption" color={color.text} fontWeight={700} textTransform="uppercase" letterSpacing="0.5px" sx={{ fontSize: 9, mb: 2, opacity: 0.7 }}>Tool Calls</Typography>
-                  {toolCalls.map(({ key, event }) => (
-                    <div
-                      key={key}
-                      className={`event ${event.status}`}
-                      style={{ borderLeftColor: color.border, marginLeft: 0, paddingLeft: 0 }}
-                      onClick={() => openEventDetail(event, color)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openEventDetail(event, color); }}
-                    >
-                      <div className="event-main">
-                        <span className="event-icon">{eventIcon(event)}</span>
-                        <span className="event-label">
-                          <strong>{event.label}</strong>
-                          {event.detail && <small className="event-detail">{event.detail}</small>}
-                        </span>
-                        <span className={`event-dot ${event.status}`} style={{ background: color.border }} />
-                      </div>
-                    </div>
-                  ))}
-                </Box>
-              )}
-              {toolResults.length > 0 && (
-                <Box sx={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <Typography variant="caption" color={color.text} fontWeight={700} textTransform="uppercase" letterSpacing="0.5px" sx={{ fontSize: 9, mb: 2, opacity: 0.7 }}>Tool Results</Typography>
-                  {toolResults.map(({ key, event }) => (
-                    <div
-                      key={key}
-                      className={`event ${event.status}`}
-                      style={{ borderLeftColor: color.border, marginLeft: 0, paddingLeft: 0 }}
-                      onClick={() => openEventDetail(event, color)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openEventDetail(event, color); }}
-                    >
-                      <div className="event-main">
-                        <span className="event-icon">{eventIcon(event)}</span>
-                        <span className="event-label">
-                          <strong>{event.label}</strong>
-                          {event.detail && <small className="event-detail">{event.detail}</small>}
-                        </span>
-                        <span className={`event-dot ${event.status}`} style={{ background: color.border }} />
-                      </div>
-                    </div>
-                  ))}
-                </Box>
-              )}
-              {agentEvents.length > 0 && (
-                <Box sx={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <Typography variant="caption" color={color.text} fontWeight={700} textTransform="uppercase" letterSpacing="0.5px" sx={{ fontSize: 9, mb: 2, opacity: 0.7 }}>Agent Events</Typography>
-                  {agentEvents.map(({ key, event }) => (
-                    <div
-                      key={key}
-                      className={`event ${event.status}`}
-                      style={{ borderLeftColor: color.border, marginLeft: 0, paddingLeft: 0 }}
-                      onClick={() => openEventDetail(event, color)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openEventDetail(event, color); }}
-                    >
-                      <div className="event-main">
-                        <span className="event-icon">{eventIcon(event)}</span>
-                        <span className="event-label">
-                          <strong>{event.label}</strong>
-                          {event.detail && <small className="event-detail">{event.detail}</small>}
-                        </span>
-                        <span className={`event-dot ${event.status}`} style={{ background: color.border }} />
-                      </div>
-                    </div>
-                  ))}
-                </Box>
-              )}
-              {modelEvents.length > 0 && (
-                <Box sx={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <Typography variant="caption" color={color.text} fontWeight={700} textTransform="uppercase" letterSpacing="0.5px" sx={{ fontSize: 9, mb: 2, opacity: 0.7 }}>Model Events</Typography>
-                  {modelEvents.map(({ key, event }) => (
-                    <div
-                      key={key}
-                      className={`event ${event.status}`}
-                      style={{ borderLeftColor: color.border, marginLeft: 0, paddingLeft: 0 }}
-                      onClick={() => openEventDetail(event, color)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openEventDetail(event, color); }}
-                    >
-                      <div className="event-main">
-                        <span className="event-icon">{eventIcon(event)}</span>
-                        <span className="event-label">
-                          <strong>{event.label}</strong>
-                          {event.detail && <small className="event-detail">{event.detail}</small>}
-                        </span>
-                        <span className={`event-dot ${event.status}`} style={{ background: color.border }} />
-                      </div>
-                    </div>
-                  ))}
-                </Box>
-              )}
-              {otherEvents.length > 0 && (
-                <Box sx={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <Typography variant="caption" color={color.text} fontWeight={700} textTransform="uppercase" letterSpacing="0.5px" sx={{ fontSize: 9, mb: 2, opacity: 0.7 }}>Other</Typography>
-                  {otherEvents.map(({ key, event }) => (
-                    <div
-                      key={key}
-                      className={`event ${event.status}`}
-                      style={{ borderLeftColor: color.border, marginLeft: 0, paddingLeft: 0 }}
-                      onClick={() => openEventDetail(event, color)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openEventDetail(event, color); }}
-                    >
-                      <div className="event-main">
-                        <span className="event-icon">{eventIcon(event)}</span>
-                        <span className="event-label">
-                          <strong>{event.label}</strong>
-                          {event.detail && <small className="event-detail">{event.detail}</small>}
-                        </span>
-                        <span className={`event-dot ${event.status}`} style={{ background: color.border }} />
-                      </div>
-                    </div>
-                  ))}
-                </Box>
-              )}
-            </AccordionDetails>
-          </Accordion>
-        );
-      })}
-    </Box>
-  );
-
   return (
     <>
       <details className="activity-card" onToggle={(e) => { if (e.currentTarget.open) scrollToLatest(); }}>
@@ -408,27 +180,9 @@ export function Activity({ events }) {
           <strong>Live workflow</strong>
           <span className={`agent-chip ${working ? "working" : "idle"}`}>{working ? `▶ ${working}` : "Idle"}</span>
           <small>{events.length} events</small>
-          <Box sx={{ display: "flex", gap: 8, marginLeft: "auto", ml: 2 }}>
-            <Button
-              size="small"
-              variant={viewMode === "timeline" ? "contained" : "outlined"}
-              onClick={() => setViewMode("timeline")}
-              sx={{ textTransform: "none", fontSize: 11 }}
-            >
-              Timeline
-            </Button>
-            <Button
-              size="small"
-              variant={viewMode === "byAgent" ? "contained" : "outlined"}
-              onClick={() => setViewMode("byAgent")}
-              sx={{ textTransform: "none", fontSize: 11 }}
-            >
-              By Agent
-            </Button>
-          </Box>
         </summary>
-        <div className="activity-content">
-          {viewMode === "timeline" ? renderTimeline() : renderByAgent()}
+        <div className="activity-items" ref={itemsRef}>
+          {rows.map(renderEvent)}
         </div>
       </details>
       <EventDetailDialog
