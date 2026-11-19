@@ -1,5 +1,4 @@
-/* eslint-disable react-hooks/set-state-in-effect -- sync weather dates with plan props */
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import {
   formatBudget,
   markerNumbersForDay,
@@ -18,7 +17,7 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
   const itemsTotal = items.length
     ? Math.round(items.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) * 100) / 100
     : null;
-  const days = plan.days || [];
+  const days = useMemo(() => plan.days || [], [plan.days]);
   const derivedDay = estimate != null && days.length ? Math.round((estimate / days.length) * 100) / 100 : null;
   const dayBudgets = days.map((day) => {
     const dayItems = Array.isArray(day.budget_items) ? day.budget_items : [];
@@ -41,71 +40,82 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
   const [expandedDays, setExpandedDays] = useState({});
   const allDaysOpen = days.length > 0 && days.every((day) => expandedDays[day.day]);
 
-  // Weather state
-  const [weatherData, setWeatherData] = useState(null);
-  const [weatherLoading, setWeatherLoading] = useState(false);
-  const [weatherError, setWeatherError] = useState("");
+  // Weather state - per day weather
+  const [weatherData, setWeatherData] = useState({});
+  const [weatherLoading, setWeatherLoading] = useState({});
+  const [weatherError, setWeatherError] = useState({});
   const [weatherFromDate, setWeatherFromDate] = useState(() => plan.start_date ? String(plan.start_date) : "");
-  const [weatherToDate, setWeatherToDate] = useState(() => plan.end_date ? String(plan.end_date) : "");
 
   // Accommodation state
   const [staysData, setStaysData] = useState(null);
   const [staysLoading, setStaysLoading] = useState(false);
   const [staysError, setStaysError] = useState("");
 
-  // Sync weather dates with plan changes
+  // Sync weather from date with plan
   useEffect(() => {
-    if (plan.start_date && plan.end_date) {
+    if (plan.start_date) {
       setWeatherFromDate(String(plan.start_date));
-      setWeatherToDate(String(plan.end_date));
     }
-  }, [plan.start_date, plan.end_date]);
+  }, [plan.start_date]);
 
-  function startCategoryEdit() {
-    setEditingDay(null);
-    setEditingCategory(true);
-    setNotice("");
-  }
-  function saveCategory(payload) {
-    onSaveBudget?.(payload);
-    setEditingCategory(false);
-    setNotice("Saved. The assistant will use this on your next message.");
-  }
-  function saveDay(dayObject) {
-    onSaveBudget?.({ mode: "day", budget: estimate, currency, days: [dayObject] });
-    setEditingDay(null);
-    setNotice("Day saved. The assistant will use this on your next message.");
-  }
-
-  async function fetchWeather() {
-    if (!weatherFromDate || !weatherToDate) {
-      setWeatherError("Please select both from and to dates");
-      return;
-    }
-    setWeatherLoading(true);
-    setWeatherError("");
+  // Fetch weather for all days when fromDate changes
+  const fetchAllWeather = useCallback(async () => {
+    if (!weatherFromDate || days.length === 0) return;
+    
+    setWeatherLoading(prev => ({ ...prev, global: true }));
+    setWeatherError(prev => ({ ...prev, global: "" }));
+    
     try {
-      const response = await fetch("/agents/weather", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          destination: plan.destination,
-          start_date: weatherFromDate,
-          end_date: weatherToDate,
-        }),
+      // Calculate dates for each day
+      const fromDate = new Date(weatherFromDate + "T00:00:00");
+      const dayWeatherPromises = days.map(async (day, index) => {
+        const dayDate = new Date(fromDate);
+        dayDate.setDate(fromDate.getDate() + index);
+        const dateStr = dayDate.toISOString().split("T")[0];
+        
+        try {
+          const response = await fetch("/agents/weather", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              destination: plan.destination,
+              start_date: dateStr,
+              end_date: dateStr,
+            }),
+          });
+          if (!response.ok) throw new Error("Failed to fetch weather");
+          const data = await response.json();
+          return { day: day.day, date: dateStr, data };
+        } catch (error) {
+          return { day: day.day, date: dateStr, error: error.message };
+        }
       });
-      if (!response.ok) throw new Error("Failed to fetch weather");
-      const data = await response.json();
-      setWeatherData(data);
+      
+      const results = await Promise.all(dayWeatherPromises);
+      const newWeatherData = {};
+      const newErrors = {};
+      results.forEach(r => {
+        if (r.error) {
+          newErrors[r.day] = r.error;
+        } else {
+          newWeatherData[r.day] = { ...r.data, date: r.date };
+        }
+      });
+      setWeatherData(newWeatherData);
+      setWeatherError(newErrors);
     } catch (error) {
-      setWeatherError(error.message);
-      setWeatherData(null);
+      setWeatherError(prev => ({ ...prev, global: error.message }));
     } finally {
-      setWeatherLoading(false);
+      setWeatherLoading(prev => ({ ...prev, global: false }));
     }
-  }
+  }, [weatherFromDate, days, plan.destination]);
 
-  async function fetchStays() {
+  useEffect(() => {
+    fetchAllWeather();
+  }, [fetchAllWeather]);
+
+  // Accommodation fetch
+  const fetchStays = useCallback(async () => {
     setStaysLoading(true);
     setStaysError("");
     try {
@@ -128,6 +138,22 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
     } finally {
       setStaysLoading(false);
     }
+  }, [plan.destination, plan.budget, days.length, plan.interests]);
+
+  function startCategoryEdit() {
+    setEditingDay(null);
+    setEditingCategory(true);
+    setNotice("");
+  }
+  function saveCategory(payload) {
+    onSaveBudget?.(payload);
+    setEditingCategory(false);
+    setNotice("Saved. The assistant will use this on your next message.");
+  }
+  function saveDay(dayObject) {
+    onSaveBudget?.({ mode: "day", budget: estimate, currency, days: [dayObject] });
+    setEditingDay(null);
+    setNotice("Day saved. The assistant will use this on your next message.");
   }
 
   return <div className="trip-plan-card">
@@ -164,11 +190,17 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
           {days.map((day) => {
             const budget = dayBudgets.find((entry) => entry.day === day.day);
             const dayMarkers = markerNumbersForDay(points, day.day);
+            const weather = weatherData[day.day];
             return <button type="button" className="trip-overview-row" key={`overview-${day.day}`} onClick={() => { setPlanView("days"); setExpandedDays((previous) => ({ ...previous, [day.day]: true })); }}>
               <span className="overview-day">Day {day.day}</span>
               <span className="overview-title">{day.title}</span>
               <span className="overview-meta">{day.activities.length} activities{dayMarkers.length ? ` · 🗺 ${dayMarkers.join("·")}` : ""}</span>
               <b className="overview-budget">{budget && budget.amount != null ? formatBudget(budget.amount, currency) : "—"}</b>
+              {weather && (
+                <span className="overview-weather" style={{fontSize: 11, color: '#6c63ff', marginLeft: 8}}>
+                  {weather.condition} {weather.temperature_c != null ? `${weather.temperature_c}°C` : ""}
+                </span>
+              )}
             </button>;
           })}
         </div>
@@ -183,6 +215,10 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
           };
           const isEditing = editingDay === day.day;
           const isOpen = Boolean(expandedDays[day.day]) || isEditing;
+          const weather = weatherData[day.day];
+          const weatherLoadingDay = weatherLoading[day.day];
+          const weatherErrorDay = weatherError[day.day];
+          
           return <article className="trip-day" key={`${day.day}-${day.title}`}>
             <div className="trip-day-head">
               <button type="button" className="day-collapse" aria-expanded={isOpen} onClick={() => setExpandedDays((previous) => ({ ...previous, [day.day]: !isOpen }))}>
@@ -196,6 +232,27 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
               </div>
             </div>
             {isOpen && (isEditing ? <DayEditor day={day} dayBudget={budget} currency={currency} onCancel={() => setEditingDay(null)} onSave={saveDay} /> : <>
+              {/* Inline weather for this day */}
+              {(weather || weatherLoadingDay || weatherErrorDay) && (
+                <div className="day-weather-inline">
+                  <span className="day-weather-icon">🌤</span>
+                  {weatherLoadingDay ? (
+                    <span className="day-weather-temp">Loading...</span>
+                  ) : weatherErrorDay ? (
+                    <span style={{color: '#a23f50'}}>Error: {weatherErrorDay}</span>
+                  ) : (
+                    <>
+                      <span className="day-weather-condition">{weather.condition}</span>
+                      <span className="day-weather-temp">
+                        {weather.temperature_c != null ? `${weather.temperature_c}°C` : ""}
+                        {weather.temperature_f != null ? ` (${weather.temperature_f}°F)` : ""}
+                      </span>
+                      {weather.humidity != null && <span className="day-weather-humidity">💧 {weather.humidity}%</span>}
+                      {weather.stub && <span style={{color: '#aa6c16', fontSize: 10, marginLeft: 8}}>(Stub data)</span>}
+                    </>
+                  )}
+                </div>
+              )}
               <ul>{day.activities.map((activity) => <li key={activity}>{activity}</li>)}</ul>
               {day.places?.length > 0 && <div className="trip-places">
                 {day.places.map((place, index) => {
@@ -222,44 +279,22 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
       )}
     </div>
 
-    {/* Weather Section */}
+    {/* Weather Section - Date picker for all days */}
     <div className="trip-weather-block">
       <div className="trip-weather-head">
-        <span>🌤 WEATHER FORECAST</span>
+        <span>🌤 WEATHER FORECAST (All Days)</span>
         <div className="weather-date-inputs">
           <label>
-            From
+            From Date
             <input type="date" value={weatherFromDate} onChange={(e) => setWeatherFromDate(e.target.value)} />
           </label>
-          <label>
-            To
-            <input type="date" value={weatherToDate} onChange={(e) => setWeatherToDate(e.target.value)} />
-          </label>
-          <button type="button" className="plan-tool primary" onClick={fetchWeather} disabled={weatherLoading || !weatherFromDate || !weatherToDate}>
-            {weatherLoading ? "Loading..." : "Get Weather"}
+          <button type="button" className="plan-tool primary" onClick={fetchAllWeather} disabled={weatherLoading.global || !weatherFromDate}>
+            {weatherLoading.global ? "Loading..." : "Refresh Weather"}
           </button>
         </div>
       </div>
-      {weatherError && <div className="weather-error">{weatherError}</div>}
-      {weatherData && (
-        <div className="weather-result">
-          <div className="weather-main">
-            <span className="weather-condition">{weatherData.condition || "Unknown"}</span>
-            <span className="weather-temp">
-              {weatherData.temperature_c != null ? `${weatherData.temperature_c}°C` : ""}
-              {weatherData.temperature_f != null ? ` (${weatherData.temperature_f}°F)` : ""}
-            </span>
-          </div>
-          <div className="weather-details">
-            {weatherData.humidity != null && <span>💧 Humidity: {weatherData.humidity}%</span>}
-            {weatherData.notes && <span className="weather-notes">{weatherData.notes}</span>}
-            {weatherData.stub && <span className="weather-stub">(Stub data - not live)</span>}
-          </div>
-        </div>
-      )}
-      {!weatherData && !weatherLoading && !weatherError && (
-        <small className="budget-notice">Select date range and click "Get Weather" to see forecast.</small>
-      )}
+      {weatherError.global && <div className="weather-error">{weatherError.global}</div>}
+      {!weatherFromDate && <small className="budget-notice">Set a start date in the trip plan to auto-fetch weather for all days.</small>}
     </div>
 
     {/* Accommodation Section */}
@@ -291,11 +326,19 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
                   <span className="stay-cancellation">🔄 {stay.cancellation_policy}</span>
                 )}
               </div>
-              {stay.source_url && (
-                <a href={stay.source_url} target="_blank" rel="noopener noreferrer" className="stay-book-link">
-                  View / Book
-                </a>
-              )}
+              <div style={{display: 'flex', gap: 8, alignItems: 'center'}}>
+                {stay.source_url && (
+                  <a href={stay.source_url} target="_blank" rel="noopener noreferrer" className="stay-book-link">
+                    View / Book
+                  </a>
+                )}
+                {stay.coordinates && (
+                  <a href={`https://www.openstreetmap.org/?mlat=${stay.coordinates.lat}&mlon=${stay.coordinates.lng}#map=16/${stay.coordinates.lat}/${stay.coordinates.lng}`} 
+                     target="_blank" rel="noopener noreferrer" className="stay-map-link">
+                    🗺 Map
+                  </a>
+                )}
+              </div>
             </li>
           ))}
         </ul>

@@ -507,3 +507,83 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .app[data-color-mode="dark"] .overview-title{color:#dbe3ff}
 .app[data-color-mode="dark"] .overview-budget{color:#9db8ff}
 .app[data-color-mode="dark"] .day-chevron{color:#9aa6c4}
+
+/* ============================================================
+   NEW LAYOUT: Trip Plan as main focus, Chat as floating FAB
+   ============================================================ */
+
+.chat-workspace-new{display:grid;grid-template-columns:1fr 48px;min-height:100vh;position:relative}
+.main-content{grid-column:1;grid-row:1;display:flex;flex-direction:column;min-height:100vh;background:var(--bg-primary, #f5f7fb);overflow:auto}
+.right-sidebar{grid-column:2;grid-row:1;display:flex;align-items:flex-start;justify-content:center;padding-top:24px;background:transparent}
+
+/* Trip Plan + Live Workflow side by side */
+.trip-plan-with-workflow{display:grid;grid-template-columns:1fr 340px;gap:24px;flex:1;min-height:0;padding:24px 32px}
+.trip-plan-main{display:flex;flex-direction:column;min-height:0}
+.trip-plan-main .trip-plan-card{flex:1;display:flex;flex-direction:column;min-height:0}
+.live-workflow-sidebar{flex:0 0 340px;display:flex;flex-direction:column;min-height:0;max-height:100%}
+.live-workflow-sidebar .activity-card{flex:1;display:flex;flex-direction:column;min-height:0;max-height:none;height:100%}
+.live-workflow-sidebar .activity-items{flex:1;overflow:auto}
+
+/* Welcome chat area when no trip plan */
+.welcome-chat-area{display:flex;align-items:center;justify-content:center;flex:1;padding:48px 24px}
+.welcome-content{text-align:center;max-width:600px}
+.welcome-icon{display:inline-block;width:80px;height:80px;border-radius:50%;background:linear-gradient(135deg,#6c63ff,#8b84ff);color:#fff;font-size:40px;line-height:80px;margin-bottom:16px;box-shadow:0 8px 24px rgba(108,99,255,0.3)}
+.welcome-content h2{font-size:clamp(28px,4vw,40px);font-weight:700;margin:0 0 12px;color:#17233d}
+.welcome-content p{font-size:18px;color:#74809b;margin:0 0 32px}
+
+/* Right sidebar toggle button */
+.plan-collapsed-toggle-sidebar{writing-mode:vertical-rl;text-orientation:mixed;padding:12px 8px;border:1px solid #dbe6f7;border-radius:10px;background:linear-gradient(135deg,#f1f7ff,#fff);color:#3f5f95;font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px #4c83c212;white-space:nowrap;height:fit-content}
+.plan-collapsed-toggle-sidebar:hover{background:linear-gradient(135deg,#e8f0ff,#fff);border-color:#a9c4ec}
+.app[data-color-mode="dark"] .plan-collapsed-toggle-sidebar{background:linear-gradient(135deg,#152033,#171e33);border-color:rgba(106,168,255,0.28);color:#9db8ff}
+.app[data-color-mode="dark"] .plan-collapsed-toggle-sidebar:hover{background:linear-gradient(135deg,#1a2a44,#171e33);border-color:#5a7cc0}
+
+/* Floating chat FAB */
+.chat-fab{position:fixed;bottom:24px;right:24px;z-index:200;box-shadow:0 8px 24px rgba(108,99,255,0.4) !important;background:linear-gradient(135deg,#6c63ff,#8b84ff) !important;color:#fff !important;transition:transform 0.2s, box-shadow 0.2s}
+.chat-fab:hover{transform:scale(1.05);box-shadow:0 12px 32px rgba(108,99,255,0.5) !important}
+.chat-fab.MuiFab-primary{background:linear-gradient(135deg,#6c63ff,#8b84ff) !important}
+
+/* Floating chat panel (bottom-right) */
+.chat-panel.floating{position:fixed;bottom:88px;right:24px;z-index:150;width:480px;height:600px;max-width:calc(100vw - 48px);max-height:calc(100vh - 120px);box-shadow:0 20px 60px rgba(15,23,42,0.25);border-radius:16px;overflow:hidden;display:flex;flex-direction:column;background:#fff;border:1px solid #e1e5ef}
+.chat-panel.floating.minimized{height:auto;min-height:0}
+.app[data-color-mode="dark"] .chat-panel.floating{background:#171e33;border-color:rgba(154,166,196,0.14);box-shadow:0 20px 60px rgba(0,0,0,0.4)}
+
+/* When collapsed, trip plan takes full width */
+.chat-workspace-new:has(.trip-plan-with-workflow) .main-content{grid-column:1}
+
+/* Responsive */
+@media(max-width:1200px){
+  .trip-plan-with-workflow{grid-template-columns:1fr;grid-template-rows:1fr auto}
+  .live-workflow-sidebar{flex:0 0 auto;max-height:40vh;border-top:1px solid #e2ebf8;padding-top:16px;margin-top:16px}
+  .live-workflow-sidebar .activity-card{max-height:40vh}
+}
+@media(max-width:900px){
+  .chat-workspace-new{grid-template-columns:1fr}
+  .right-sidebar{display:none}
+  .trip-plan-with-workflow{padding:16px}
+  .chat-panel.floating{width:calc(100vw - 32px);right:16px;height:calc(100vh - 140px)}
+  .chat-fab{bottom:16px;right:16px}
+}
+
+/* Inline weather in day cards */
+.day-weather-inline{display:flex;align-items:center;gap:8px;padding:8px 12px;margin:8px 0;background:#f7fbff;border:1px solid #d9e6fb;border-radius:8px;font-size:12px;color:#5f6d8c}
+.app[data-color-mode="dark"] .day-weather-inline{background:#12192c;border-color:rgba(106,168,255,0.28);color:#aab5d0}
+.day-weather-icon{font-size:16px}
+.day-weather-temp{font-weight:700;color:#3b5ecb}
+.app[data-color-mode="dark"] .day-weather-temp{color:#9db8ff}
+.day-weather-condition{text-transform:capitalize}
+.day-weather-humidity{color:#8995a9;font-size:11px}
+.app[data-color-mode="dark"] .day-weather-humidity{color:#9aa6c4}
+
+/* Stay items with map link */
+.stay-map-link{flex:0 0 auto;padding:6px 12px;background:#2f9e6f;color:#fff;border-radius:8px;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap;margin-left:8px}
+.stay-map-link:hover{background:#28875e;text-decoration:none;color:#fff}
+
+/* Travel history editable country */
+.history-country-edit{display:flex;align-items:center;gap:8px;margin-top:8px;padding:8px;background:#f7fbff;border:1px solid #d9e6fb;border-radius:8px}
+.app[data-color-mode="dark"] .history-country-edit{background:#12192c;border-color:rgba(106,168,255,0.28)}
+.history-country-edit label{font-size:11px;font-weight:700;color:#43506d;white-space:nowrap}
+.app[data-color-mode="dark"] .history-country-edit label{color:#c5cee6}
+.history-country-edit input{flex:1;padding:6px 10px;border:1px solid #cfdcf3;border-radius:6px;font-size:12px;background:#fff}
+.app[data-color-mode="dark"] .history-country-edit input{background:#12192c;border-color:rgba(154,166,196,0.2);color:#e8ecf8}
+.history-country-edit button{padding:6px 12px;background:#6c63ff;color:#fff;border-radius:6px;font-size:12px;font-weight:600;white-space:nowrap}
+.history-country-edit button:hover{background:#5b52e6}

@@ -236,6 +236,27 @@ def delete_travel_history(
         raise HTTPException(status_code=404, detail="Travel-history entry not found.")
 
 
+@app.put("/api/travel-history/{entry_id}", response_model=TravelHistoryEntry)
+def update_travel_history(
+    entry_id: int,
+    request: TravelHistoryCreate,
+    user_id: str = Query(default="local-user", min_length=1, max_length=200),
+) -> TravelHistoryEntry:
+    """Update a travel history entry (e.g., country, city, location)."""
+    store = TravelHistoryStore(get_settings().database_url)
+    # First check if entry exists and belongs to user
+    existing = store.get(user_id, entry_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Travel-history entry not found.")
+    # Update the entry
+    store.update(entry_id, user_id, request.country, request.city, request.location)
+    # Return updated entry
+    updated = store.get(user_id, entry_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Travel-history entry not found after update.")
+    return TravelHistoryEntry(**updated)
+
+
 @app.get("/api/settings")
 def public_settings() -> dict:
     s = get_settings()

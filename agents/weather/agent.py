@@ -1,21 +1,22 @@
-"""Weather tool: deterministic local stub (no live weather API key required).
+"""Weather tool: Open-Meteo live weather API (free, no API key required).
 
-Returns approximate current conditions for a destination so the model can factor
-weather into trip planning. All values are illustrative stubs — never real-time
-data — and are labelled as such in the result.
+Returns live weather forecasts for a destination so the model can factor
+weather into trip planning. Falls back to stub data if API unavailable.
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
+import httpx
 from config.settings import get_settings
 
 
-class WeatherResult(dict):
-    """Weather result dict with helpful accessors."""
+logger = logging.getLogger(__name__)
 
 
+# Stub fallback data for when API fails
 _WEATHER_STUB: dict[str, dict[str, Any]] = {
     "kyoto": {"condition": "Partly cloudy", "temp_c": 18, "temp_f": 64, "humidity": 60, "notes": "Spring weather, mild"},
     "tokyo": {"condition": "Sunny", "temp_c": 22, "temp_f": 72, "humidity": 55, "notes": "Clear skies, warm"},
@@ -30,11 +31,146 @@ _WEATHER_STUB: dict[str, dict[str, Any]] = {
 }
 
 
-def run(destination: str, start_date: Optional[str] = None, end_date: Optional[str] = None) -> dict[str, Any]:
-    """Return weather info for a destination (stub)."""
-    settings = get_settings()
-    mode = getattr(settings, "weather_mode", "stub")
+# WMO weather code to condition mapping
+_WMO_CODES = {
+    0: "Clear sky",
+    1: "Mainly clear",
+    2: "Partly cloudy",
+    3: "Overcast",
+    45: "Fog",
+    48: "Depositing rime fog",
+    51: "Light drizzle",
+    53: "Moderate drizzle",
+    55: "Dense drizzle",
+    56: "Light freezing drizzle",
+    57: "Dense freezing drizzle",
+    61: "Slight rain",
+    63: "Moderate rain",
+    65: "Heavy rain",
+    66: "Light freezing rain",
+    67: "Heavy freezing rain",
+    71: "Slight snow fall",
+    73: "Moderate snow fall",
+    75: "Heavy snow fall",
+    77: "Snow grains",
+    80: "Slight rain showers",
+    81: "Moderate rain showers",
+    82: "Violent rain showers",
+    85: "Slight snow showers",
+    86: "Heavy snow showers",
+    95: "Thunderstorm",
+    96: "Thunderstorm with slight hail",
+    99: "Thunderstorm with heavy hail",
+}
 
+
+async def _geocode_destination(destination: str) -> Optional[dict[str, float]]:
+    """Geocode a destination using Open-Meteo's geocoding API."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                "https://geocoding-api.open-meteo.com/v1/search",
+                params={
+                    "name": destination,
+                    "count": 1,
+                    "language": "en",
+                    "format": "json",
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            results = data.get("results", [])
+            if results:
+                return {
+                    "latitude": results[0]["latitude"],
+                    "longitude": results[0]["longitude"],
+                    "name": results[0].get("name", destination),
+                    "country": results[0].get("country", ""),
+                }
+    except Exception as e:
+        logger.warning("Geocoding failed for %r: %s", destination, e)
+    return None
+
+
+async def _fetch_weather_open_meteo(lat: float, lon: float, start_date: str, end_date: str) -> Optional[dict[str, Any]]:
+    """Fetch weather from Open-Meteo API."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": lat,
+                    "longitude": lon,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "daily": ["weathercode", "temperature_2m_max", "temperature_2m_min", "relative_humidity_2m_mean"],
+                    "timezone": "auto",
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            daily = data.get("daily", {})
+            if not daily:
+                return None
+                
+            # Return first day's data (for single-day queries)
+            weathercode = daily.get("weathercode", [None])[0]
+            temp_max = daily.get("temperature_2m_max", [None])[0]
+            temp_min = daily.get("temperature_2m_min", [None])[0]
+            humidity = daily.get("relative_humidity_2m_mean", [None])[0]
+            
+            if weathercode is None or temp_max is None:
+                return None
+                
+            condition = _WMO_CODES.get(weathercode, "Unknown")
+            temp_c = round((temp_max + temp_min) / 2) if temp_min is not None else round(temp_max)
+            temp_f = round(temp_c * 9/5 + 32)
+            
+            return {
+                "condition": condition,
+                "temp_c": temp_c,
+                "temp_f": temp_f,
+                "humidity": humidity,
+                "notes": f"Open-Meteo forecast for {start_date}",
+            }
+    except Exception as e:
+        logger.warning("Open-Meteo API failed: %s", e)
+    return None
+
+
+def run(destination: str, start_date: Optional[str] = None, end_date: Optional[str] = None) -> dict[str, Any]:
+    """Return weather info for a destination using Open-Meteo API."""
+    settings = get_settings()
+    mode = getattr(settings, "weather_mode", "open-meteo")
+    
+    # Default to tomorrow if no date provided
+    if not start_date:
+        from datetime import date, timedelta
+        start_date = (date.today() + timedelta(days=1)).isoformat()
+    if not end_date:
+        end_date = start_date
+
+    # Try to get live data from Open-Meteo
+    live_data = None
+    if mode == "open-meteo":
+        import asyncio
+        try:
+            # Run async geocoding and weather fetch
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                geo = loop.run_until_complete(_geocode_destination(destination))
+                if geo:
+                    live_data = loop.run_until_complete(
+                        _fetch_weather_open_meteo(geo["latitude"], geo["longitude"], start_date, end_date)
+                    )
+            finally:
+                loop.close()
+        except Exception as e:
+            logger.warning("Failed to fetch live weather: %s", e)
+
+    # Fallback to stub
     key = destination.strip().lower()
     data = _WEATHER_STUB.get(key)
 
@@ -47,15 +183,23 @@ def run(destination: str, start_date: Optional[str] = None, end_date: Optional[s
             "notes": f"No weather data for {destination} (stub)",
         }
 
+    # Use live data if available
+    if live_data:
+        data = live_data
+        data["stub"] = False
+        mode = "open-meteo"
+    else:
+        data["stub"] = True
+
     result = {
         "destination": destination,
         "mode": mode,
         "condition": data["condition"],
-        "temperature_c": data["temp_c"],
-        "temperature_f": data["temp_f"],
-        "humidity": data["humidity"],
-        "notes": data["notes"],
-        "stub": mode == "stub",
+        "temperature_c": data.get("temp_c"),
+        "temperature_f": data.get("temp_f"),
+        "humidity": data.get("humidity"),
+        "notes": data.get("notes", ""),
+        "stub": data.get("stub", True),
     }
     if start_date:
         result["start_date"] = start_date
@@ -65,4 +209,4 @@ def run(destination: str, start_date: Optional[str] = None, end_date: Optional[s
 
 
 def health() -> dict[str, str]:
-    return {"tool": "weather", "mode": getattr(get_settings(), "weather_mode", "stub")}
+    return {"tool": "weather", "mode": getattr(get_settings(), "weather_mode", "open-meteo")}
