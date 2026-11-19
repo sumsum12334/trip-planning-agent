@@ -17,6 +17,7 @@ export const formatBudget = (value, currency) =>
 export const eventIcon = (event) => {
   if (event.status === "error") return "⚠";
   if (event.label.toLowerCase().includes("history")) return "🧠";
+  if (event.label.toLowerCase().includes("weather")) return "🌤";
   if (event.type === "model") return "✦";
   if (event.label.toLowerCase().includes("tool")) return "⚙";
   return "✓";
@@ -70,6 +71,7 @@ export const formatEventLabel = (label, event) => {
     [/^Calling (display_trip_plan)$/i, "Display trip plan"],
     [/^Calling (search_stays)$/i, "Search stays"],
     [/^Calling (estimate_transport)$/i, "Estimate transport"],
+    [/^Calling (weather)$/i, "Weather check"],
     [/^Calling (search_travel_history)$/i, "Search travel history"],
     [/^Calling (web_search)$/i, "Web search"],
     [/^Calling (ask_user_question)$/i, "Ask user question"],
@@ -92,6 +94,11 @@ export const formatEventLabel = (label, event) => {
     }
     if (tool === "web_search" && result?.results?.length) {
       return `Search completed (${result.results.length} results)`;
+    }
+    if (tool === "weather" && result?.destination) {
+      const c = result.temperature_c != null ? `${result.temperature_c}°C` : "";
+      const f = result.temperature_f != null ? `(${result.temperature_f}°F)` : "";
+      return `Weather: ${result.condition}${c ? ` ${c}` : ""}${f ? ` ${f}` : ""}`;
     }
     if (tool === "ask_user_question") {
       return "Question asked";

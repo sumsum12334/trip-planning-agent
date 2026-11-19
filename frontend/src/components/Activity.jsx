@@ -10,6 +10,7 @@ const AGENT_COLORS = {
   "Agent 3 · coordinator": { light: "#f3e5f5", dark: "#4a148c", border: "#ce93d8", text: "#7b1fa2" },
   "Agent 4 · travel_history": { light: "#fff3e0", dark: "#e65100", border: "#ffb74d", text: "#ef6c00" },
   "web_search tool": { light: "#fce4ec", dark: "#880e4f", border: "#f48fb1", text: "#c2185b" },
+  "weather tool": { light: "#e3f2fd", dark: "#0d47a1", border: "#64b5f6", text: "#1976d2" },
   "Model": { light: "#e8eaf6", dark: "#1a237e", border: "#9fa8da", text: "#3f51b5" },
 };
 
@@ -31,6 +32,7 @@ function formatToolResult(result) {
   if (typeof result === "object") {
     if (result.stays) return `🏨 ${result.stays.length} stays`;
     if (result.legs) return `🚌 ${result.legs.length} legs`;
+    if (result.condition) return `🌤 ${result.condition} · ${result.temperature_c != null ? result.temperature_c + "°C" : ""}${result.temperature_f != null ? " (" + result.temperature_f + "°F)" : ""}`;
     if (result.destination) return `📍 ${result.destination}`;
     return JSON.stringify(result, null, 2).slice(0, 500);
   }

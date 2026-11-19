@@ -3,6 +3,7 @@ export const AGENT_LABELS = [
   ["estimate_transport", "Agent 2 · estimate_transport"],
   ["travel_history", "Agent 4 · travel_history"],
   ["web_search", "web_search tool"],
+  ["weather", "weather tool"],
   ["display_trip_plan", "Agent 3 · coordinator"],
   ["trip plan", "Agent 3 · coordinator"],
   ["start_trip_plan", "Agent 3 · coordinator"],

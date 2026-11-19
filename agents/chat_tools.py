@@ -15,10 +15,11 @@ import httpx
 from agents.estimate_transport.agent import run as estimate_transport_run
 from agents.search_stays.agent import run as search_stays_run
 from agents.web_search.agent import run as web_search_run
+from agents.weather.agent import run as weather_run
 from config.settings import get_settings
 from shared.schemas import TripRequest
 
-AGENT_TOOL_NAMES = {"search_stays", "estimate_transport", "web_search"}
+AGENT_TOOL_NAMES = {"search_stays", "estimate_transport", "web_search", "weather"}
 
 AGENT_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
@@ -78,6 +79,23 @@ AGENT_TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "limit": {"type": "integer", "minimum": 1, "maximum": 10},
                 },
                 "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "weather",
+            "description": (
+                "Get approximate weather conditions for a destination. "
+                "Results are stub estimates, not live forecasts."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "destination": {"type": "string"},
+                },
+                "required": ["destination"],
             },
         },
     },
@@ -146,5 +164,11 @@ def execute_agent_tool(name: str, arguments: dict[str, Any]) -> Any:
         except httpx.HTTPError as error:
             return {"mode": mode, "error": f"Web search failed: {error}", "results": []}
         return {"mode": mode, "results": [result.model_dump() for result in results]}
+
+    if name == "weather":
+        destination = str(arguments.get("destination", "")).strip()
+        if not destination:
+            raise ValueError("weather requires a destination.")
+        return weather_run(destination)
 
     raise ValueError(f"Unknown agent tool requested: {name}")

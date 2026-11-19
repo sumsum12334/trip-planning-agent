@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     web_search_mode: Literal["stub", "duckduckgo"] = Field(
         default="stub", alias="WEB_SEARCH_MODE"
     )
+    weather_mode: Literal["stub", "api"] = Field(default="stub", alias="WEATHER_MODE")
 
     # Travel History DB
     database_url: str = Field(
