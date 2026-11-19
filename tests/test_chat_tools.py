@@ -9,7 +9,12 @@ from agents.chat_tools import AGENT_TOOL_NAMES, AGENT_TOOL_SCHEMAS, execute_agen
 
 def test_schemas_cover_expected_agent_tools():
     names = {schema["function"]["name"] for schema in AGENT_TOOL_SCHEMAS}
-    assert names == AGENT_TOOL_NAMES == {"search_stays", "estimate_transport", "web_search"}
+    assert names == AGENT_TOOL_NAMES == {
+        "search_stays",
+        "estimate_transport",
+        "web_search",
+        "get_weather_forecast",
+    }
 
 
 def test_search_stays_returns_stub_candidates():
