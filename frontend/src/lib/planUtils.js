@@ -22,6 +22,75 @@ export const eventIcon = (event) => {
   return "✓";
 };
 
+export const formatEventLabel = (label) => {
+  if (!label) return "";
+  // Convert known function/tool names to human-readable text
+  const replacements = [
+    // Trip plan tool events
+    [/Trip plan updated \(start_trip_plan\)/i, "Start trip plan"],
+    [/Trip plan updated \(set_trip_day\)/i, "Set trip day"],
+    [/Trip plan updated \(set_trip_budget\)/i, "Set trip budget"],
+    [/Trip plan updated \(set_trip_references\)/i, "Set trip references"],
+    [/Trip plan updated \(remove_trip_day\)/i, "Remove trip day"],
+    [/Trip plan updated \(get_trip_plan\)/i, "Get trip plan"],
+    [/Trip plan updated \(display_trip_plan\)/i, "Display trip plan"],
+    // Tool call events
+    [/^Calling (start_trip_plan)$/i, "Start trip plan"],
+    [/^Calling (set_trip_day)$/i, "Set trip day"],
+    [/^Calling (set_trip_budget)$/i, "Set trip budget"],
+    [/^Calling (set_trip_references)$/i, "Set trip references"],
+    [/^Calling (remove_trip_day)$/i, "Remove trip day"],
+    [/^Calling (get_trip_plan)$/i, "Get trip plan"],
+    [/^Calling (display_trip_plan)$/i, "Display trip plan"],
+    [/^Calling (search_stays)$/i, "Search stays"],
+    [/^Calling (estimate_transport)$/i, "Estimate transport"],
+    [/^Calling (search_travel_history)$/i, "Search travel history"],
+    [/^Calling (web_search)$/i, "Web search"],
+    [/^Calling (ask_user_question)$/i, "Ask user question"],
+    // Tool result events
+    [/(start_trip_plan) result received/i, "Trip plan started"],
+    [/(set_trip_day) result received/i, "Trip day set"],
+    [/(set_trip_budget) result received/i, "Trip budget set"],
+    [/(set_trip_references) result received/i, "Trip references set"],
+    [/(remove_trip_day) result received/i, "Trip day removed"],
+    [/(get_trip_plan) result received/i, "Trip plan retrieved"],
+    [/(display_trip_plan) result received/i, "Trip plan displayed"],
+    [/(search_stays) result received/i, "Stays found"],
+    [/(estimate_transport) result received/i, "Transport estimated"],
+    [/(search_travel_history) result received/i, "Travel history found"],
+    [/(web_search) result received/i, "Search completed"],
+    [/(ask_user_question) result received/i, "Question asked"],
+    // Agent events
+    [/Coordinator agent started/i, "Coordinator started"],
+    [/Coordinator agent completed/i, "Coordinator completed"],
+    [/Coordinator agent failed/i, "Coordinator failed"],
+    [/Travel history updated/i, "Travel history updated"],
+    [/Model request queued/i, "Model queued"],
+    [/Model request failed/i, "Model failed"],
+    [/Model returned an empty response/i, "Empty model response"],
+    [/Retrying continuation/i, "Retrying..."],
+    [/Continuation failed/i, "Continuation failed"],
+    [/Stopped by user/i, "Stopped"],
+    [/Answer recorded/i, "Answer recorded"],
+  ];
+  let formatted = label;
+  for (const [pattern, replacement] of replacements) {
+    formatted = formatted.replace(pattern, replacement);
+  }
+  // Fallback: convert snake_case to Title Case
+  if (formatted === label) {
+    formatted = label
+      .replace(/_/g, " ")
+      .replace(/\(([^)]+)\)/, "") // Remove parenthetical
+      .replace(/\s+/g, " ")
+      .trim()
+      .split(" ")
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ");
+  }
+  return formatted;
+};
+
 export const planBudgetItems = (plan) => (Array.isArray(plan?.budget_items) ? plan.budget_items : []);
 export const planFromEvents = (events, predicate = () => true) =>
   [...(events || [])].reverse().find(

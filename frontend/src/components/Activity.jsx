@@ -17,7 +17,7 @@ import {
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import CloseIcon from "@mui/icons-material/Close";
-import { eventIcon } from "../lib/planUtils.js";
+import { eventIcon, formatEventLabel } from "../lib/planUtils.js";
 import { agentForEvent, currentAgent } from "../lib/workflow.js";
 
 const AGENT_COLORS = {
@@ -125,7 +125,7 @@ function EventDetailDialog({ event, agent, open, onClose }) {
             sx={{ background: color.border, color: "#fff", fontWeight: 700 }}
           />
           <Typography variant="h6" sx={{ color: color.text, fontWeight: 700 }}>
-            {event.label}
+            {formatEventLabel(event.label)}
           </Typography>
         </Box>
         <IconButton onClick={onClose} size="small" sx={{ color: color.text }}>
@@ -271,7 +271,7 @@ export function Activity({ events }) {
         <div className="event-main">
           <span className="event-icon">{eventIcon(event)}</span>
           <span className="event-label">
-            <strong>{event.label}</strong>
+            <strong>{formatEventLabel(event.label)}</strong>
             {event.detail && <small className="event-detail">{event.detail}</small>}
             {handover && <small className="event-agent" style={{ color: color.text }}>{agent}</small>}
           </span>
@@ -346,7 +346,7 @@ export function Activity({ events }) {
                   <div className="event-main">
                     <span className="event-icon">{eventIcon(event)}</span>
                     <span className="event-label">
-                      <strong>{event.label}</strong>
+                      <strong>{formatEventLabel(event.label)}</strong>
                       {event.detail && <small className="event-detail">{event.detail}</small>}
                     </span>
                     <span className={`event-dot ${event.status}`} style={{ background: color.border }} />
