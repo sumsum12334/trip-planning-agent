@@ -112,15 +112,15 @@ function formatDuration(start, end) {
 function EventGroup({ title, events, color, onEventClick }) {
   if (!events.length) return null;
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      <Typography variant="caption" color={color.text} fontWeight={700} textTransform="uppercase" letterSpacing="0.5px" sx={{ fontSize: 9, mb: 2, opacity: 0.7 }}>
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      <Typography variant="caption" color={color.text} fontWeight={700} textTransform="uppercase" letterSpacing="0.5px" sx={{ fontSize: 9, mb: 1, opacity: 0.7, minWidth: 0 }}>
         {title}
       </Typography>
       {events.map(({ key, event }) => (
         <div
           key={key}
           className={`event ${event.status}`}
-          style={{ borderLeftColor: color.border }}
+          style={{ borderLeftColor: color.border, marginLeft: 0, paddingLeft: 0 }}
           onClick={() => onEventClick(event, color)}
           role="button"
           tabIndex={0}
