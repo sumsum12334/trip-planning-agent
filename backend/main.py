@@ -595,9 +595,14 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
     return StreamingResponse(events(), media_type="text/event-stream")
 
 
-@app.post("/api/chat/question", response_model=ChatResponse)
-def answer_chat_question(request: ChatRequest) -> ChatResponse:
-    """Resume a paused model tool call with a selected option."""
+def _prepare_question_continuation(request: ChatRequest) -> dict[str, Any]:
+    """Validate a paused-question answer and build the continuation context.
+
+    Shared by the non-streaming and streaming continuation endpoints so both
+    enforce the same conversation/user/option checks and expose the same tool
+    set. The returned dict carries the store, pending record, messages, tool
+    executor, activity events, model client, and Langfuse trace.
+    """
     if not request.conversation_id:
         raise HTTPException(status_code=400, detail="A conversation_id is required.")
     store = ConversationStore(get_settings().database_url)
@@ -637,6 +642,10 @@ def answer_chat_question(request: ChatRequest) -> ChatResponse:
         },
     }, *TRIP_PLAN_TOOLS, *AGENT_TOOL_SCHEMAS]
 
+    events: list[ChatEvent] = [
+        ChatEvent(type="user", label="Answer recorded", detail=request.message, status="completed")
+    ]
+
     def execute_tool(name: str, arguments: dict[str, Any]) -> Any:
         if name in TRIP_PLAN_TOOL_NAMES:
             model_result, ui_plan = _apply_trip_plan_tool(
@@ -662,12 +671,6 @@ def answer_chat_question(request: ChatRequest) -> ChatResponse:
 
     messages = list(pending["messages"])
     messages.append({"role": "user", "content": request.message})
-    events: list[ChatEvent] = [
-        ChatEvent(type="user", label="Answer recorded", detail=request.message, status="completed")
-    ]
-    text_parts: list[str] = []
-    reasoning_parts: list[str] = []
-    next_pending: dict[str, Any] | None = None
     client = TACCClient()
     trace = start_trace(
         name="chat.question",
@@ -679,6 +682,33 @@ def answer_chat_question(request: ChatRequest) -> ChatResponse:
         session_id=request.conversation_id,
         metadata={"stream": True, "model": client.model, "continuation": True},
     )
+    return {
+        "store": store,
+        "pending": pending,
+        "messages": messages,
+        "tools": tools,
+        "execute_tool": execute_tool,
+        "events": events,
+        "client": client,
+        "trace": trace,
+    }
+
+
+@app.post("/api/chat/question", response_model=ChatResponse)
+def answer_chat_question(request: ChatRequest) -> ChatResponse:
+    """Resume a paused model tool call with a selected option."""
+    context = _prepare_question_continuation(request)
+    store = context["store"]
+    pending = context["pending"]
+    messages = context["messages"]
+    tools = context["tools"]
+    execute_tool = context["execute_tool"]
+    events = context["events"]
+    client = context["client"]
+    trace = context["trace"]
+    text_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    next_pending: dict[str, Any] | None = None
 
     def save_pause(next_messages: list[dict[str, Any]], result: dict[str, Any]) -> None:
         nonlocal next_pending
@@ -791,6 +821,246 @@ def answer_chat_question(request: ChatRequest) -> ChatResponse:
         conversation_id=conversation_id,
         events=events,
     )
+
+
+@app.post("/api/chat/question/stream")
+def answer_chat_question_stream(request: ChatRequest) -> StreamingResponse:
+    """Stream the continuation of a paused question.
+
+    Emits the same frame kinds as /api/chat/stream (event, reasoning, content,
+    done, error) so the browser can show the agents working, render partial
+    text, and stop the turn instead of waiting on a silent request.
+    """
+    context = _prepare_question_continuation(request)
+    store = context["store"]
+    pending = context["pending"]
+    messages = context["messages"]
+    tools = context["tools"]
+    execute_tool = context["execute_tool"]
+    events = context["events"]
+    client = context["client"]
+    trace = context["trace"]
+    conversation_id = request.conversation_id or ""
+
+    def frames():
+        text_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        next_pending: dict[str, Any] | None = None
+        emitted = 0
+        cancelled = False
+        trace_finished = False
+        cancel_event = register_cancel(request.request_id)
+
+        def save_pause(next_messages: list[dict[str, Any]], result: dict[str, Any]) -> None:
+            nonlocal next_pending
+            next_pending = result
+            store.save_pending_question(
+                conversation_id,
+                request.user_id,
+                next_messages,
+                result["question"],
+                result["options"],
+            )
+
+        def new_events() -> list[ChatEvent]:
+            nonlocal emitted
+            pending_events = events[emitted:]
+            emitted = len(events)
+            return pending_events
+
+        def frame(payload: dict[str, Any]) -> str:
+            return f"data: {json.dumps(payload)}\n\n"
+
+        def event_frame(event: ChatEvent) -> str:
+            return frame({"kind": "event", **event.model_dump()})
+
+        try:
+            for event in new_events():
+                yield event_frame(event)
+            for delta in client.stream(
+                "",
+                tools=tools,
+                tool_executor=execute_tool,
+                initial_messages=messages,
+                on_event=lambda event: events.append(ChatEvent(**event)),
+                on_pause=save_pause,
+                session_id=conversation_id,
+                trace_context=trace_context_for(trace),
+                cancel_event=cancel_event,
+            ):
+                if cancel_event.is_set():
+                    cancelled = True
+                    break
+                for event in new_events():
+                    yield event_frame(event)
+                if delta["kind"] == "reasoning":
+                    reasoning_parts.append(delta["text"])
+                else:
+                    text_parts.append(delta["text"])
+                yield frame({"kind": delta["kind"], "text": delta["text"]})
+            for event in new_events():
+                yield event_frame(event)
+
+            if cancelled:
+                stopped = ChatEvent(
+                    type="agent",
+                    label="Stopped by user",
+                    detail="The response was stopped before it completed.",
+                    status="completed",
+                )
+                events.append(stopped)
+                yield event_frame(stopped)
+                stopped_message = {
+                    "role": "assistant",
+                    "content": "".join(text_parts) or "[Stopped] The response was stopped.",
+                    "reasoning": "".join(reasoning_parts),
+                }
+                conversation = store.get(conversation_id)
+                if conversation is not None:
+                    stored_messages = (
+                        conversation["messages"]
+                        if next_pending is not None
+                        else conversation["messages"] + [stopped_message]
+                    )
+                    store.save(
+                        conversation_id,
+                        stored_messages,
+                        [event.model_dump() for event in events],
+                    )
+                end_trace(trace, output="".join(text_parts) or {"status": "stopped"})
+                trace_finished = True
+                yield frame(
+                    {
+                        "kind": "done",
+                        "stopped": True,
+                        "text": "".join(text_parts),
+                        "reasoning": "".join(reasoning_parts),
+                        "model": client.model,
+                        "stub": not client.configured,
+                        "conversation_id": conversation_id,
+                        "pending_question": next_pending,
+                        "events": [event.model_dump() for event in events],
+                    }
+                )
+                return
+
+            if not "".join(text_parts).strip() and next_pending is None:
+                empty = ChatEvent(
+                    type="model",
+                    label="Model returned an empty response",
+                    detail="The model finished without content. Please retry or rephrase.",
+                    status="error",
+                )
+                events.append(empty)
+                yield event_frame(empty)
+                text_parts = [
+                    "[The model returned an empty response. Please retry or rephrase "
+                    "your request.]"
+                ]
+            completed = ChatEvent(
+                type="agent",
+                label="Coordinator agent completed",
+                status="completed",
+            )
+            events.append(completed)
+            yield event_frame(completed)
+
+            if next_pending is None:
+                store.clear_pending_question(conversation_id)
+            store.mark_question_answered(
+                conversation_id,
+                request.message,
+                pending["question"],
+            )
+            conversation = store.get(conversation_id)
+            if conversation is None:
+                yield frame(
+                    {
+                        "kind": "error",
+                        "message": "The conversation was deleted before the answer was saved.",
+                        "conversation_id": conversation_id,
+                        "events": [],
+                    }
+                )
+                return
+            answer_message = {
+                "role": "assistant",
+                "content": "".join(text_parts),
+                "reasoning": "".join(reasoning_parts),
+            }
+            conversation["messages"].append({"role": "user", "content": request.message})
+            conversation["messages"].append(answer_message)
+            store.save(
+                conversation_id,
+                conversation["messages"],
+                [event.model_dump() for event in events],
+            )
+            final_text = "".join(text_parts)
+            if final_text:
+                trace_output: Any = final_text
+            elif next_pending is not None:
+                trace_output = {
+                    "status": "awaiting_user",
+                    "question": next_pending.get("question", ""),
+                }
+            else:
+                trace_output = {"text": ""}
+            end_trace(trace, output=trace_output)
+            trace_finished = True
+            yield frame(
+                {
+                    "kind": "done",
+                    "text": final_text,
+                    "reasoning": "".join(reasoning_parts),
+                    "model": client.model,
+                    "stub": not client.configured,
+                    "conversation_id": conversation_id,
+                    "pending_question": next_pending,
+                    "events": [event.model_dump() for event in events],
+                }
+            )
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
+            end_trace(
+                trace,
+                output="".join(text_parts) or {"error": str(error)},
+                error=error,
+            )
+            trace_finished = True
+            failure = ChatEvent(
+                type="model",
+                label="Continuation failed; answer can be retried",
+                detail=str(error) or error.__class__.__name__,
+                status="error",
+                data={"tool": "ask_user_question", "selected": request.message},
+            )
+            events.append(failure)
+            conversation = store.get(conversation_id)
+            if conversation is not None:
+                store.save(
+                    conversation_id,
+                    conversation["messages"],
+                    [event.model_dump() for event in events],
+                )
+            yield frame(
+                {
+                    "kind": "error",
+                    "message": (
+                        "The assistant could not continue yet. "
+                        "Your choice is still saved for retry."
+                    ),
+                    "conversation_id": conversation_id,
+                    "events": [failure.model_dump()],
+                }
+            )
+        finally:
+            clear_cancel(request.request_id, cancel_event)
+            if not trace_finished:
+                end_trace(
+                    trace,
+                    output="".join(text_parts) or {"text": ""},
+                )
+
+    return StreamingResponse(frames(), media_type="text/event-stream")
 
 
 @app.put("/api/conversations/{conversation_id}/trip-plan")

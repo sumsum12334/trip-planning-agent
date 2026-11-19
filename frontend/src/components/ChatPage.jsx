@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Box, Button, Stack, TextField, Typography } from "@mui/material";
 import SendIcon from "@mui/icons-material/Send";
 import { planBudgetItems, planFromEvents } from "../lib/planUtils.js";
+import { readSseFrames } from "../lib/sse.js";
 import { nextStepSuggestions, workflowState } from "../lib/workflow.js";
 import { Activity } from "./Activity.jsx";
 import { MessageBubble } from "./MessageBubble.jsx";
@@ -38,7 +39,7 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
 
   async function sendMessage(event, retry = false, overrideText = null) {
     event?.preventDefault();
-    if (streaming) return;
+    if (streaming || answerLockRef.current) return;
     const text = (overrideText != null ? overrideText : retry ? retryText : message).trim();
     if (!text) return;
     setMessage(""); setRetryText(""); setRetryOption(""); setStatus("Working...");
@@ -67,28 +68,13 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
       });
       if (!response.ok) { setRetryText(text); setStatus("Request failed. You can retry the saved message."); return; }
       if (!response.body) { setRetryText(text); setStatus("Streaming is unavailable. Please retry."); return; }
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      const processFrame = (frame) => {
-        const line = frame.split("\n").find((item) => item.startsWith("data: "));
-        if (!line) return;
-        const payload = JSON.parse(line.slice(6));
+      await readSseFrames(response, (payload) => {
         if (payload.kind === "event") { streamEvents = [...streamEvents, payload]; renderPartial(); }
         else if (payload.kind === "reasoning") { streamedReasoning += payload.text; renderPartial(); }
         else if (payload.kind === "content") { streamedText += payload.text; renderPartial(); }
         else if (payload.kind === "done") result = { ...payload, text: payload.text || streamedText, reasoning: payload.reasoning || streamedReasoning };
         else if (payload.kind === "error") setStatus(payload.message);
-      };
-      while (true) {
-        const { value, done } = await reader.read();
-        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-        const frames = buffer.split("\n\n");
-        buffer = frames.pop() || "";
-        frames.forEach(processFrame);
-        if (done && buffer.trim()) processFrame(buffer);
-        if (done) break;
-      }
+      });
       if (result) {
         const completedMessages = result.pending_question
           ? optimisticMessages
@@ -214,12 +200,16 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
   const suggestions = nextStepSuggestions(latestPlan, current.messages, Boolean(pendingEvent), streaming || answering);
 
   async function answerQuestion(option, custom = false) {
-    if (answerLockRef.current) return;
+    if (answerLockRef.current || streaming) return;
     answerLockRef.current = true;
     setAnswering(true);
     setSelectedOption(option);
     setStatus("Sending your choice to the assistant...");
     setRetryOption("");
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const requestId = `req-${crypto.randomUUID()}`;
+    requestIdRef.current = requestId;
     const questionIndex = current.events.indexOf(activeQuestionEvent);
     const markSelected = (list, eventStatus) => list.map((item, index) => index === questionIndex
       ? { ...item, data: { ...item.data, selected: option }, detail: `Answer selected: ${option}`, status: eventStatus }
@@ -228,46 +218,85 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
     const optimisticMessages = current.messages.at(-1)?.role === "user" && current.messages.at(-1)?.content === option
       ? current.messages
       : [...current.messages, { role: "user", content: option }];
-    setCurrent((previous) => ({ ...previous, messages: optimisticMessages, events: optimisticEvents }));
-    const response = await fetch("/api/chat/question", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        message: option,
-        conversation_id: current.id,
-        user_id: userId,
-        custom,
-        plan_context: planContextFromEvents(current.events),
-      }),
-    });
-    if (!response.ok) {
-      let detail = "The assistant could not continue.";
-      try {
-        const payload = await response.json();
-        detail = typeof payload.detail === "string" ? payload.detail : (payload.detail?.message || detail);
-      } catch { /* retain safe fallback */ }
-      setRetryOption(option);
-      setStatus(`Continuation failed: ${detail}`);
+    const workingMessages = [...optimisticMessages, { role: "assistant", content: "Working...", reasoning: "" }];
+    setCurrent((previous) => ({ ...previous, messages: workingMessages, events: optimisticEvents }));
+    let streamedText = "";
+    let streamedReasoning = "";
+    let streamEvents = optimisticEvents;
+    let result = null;
+    const renderPartial = () => setCurrent((previous) => ({
+      ...previous,
+      messages: [...optimisticMessages, { role: "assistant", content: streamedText || "Working...", reasoning: streamedReasoning }],
+      events: streamEvents,
+    }));
+    try {
+      const response = await fetch("/api/chat/question/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          message: option,
+          conversation_id: current.id,
+          user_id: userId,
+          custom,
+          request_id: requestId,
+          plan_context: planContextFromEvents(current.events),
+        }),
+      });
+      if (!response.ok) {
+        let detail = "The assistant could not continue.";
+        try {
+          const payload = await response.json();
+          detail = typeof payload.detail === "string" ? payload.detail : (payload.detail?.message || detail);
+        } catch { /* retain safe fallback */ }
+        throw new Error(detail);
+      }
+      await readSseFrames(response, (payload) => {
+        if (payload.kind === "event") { streamEvents = [...streamEvents, payload]; renderPartial(); }
+        else if (payload.kind === "reasoning") { streamedReasoning += payload.text; renderPartial(); }
+        else if (payload.kind === "content") { streamedText += payload.text; renderPartial(); }
+        else if (payload.kind === "done") result = { ...payload, text: payload.text || streamedText, reasoning: payload.reasoning || streamedReasoning };
+        else if (payload.kind === "error") setStatus(payload.message);
+      });
+      if (!result) throw new Error("The continuation ended without a response. You can retry.");
+      const answeredEvents = markSelected(optimisticEvents, "completed");
+      const continuedEvents = (result.events || []).filter((event) => event.label !== "Answer recorded");
+      const completedMessages = result.pending_question
+        ? optimisticMessages
+        : [...optimisticMessages, { role: "assistant", content: result.text, reasoning: result.reasoning || "" }];
+      setCurrent({
+        id: result.conversation_id || current.id,
+        messages: completedMessages,
+        events: [...answeredEvents, ...continuedEvents],
+      });
+      setStatus(
+        result.pending_question
+          ? "The assistant is waiting for your choice."
+          : result.stopped
+            ? "Stopped. Edit your choice or ask something else."
+            : result.stub ? "Local stub response" : `Model: ${result.model}`
+      );
+      setSelectedOption("");
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        setStatus("Stopped. Edit your choice or ask something else.");
+        setCurrent((previous) => ({
+          ...previous,
+          messages: [...optimisticMessages, { role: "assistant", content: streamedText || "[Stopped] Response stopped.", reasoning: streamedReasoning }],
+          events: [...streamEvents, { type: "agent", label: "Stopped by user", status: "completed" }],
+        }));
+      } else {
+        setRetryOption({ value: option, custom });
+        setStatus(`Continuation failed: ${error?.message || "The assistant could not continue."}`);
+        setCurrent((previous) => ({ ...previous, messages: optimisticMessages, events: streamEvents }));
+      }
+    } finally {
       answerLockRef.current = false;
       setAnswering(false);
-      return;
+      abortRef.current = null;
+      requestIdRef.current = null;
+      await loadConversations();
     }
-    const result = await response.json();
-    const updatedEvents = markSelected(optimisticEvents, "completed");
-    setCurrent({
-      id: result.conversation_id,
-      messages: [...optimisticMessages, {
-        role: "assistant",
-        content: result.text,
-        reasoning: result.reasoning || "",
-      }],
-      events: [...updatedEvents, ...result.events.filter((event) => event.label !== "Answer recorded")],
-    });
-    setStatus(result.stub ? "Local stub response" : `Model: ${result.model}`);
-    answerLockRef.current = false;
-    setAnswering(false);
-    setSelectedOption("");
-    await loadConversations();
   }
 
   return <section className="page chat-page">
@@ -342,9 +371,9 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
           placeholder="Plan a 3-day trip to Kyoto for $800..."
         />
         <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
-          {streaming
+          {streaming || answering
             ? <Button className="stop-button" type="button" variant="contained" color="error" onClick={stopStreaming}>Stop</Button>
-            : <Button className="send-button" type="submit" variant="contained" endIcon={<SendIcon />} disabled={answering}>Send</Button>}
+            : <Button className="send-button" type="submit" variant="contained" endIcon={<SendIcon />}>Send</Button>}
         </Box>
       </Box>
       <div className="composer-footer"><span>{status || "Markdown supported"}</span>{retryText && <Button className="retry" size="small" color="warning" variant="outlined" disabled={streaming} onClick={(event) => sendMessage(event, true)}>Retry</Button>}</div>

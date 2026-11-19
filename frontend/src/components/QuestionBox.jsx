@@ -8,6 +8,11 @@ export function QuestionBox({ event, onOption, disabled, retryOption, selectedOp
   const options = event.data.result.options || [];
   const selected = selectedOption || event.data.selected;
   const locked = disabled || Boolean(selected);
+  // The parent stores a retry as { value, custom } so a free-text answer is
+  // retried as custom instead of being rejected as an unknown option.
+  const retry = retryOption && typeof retryOption === "object"
+    ? retryOption
+    : retryOption ? { value: retryOption, custom: false } : null;
   return <section className="question-box">
     <div className="question-box-header"><span className="question-box-icon">?</span><div><div className="question-kicker">YOUR INPUT NEEDED</div><strong>{event.data.result.question}</strong></div></div>
     <p>Choose an option to continue planning, or write your own.</p>
@@ -45,9 +50,9 @@ export function QuestionBox({ event, onOption, disabled, retryOption, selectedOp
         </Button>
       </Stack>
     )}
-    {retryOption && (
-      <Button className="question-retry" type="button" size="small" color="error" variant="outlined" onClick={() => onOption(retryOption)} sx={{ mt: 1.5, ml: "39px" }}>
-        Retry sending "{retryOption}"
+    {retry && (
+      <Button className="question-retry" type="button" size="small" color="error" variant="outlined" onClick={() => onOption(retry.value, retry.custom)} sx={{ mt: 1.5, ml: "39px" }}>
+        Retry sending "{retry.value}"
       </Button>
     )}
   </section>;

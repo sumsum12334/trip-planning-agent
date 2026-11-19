@@ -146,7 +146,11 @@ a question list. Tool arguments and results are persisted in the
 conversation events. The Live workflow is collapsed by default to keep the
 chat compact; expand it to inspect the ordered tool calls and saved results.
 Selecting an option resumes the same model tool session through
-`POST /api/chat/question`; it is not sent as an ordinary chat message.
+`POST /api/chat/question/stream`; it is not sent as an ordinary chat message.
+The continuation streams the same `event` / `reasoning` / `content` / `done`
+frames as `/api/chat/stream`, so the UI keeps showing agent activity, partial
+text, and the **Stop** button instead of waiting on a silent request.
+`POST /api/chat/question` remains available as the non-streaming equivalent.
 The question is shown above the chat while waiting, and a failed continuation
 keeps the pending choice available for retry instead of marking it answered.
 The trip plan is built with several small tools instead of one large payload, so
@@ -269,6 +273,8 @@ The chat endpoints are:
 - `GET /api/conversations/{conversation_id}`
 - `DELETE /api/conversations/{conversation_id}`
 - `POST /api/chat/stream` (accepts an optional `request_id` used for cancellation and `plan_context`)
+- `POST /api/chat/question/stream` (resumes a paused question; same frames and `request_id` cancellation as the chat stream)
+- `POST /api/chat/question` (non-streaming equivalent)
 - `POST /api/chat/stop` (body `{"request_id": "..."}`; sets the turn's cancel event)
 - `PUT /api/conversations/{conversation_id}/trip-plan` (persist edited `budget`, `currency`, and `budget_items` onto the latest plan)
 

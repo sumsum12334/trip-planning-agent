@@ -230,6 +230,77 @@ def test_chat_question_without_pending_question(client: TestClient) -> None:
     assert response.status_code == 404
 
 
+def test_chat_question_stream_resumes_pending_question(client: TestClient) -> None:
+    from config.settings import get_settings
+    from trip_planning_agent.conversation_store import ConversationStore
+
+    store = ConversationStore(get_settings().database_url)
+    conversation_id = store.save(
+        None,
+        [{"role": "user", "content": "Plan a trip"}],
+        [
+            {
+                "type": "tool",
+                "label": "ask_user_question",
+                "status": "completed",
+                "data": {
+                    "tool": "ask_user_question",
+                    "result": {"question": "Which month?", "options": ["March", "April"]},
+                },
+            }
+        ],
+    )
+    store.save_pending_question(
+        conversation_id,
+        "api-user",
+        [{"role": "user", "content": "Plan a trip"}],
+        "Which month?",
+        ["March", "April"],
+    )
+
+    with client.stream(
+        "POST",
+        "/api/chat/question/stream",
+        json={
+            "message": "March",
+            "conversation_id": conversation_id,
+            "user_id": "api-user",
+            "request_id": "req-question-stream",
+        },
+    ) as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        frames = _sse_frames(response)
+
+    # The browser must see progress, not a silent request: events and content
+    # stream before the final frame.
+    assert any(frame.get("kind") == "event" for frame in frames)
+    assert any(frame.get("kind") == "content" for frame in frames)
+    done = next(frame for frame in frames if frame.get("kind") == "done")
+    assert done["conversation_id"] == conversation_id
+    assert done["stub"] is True
+    assert "Model stub" in done["text"]
+    assert done["pending_question"] is None
+
+    # The answer is persisted and the question is no longer pending.
+    assert store.get_pending_question(conversation_id) is None
+    stored = client.get(f"/api/conversations/{conversation_id}")
+    assert stored.status_code == 200
+    body = stored.json()
+    assert [message["role"] for message in body["messages"]] == [
+        "user",
+        "user",
+        "assistant",
+    ]
+    assert body["messages"][1]["content"] == "March"
+    questions = [
+        event
+        for event in body["events"]
+        if event.get("data", {}).get("tool") == "ask_user_question"
+    ]
+    assert questions and questions[-1]["data"]["selected"] == "March"
+
+
 def test_conversations_list_get_delete(client: TestClient) -> None:
     with client.stream(
         "POST",
