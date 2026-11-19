@@ -331,3 +331,59 @@ def test_summary_tolerates_malformed_model_output(monkeypatch):
     assert all(not note.startswith("Model summary:") for note in itinerary.notes)
 
 
+def test_parse_summary_notes_handles_fences_and_junk():
+    from agents.coordinator.agent import _parse_summary_notes
+
+    fenced = '```json\n{"notes": ["Fenced note", 5, "", "Second"]}\n```'
+    assert _parse_summary_notes(fenced) == [
+        "Model summary: Fenced note",
+        "Model summary: Second",
+    ]
+    assert _parse_summary_notes('{"notes": ["plain"]}') == ["Model summary: plain"]
+    assert _parse_summary_notes('{"notes": "not a list"}') == []
+    assert _parse_summary_notes('{"other": 1}') == []
+    assert _parse_summary_notes("[1, 2, 3]") == []
+    assert _parse_summary_notes("") == []
+    # More than three notes are capped.
+    long = '{"notes": ["a", "b", "c", "d", "e"]}'
+    assert len(_parse_summary_notes(long)) == 3
+    # Over-long notes are truncated to 160 characters of text after the label.
+    huge = '{"notes": ["' + "x" * 400 + '"]}'
+    parsed = _parse_summary_notes(huge)
+    assert parsed[0].startswith("Model summary: x")
+    assert len(parsed[0]) == len("Model summary: ") + 160
+
+
+def test_constraint_changes_reports_each_diff():
+    from agents.coordinator.agent import _constraint_changes
+    from datetime import date as _date
+
+    previous = TripRequest(destination="Tokyo", budget=400, days=3, interests=["food"])
+    # No changes
+    assert _constraint_changes(previous, previous) == [
+        "Constraints unchanged; plan re-validated"
+    ]
+    # Budget
+    notes = _constraint_changes(previous, TripRequest(destination="Tokyo", budget=300, days=3))
+    assert any("budget" in note and "300" in note and "400" in note for note in notes)
+    # Trip length
+    notes = _constraint_changes(previous, TripRequest(destination="Tokyo", budget=400, days=5))
+    assert any("trip length" in note and "5" in note and "3" in note for note in notes)
+    # Dates only (same inclusive length)
+    with_dates = TripRequest(
+        destination="Tokyo", budget=400, start_date=_date(2026, 3, 1), end_date=_date(2026, 3, 3)
+    )
+    notes = _constraint_changes(previous, with_dates)
+    assert any("date" in note.casefold() for note in notes)
+    # Interests
+    notes = _constraint_changes(
+        previous, TripRequest(destination="Tokyo", budget=400, days=3, interests=["food", "art"])
+    )
+    assert any("interests" in note.casefold() and "art" in note for note in notes)
+    # Repeat-avoidance toggle
+    notes = _constraint_changes(
+        previous, TripRequest(destination="Tokyo", budget=400, days=3, avoid_visited=True)
+    )
+    assert any("Repeat avoidance enabled" in note for note in notes)
+
+

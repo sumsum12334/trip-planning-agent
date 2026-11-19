@@ -277,12 +277,14 @@ def _parse_summary_notes(text: str) -> list[str]:
     if not isinstance(raw_notes, list):
         return []
     notes: list[str] = []
-    for item in raw_notes[:3]:
+    for item in raw_notes:
         if not isinstance(item, str):
             continue
         note = item.strip()
         if note:
             notes.append(f"Model summary: {note[:160]}")
+        if len(notes) == 3:
+            break
     return notes
 
 
