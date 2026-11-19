@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import {
-  Collapse,
   Accordion,
   AccordionSummary,
   AccordionDetails,
@@ -11,13 +10,12 @@ import {
   Dialog,
   DialogTitle,
   DialogContent,
-  DialogActions,
   Paper,
   IconButton,
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import CloseIcon from "@mui/icons-material/Close";
-import { eventIcon, formatEventLabel } from "../lib/planUtils.js";
+import { eventIcon } from "../lib/planUtils.js";
 import { agentForEvent, currentAgent } from "../lib/workflow.js";
 
 const AGENT_COLORS = {
@@ -53,91 +51,11 @@ function formatToolResult(result) {
   return String(result).slice(0, 500);
 }
 
-function getTripPlanContribution(event) {
-  if (!event.data?.result) return null;
-  const result = event.data.result;
-  const tool = event.data.tool;
-
-  // Trip plan tool results
-  if (tool === "start_trip_plan" && result.destination) {
-    return `✈ Started plan: ${result.destination}${result.currency ? ` (${result.currency})` : ""}${result.budget ? ` • Budget: ${result.budget}` : ""}`;
-  }
-  if (tool === "set_trip_day" && result.day) {
-    const acts = result.activities?.length ? ` • ${result.activities.length} activities` : "";
-    const places = result.places?.length ? ` • ${result.places.length} places` : "";
-    return `📅 Day ${result.day}: ${result.title || "Untitled"}${acts}${places}`;
-  }
-  if (tool === "set_trip_budget") {
-    if (result.budget != null) return `💰 Budget set: ${result.currency || ""} ${result.budget}`;
-    if (result.day_budgets?.length) return `💰 Day budgets: ${result.day_budgets.length} days`;
-    if (result.day_items?.length) return `💰 Day items: ${result.day_items.length} entries`;
-    if (result.budget_items?.length) return `💰 Category items: ${result.budget_items.length} categories`;
-  }
-  if (tool === "set_trip_references" && result.references?.length) {
-    return `🔗 Added ${result.references.length} references`;
-  }
-  if (tool === "remove_trip_day" && result.day) {
-    return `🗑 Removed day ${result.day}`;
-  }
-  if (tool === "display_trip_plan" && result.destination) {
-    return `📋 Displayed plan: ${result.destination} (${result.days?.length || 0} days)`;
-  }
-
-  // Agent tool results that contribute to the plan
-  if (tool === "search_stays" && result.stays?.length) {
-    const currencies = [...new Set(result.stays.map(s => s.currency).filter(Boolean))];
-    return `🏨 Found ${result.stays.length} stays${currencies.length ? ` (${currencies.join(", ")})` : ""}`;
-  }
-  if (tool === "estimate_transport" && result.legs?.length) {
-    const modes = [...new Set(result.legs.map(l => l.mode).filter(Boolean))];
-    return `🚌 ${result.legs.length} transport leg(s)${modes.length ? ` via ${modes.join(", ")}` : ""}`;
-  }
-  if (tool === "search_travel_history" && result.entries?.length) {
-    return `🧠 Found ${result.entries.length} history entr${result.entries.length === 1 ? "y" : "ies"}`;
-  }
-  if (tool === "web_search" && result.results?.length) {
-    return `🔍 ${result.results.length} search results`;
-  }
-
-  return null;
-}
-
 function formatDuration(start, end) {
   if (!start || !end) return "";
   const ms = new Date(end) - new Date(start);
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
-}
-
-function EventGroup({ title, events, color, onEventClick }) {
-  if (!events.length) return null;
-  return (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
-      <Typography variant="caption" color={color.text} fontWeight={700} textTransform="uppercase" letterSpacing="0.5px" sx={{ fontSize: 9, mb: 1, opacity: 0.7, minWidth: 0 }}>
-        {title}
-      </Typography>
-      {events.map(({ key, event }) => (
-        <div
-          key={key}
-          className={`event ${event.status}`}
-          style={{ borderLeftColor: color.border, marginLeft: 0, paddingLeft: 0 }}
-          onClick={() => onEventClick(event, color)}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onEventClick(event, color); }}
-        >
-          <div className="event-main">
-            <span className="event-icon">{eventIcon(event)}</span>
-            <span className="event-label">
-              <strong>{formatEventLabel(event.label, event)}</strong>
-              {event.detail && <small className="event-detail">{event.detail}</small>}
-            </span>
-            <span className={`event-dot ${event.status}`} style={{ background: color.border }} />
-          </div>
-        </div>
-      ))}
-    </Box>
-  );
 }
 
 function EventDetailDialog({ event, agent, open, onClose }) {
@@ -155,9 +73,7 @@ function EventDetailDialog({ event, agent, open, onClose }) {
             size="small"
             sx={{ background: color.border, color: "#fff", fontWeight: 700 }}
           />
-          <Typography variant="h6" sx={{ color: color.text, fontWeight: 700 }}>
-            {formatEventLabel(event.label, event)}
-          </Typography>
+          <Typography variant="h6" sx={{ color: color.text, fontWeight: 700 }}>{event.label}</Typography>
         </Box>
         <IconButton onClick={onClose} size="small" sx={{ color: color.text }}>
           <CloseIcon />
@@ -165,20 +81,14 @@ function EventDetailDialog({ event, agent, open, onClose }) {
       </DialogTitle>
       <DialogContent sx={{ p: 3, maxHeight: "60vh", overflow: "auto" }}>
         {event.detail && (
-          <Typography variant="body2" color="textSecondary" gutterBottom>
-            {event.detail}
-          </Typography>
+          <Typography variant="body2" color="textSecondary" gutterBottom>{event.detail}</Typography>
         )}
         {event.timestamp && (
-          <Typography variant="caption" color="textSecondary" sx={{ display: "block", mb: 2 }}>
-            {event.timestamp}
-          </Typography>
+          <Typography variant="caption" color="textSecondary" sx={{ display: "block", mb: 2 }}>{event.timestamp}</Typography>
         )}
         {hasArgs && (
           <Box sx={{ mb: 3 }}>
-            <Typography variant="subtitle2" color={color.text} gutterBottom fontWeight={700}>
-              Arguments
-            </Typography>
+            <Typography variant="subtitle2" color={color.text} gutterBottom fontWeight={700}>Arguments</Typography>
             <Paper variant="outlined" sx={{ p: 2, background: "#fafafa", maxHeight: "30vh", overflow: "auto" }}>
               <pre style={{ margin: 0, fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                 {formatToolArgs(event.data.arguments)}
@@ -188,9 +98,7 @@ function EventDetailDialog({ event, agent, open, onClose }) {
         )}
         {hasResult && (
           <Box>
-            <Typography variant="subtitle2" color={color.text} gutterBottom fontWeight={700}>
-              Result
-            </Typography>
+            <Typography variant="subtitle2" color={color.text} gutterBottom fontWeight={700}>Result</Typography>
             <Paper variant="outlined" sx={{ p: 2, background: "#fafafa", maxHeight: "30vh", overflow: "auto" }}>
               <pre style={{ margin: 0, fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                 {formatToolResult(event.data.result)}
@@ -200,9 +108,7 @@ function EventDetailDialog({ event, agent, open, onClose }) {
         )}
         {!hasArgs && !hasResult && event.data && (
           <Box>
-            <Typography variant="subtitle2" color={color.text} gutterBottom fontWeight={700}>
-              Data
-            </Typography>
+            <Typography variant="subtitle2" color={color.text} gutterBottom fontWeight={700}>Data</Typography>
             <Paper variant="outlined" sx={{ p: 2, background: "#fafafa" }}>
               <pre style={{ margin: 0, fontSize: 12, whiteSpace: "pre-wrap" }}>
                 {JSON.stringify(event.data, null, 2)}
@@ -219,7 +125,7 @@ export function Activity({ events }) {
   const itemsRef = useRef(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [selectedAgent, setSelectedAgent] = useState(null);
-  const [viewMode, setViewMode] = useState("timeline"); // "timeline" | "byAgent"
+  const [viewMode, setViewMode] = useState("timeline");
 
   const scrollToLatest = () => {
     const element = itemsRef.current;
@@ -229,7 +135,6 @@ export function Activity({ events }) {
 
   const working = currentAgent(events);
 
-  // Compute agent handovers and group events by agent
   const { rows, byAgent } = useMemo(() => {
     const rows = [];
     const byAgent = {};
@@ -248,7 +153,7 @@ export function Activity({ events }) {
     return { rows, byAgent };
   }, [events]);
 
-  const agentStats = useMemo(() => {
+  const agentStatsMemo = useMemo(() => {
     const stats = {};
     Object.entries(byAgent).forEach(([agent, evs]) => {
       const tools = evs.filter(({ event }) => event.type === "tool" || event.label.toLowerCase().includes("tool"));
@@ -264,8 +169,6 @@ export function Activity({ events }) {
         completed: completed.length,
         running: running.length > 0,
         duration: formatDuration(first?.timestamp, last?.timestamp),
-        firstEvent: first,
-        lastEvent: last,
       };
     });
     return stats;
@@ -287,7 +190,6 @@ export function Activity({ events }) {
     const color = agentColor(agent);
     const bg = `linear-gradient(90deg, ${color.border}22 0%, transparent 100%)`;
     const hasDetails = event.data && (event.data.arguments || event.data.result);
-    const contribution = getTripPlanContribution(event);
 
     return (
       <div
@@ -302,17 +204,12 @@ export function Activity({ events }) {
         <div className="event-main">
           <span className="event-icon">{eventIcon(event)}</span>
           <span className="event-label">
-            <strong>{formatEventLabel(event.label, event)}</strong>
+            <strong>{event.label}</strong>
             {event.detail && <small className="event-detail">{event.detail}</small>}
             {handover && <small className="event-agent" style={{ color: color.text }}>{agent}</small>}
           </span>
           <span className={`event-dot ${event.status}`} style={{ background: color.border }} />
         </div>
-        {contribution && (
-          <div className="event-contribution" style={{ color: color.text, fontSize: 11, marginTop: 4, marginLeft: 32, opacity: 0.85 }}>
-            {contribution}
-          </div>
-        )}
         {hasDetails && (
           <span className="event-expand-hint" style={{ color: color.border, fontSize: 10, marginLeft: 8 }}>
             Click for details
@@ -331,20 +228,14 @@ export function Activity({ events }) {
   const renderByAgent = () => (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {Object.entries(byAgent).map(([agent, evs]) => {
-        const stats = agentStats[agent];
+        const stats = agentStatsMemo[agent];
         const color = agentColor(agent);
 
-        // Group events by type for a summary
         const toolCalls = evs.filter(({ event }) => event.label.toLowerCase().includes("call") || event.label.toLowerCase().startsWith("calling"));
         const toolResults = evs.filter(({ event }) => event.label.toLowerCase().includes("result received"));
         const agentEvents = evs.filter(({ event }) => event.type === "agent");
         const modelEvents = evs.filter(({ event }) => event.type === "model");
         const otherEvents = evs.filter(({ event }) => !toolCalls.includes({ key: "", event }) && !toolResults.includes({ key: "", event }) && !agentEvents.includes({ key: "", event }) && !modelEvents.includes({ key: "", event }));
-
-        // Extract trip plan contributions for this agent
-        const contributions = evs
-          .map(({ event }) => getTripPlanContribution(event))
-          .filter(Boolean);
 
         return (
           <Accordion key={agent} defaultExpanded={false} sx={{ border: `1px solid ${color.border}`, borderRadius: 12, background: color.light, overflow: "hidden" }}>
@@ -377,37 +268,130 @@ export function Activity({ events }) {
               </Box>
             </AccordionSummary>
             <AccordionDetails sx={{ p: 1.5, display: "flex", flexDirection: "column", gap: 10 }}>
-              {/* Trip Plan Contributions Summary */}
-              {contributions.length > 0 && (
-                <Box sx={{ p: 1.5, background: `${color.border}12`, borderRadius: 6, border: `1px solid ${color.border}30`, mb: 1 }}>
-                  <Typography variant="caption" color={color.text} gutterBottom fontWeight={700} sx={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.5px" }}>
-                    Trip Plan Contributions
-                  </Typography>
-                  <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                    {contributions.map((c, i) => (
-                      <Typography variant="body2" color={color.text} key={i} sx={{ fontSize: 11, lineHeight: 1.4 }}>
-                        {c}
-                      </Typography>
-                    ))}
-                  </Box>
+              {toolCalls.length > 0 && (
+                <Box sx={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <Typography variant="caption" color={color.text} fontWeight={700} textTransform="uppercase" letterSpacing="0.5px" sx={{ fontSize: 9, mb: 2, opacity: 0.7 }}>Tool Calls</Typography>
+                  {toolCalls.map(({ key, event }) => (
+                    <div
+                      key={key}
+                      className={`event ${event.status}`}
+                      style={{ borderLeftColor: color.border, marginLeft: 0, paddingLeft: 0 }}
+                      onClick={() => openEventDetail(event, color)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openEventDetail(event, color); }}
+                    >
+                      <div className="event-main">
+                        <span className="event-icon">{eventIcon(event)}</span>
+                        <span className="event-label">
+                          <strong>{event.label}</strong>
+                          {event.detail && <small className="event-detail">{event.detail}</small>}
+                        </span>
+                        <span className={`event-dot ${event.status}`} style={{ background: color.border }} />
+                      </div>
+                    </div>
+                  ))}
                 </Box>
               )}
-
-              {/* Event Groups */}
-              {toolCalls.length > 0 && (
-                <EventGroup title="Tool Calls" events={toolCalls} color={color} onEventClick={openEventDetail} />
-              )}
               {toolResults.length > 0 && (
-                <EventGroup title="Tool Results" events={toolResults} color={color} onEventClick={openEventDetail} />
+                <Box sx={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <Typography variant="caption" color={color.text} fontWeight={700} textTransform="uppercase" letterSpacing="0.5px" sx={{ fontSize: 9, mb: 2, opacity: 0.7 }}>Tool Results</Typography>
+                  {toolResults.map(({ key, event }) => (
+                    <div
+                      key={key}
+                      className={`event ${event.status}`}
+                      style={{ borderLeftColor: color.border, marginLeft: 0, paddingLeft: 0 }}
+                      onClick={() => openEventDetail(event, color)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openEventDetail(event, color); }}
+                    >
+                      <div className="event-main">
+                        <span className="event-icon">{eventIcon(event)}</span>
+                        <span className="event-label">
+                          <strong>{event.label}</strong>
+                          {event.detail && <small className="event-detail">{event.detail}</small>}
+                        </span>
+                        <span className={`event-dot ${event.status}`} style={{ background: color.border }} />
+                      </div>
+                    </div>
+                  ))}
+                </Box>
               )}
               {agentEvents.length > 0 && (
-                <EventGroup title="Agent Events" events={agentEvents} color={color} onEventClick={openEventDetail} />
+                <Box sx={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <Typography variant="caption" color={color.text} fontWeight={700} textTransform="uppercase" letterSpacing="0.5px" sx={{ fontSize: 9, mb: 2, opacity: 0.7 }}>Agent Events</Typography>
+                  {agentEvents.map(({ key, event }) => (
+                    <div
+                      key={key}
+                      className={`event ${event.status}`}
+                      style={{ borderLeftColor: color.border, marginLeft: 0, paddingLeft: 0 }}
+                      onClick={() => openEventDetail(event, color)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openEventDetail(event, color); }}
+                    >
+                      <div className="event-main">
+                        <span className="event-icon">{eventIcon(event)}</span>
+                        <span className="event-label">
+                          <strong>{event.label}</strong>
+                          {event.detail && <small className="event-detail">{event.detail}</small>}
+                        </span>
+                        <span className={`event-dot ${event.status}`} style={{ background: color.border }} />
+                      </div>
+                    </div>
+                  ))}
+                </Box>
               )}
               {modelEvents.length > 0 && (
-                <EventGroup title="Model Events" events={modelEvents} color={color} onEventClick={openEventDetail} />
+                <Box sx={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <Typography variant="caption" color={color.text} fontWeight={700} textTransform="uppercase" letterSpacing="0.5px" sx={{ fontSize: 9, mb: 2, opacity: 0.7 }}>Model Events</Typography>
+                  {modelEvents.map(({ key, event }) => (
+                    <div
+                      key={key}
+                      className={`event ${event.status}`}
+                      style={{ borderLeftColor: color.border, marginLeft: 0, paddingLeft: 0 }}
+                      onClick={() => openEventDetail(event, color)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openEventDetail(event, color); }}
+                    >
+                      <div className="event-main">
+                        <span className="event-icon">{eventIcon(event)}</span>
+                        <span className="event-label">
+                          <strong>{event.label}</strong>
+                          {event.detail && <small className="event-detail">{event.detail}</small>}
+                        </span>
+                        <span className={`event-dot ${event.status}`} style={{ background: color.border }} />
+                      </div>
+                    </div>
+                  ))}
+                </Box>
               )}
               {otherEvents.length > 0 && (
-                <EventGroup title="Other" events={otherEvents} color={color} onEventClick={openEventDetail} />
+                <Box sx={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <Typography variant="caption" color={color.text} fontWeight={700} textTransform="uppercase" letterSpacing="0.5px" sx={{ fontSize: 9, mb: 2, opacity: 0.7 }}>Other</Typography>
+                  {otherEvents.map(({ key, event }) => (
+                    <div
+                      key={key}
+                      className={`event ${event.status}`}
+                      style={{ borderLeftColor: color.border, marginLeft: 0, paddingLeft: 0 }}
+                      onClick={() => openEventDetail(event, color)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openEventDetail(event, color); }}
+                    >
+                      <div className="event-main">
+                        <span className="event-icon">{eventIcon(event)}</span>
+                        <span className="event-label">
+                          <strong>{event.label}</strong>
+                          {event.detail && <small className="event-detail">{event.detail}</small>}
+                        </span>
+                        <span className={`event-dot ${event.status}`} style={{ background: color.border }} />
+                      </div>
+                    </div>
+                  ))}
+                </Box>
               )}
             </AccordionDetails>
           </Accordion>
