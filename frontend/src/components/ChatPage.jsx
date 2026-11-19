@@ -18,6 +18,9 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
   const [answering, setAnswering] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [selectedOption, setSelectedOption] = useState("");
+  const [planCollapsed, setPlanCollapsed] = useState(() => {
+    try { return window.localStorage.getItem("trip-plan-collapsed") === "1"; } catch { return false; }
+  });
   const answerLockRef = useRef(false);
   const abortRef = useRef(null);
   const requestIdRef = useRef(null);
@@ -79,7 +82,6 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
         const completedMessages = result.pending_question
           ? optimisticMessages
           : [...optimisticMessages, { role: "assistant", content: result.text, reasoning: result.reasoning || streamedReasoning }];
-        // Keep earlier turns' events (including the trip plan) and append this turn's.
         const mergedEvents = [...current.events, ...(result.events || [])];
         setCurrent({ id: result.conversation_id || current.id, messages: completedMessages, events: mergedEvents });
         setStatus(
@@ -198,6 +200,12 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
   const planKey = latestPlanEvent ? current.events.indexOf(latestPlanEvent) : -1;
   const workflow = workflowState(current.events, selectedOption ? null : pendingEvent, status);
   const suggestions = nextStepSuggestions(latestPlan, current.messages, Boolean(pendingEvent), streaming || answering);
+
+  function togglePlanCollapsed() {
+    const next = !planCollapsed;
+    setPlanCollapsed(next);
+    try { window.localStorage.setItem("trip-plan-collapsed", next ? "1" : "0"); } catch { /* ignore */ }
+  }
 
   async function answerQuestion(option, custom = false) {
     if (answerLockRef.current || streaming) return;
@@ -379,7 +387,19 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
       <div className="composer-footer"><span>{status || "Markdown supported"}</span>{retryText && <Button className="retry" size="small" color="warning" variant="outlined" disabled={streaming} onClick={(event) => sendMessage(event, true)}>Retry</Button>}</div>
       </section>
       <div className="chat-side">
-        {latestPlan && <TripPlanCard key={planKey} plan={latestPlan} onSaveBudget={savePlanBudget} />}
+        {latestPlan && !planCollapsed && (
+          <TripPlanCard key={planKey} plan={latestPlan} onSaveBudget={savePlanBudget} onCollapse={togglePlanCollapsed} />
+        )}
+        {latestPlan && planCollapsed && (
+          <button
+            type="button"
+            className="plan-collapsed-toggle"
+            onClick={togglePlanCollapsed}
+            aria-label="Show trip plan"
+          >
+            {"\u25B8"} Trip plan
+          </button>
+        )}
       </div>
     </div>
   </section>;

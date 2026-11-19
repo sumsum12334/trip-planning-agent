@@ -9,7 +9,7 @@ import { downloadPlanMarkdown, printPlanReport } from "../lib/planExport.js";
 import { CategoryBudgetEditor, DayEditor } from "./BudgetEditors.jsx";
 import { TripMap } from "./TripMap.jsx";
 
-export function TripPlanCard({ plan, onSaveBudget }) {
+export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
   const points = useMemo(() => routePoints(plan), [plan]);
   const currency = plan.currency || "";
   const items = planBudgetItems(plan);
@@ -79,6 +79,9 @@ export function TripPlanCard({ plan, onSaveBudget }) {
       )}
       <button type="button" className="plan-tool" onClick={() => downloadPlanMarkdown(plan)}>⬇ Markdown</button>
       <button type="button" className="plan-tool" onClick={() => printPlanReport(plan)}>🖨 PDF report</button>
+      {onCollapse && (
+        <button type="button" className="plan-tool plan-collapse-toggle" onClick={onCollapse} aria-label="Collapse trip plan panel">▸ Hide panel</button>
+      )}
     </div>
     <div className="trip-plan-content">
       {mapOpen && <TripMap plan={plan} />}

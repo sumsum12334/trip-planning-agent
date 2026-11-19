@@ -116,6 +116,7 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .plan-tool.primary{background:#6c63ff;border-color:#6c63ff;color:#fff}
 .plan-tool.primary:hover{background:#5b52e6}
 .plan-tool:disabled{opacity:.5;cursor:not-allowed}
+.plan-collapse-toggle{margin-left:auto}
 .trip-map-wrap{position:relative;isolation:isolate;margin-top:12px}
 .trip-map{height:240px;width:100%;border-radius:12px;overflow:hidden;border:1px solid #dbe6f7}
 .trip-map-note{display:block;margin-top:6px;color:#8995a9;font-size:11px}
@@ -149,6 +150,12 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .stop-button:hover{background:#cf4a60}
 .stop-button span{margin-left:5px}
 @media(max-width:560px){.trip-map{height:190px}}
+
+/* Collapsed trip plan panel toggle */
+.plan-collapsed-toggle{display:flex;align-items:center;justify-content:center;min-height:44px;padding:10px 14px;border:1px solid #dbe6f7;border-radius:12px;background:linear-gradient(135deg,#f1f7ff,#fff);color:#3f5f95;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px #4c83c212}
+.plan-collapsed-toggle:hover{background:linear-gradient(135deg,#e8f0ff,#fff);border-color:#a9c4ec}
+.app[data-color-mode="dark"] .plan-collapsed-toggle{background:linear-gradient(135deg,#152033,#171e33);border-color:rgba(106,168,255,0.28);color:#9db8ff}
+.app[data-color-mode="dark"] .plan-collapsed-toggle:hover{background:linear-gradient(135deg,#1a2a44,#171e33);border-color:#5a7cc0}
 
 /* Trip plan side column (separate from the conversation window) */
 .chat-workspace{grid-template-columns:minmax(0,1fr) minmax(320px,390px)}
