@@ -245,8 +245,7 @@ export function TripPlanCard({ plan, onSaveBudget }) {
             <div className="trip-day-head">
               <button type="button" className="day-collapse" aria-expanded={isOpen} onClick={() => setExpandedDays((previous) => ({ ...previous, [day.day]: !isOpen }))}>
                 <span className="day-chevron">{isOpen ? "▾" : "▸"}</span>
-                <span className="day-number">DAY {day.day}</span>
-                <strong>{day.title}</strong>
+                <span className="day-number">DAY {day.day}</span> <strong>{day.title}</strong>
               </button>
               <div className="trip-day-head-actions">
                 {dayMarkers.length > 0 && <span className="day-map-ref" title="Map reference">🗺 {dayMarkers.join(" · ")}</span>}
