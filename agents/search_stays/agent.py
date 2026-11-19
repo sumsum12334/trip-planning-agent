@@ -16,18 +16,21 @@ from collections.abc import Iterable
 from typing import Any
 
 from config.settings import get_settings
+from shared.history_match import stay_overlaps_places
 from shared.schemas import StayCandidate, TripRequest
 
 from . import tools
 
 
 def _overlaps_excluded(stay: StayCandidate, excluded: set[str]) -> bool:
-    """True if stay name or location overlaps any excluded place (casefold)."""
+    """True if a visited place is specific enough to match this stay.
+
+    Uses the shared matcher so a city-level visit ("Tokyo") does not exclude
+    every stay in that city, while a neighborhood visit ("shibuya") does.
+    """
     if not excluded:
         return False
-    name = stay.name.casefold()
-    location = stay.location.casefold()
-    return any(place in name or place in location for place in excluded)
+    return stay_overlaps_places(stay.name, stay.location, excluded)
 
 
 def run(

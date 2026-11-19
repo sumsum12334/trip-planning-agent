@@ -56,6 +56,8 @@ def _set_runtime(
     os.environ["TOOL_STAYS_MODE"] = "stub"
     os.environ["TOOL_MAPS_MODE"] = "stub"
     os.environ["WEB_SEARCH_MODE"] = "stub"
+    # Keep eval silent: no Langfuse export attempts from local .env credentials.
+    os.environ["LANGFUSE_ENABLED"] = "0"
     if mode == "api":
         if model_url:
             os.environ["QWEN_BASE_URL"] = model_url.rstrip("/")
