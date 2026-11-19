@@ -112,8 +112,8 @@ function formatDuration(start, end) {
 function EventGroup({ title, events, color, onEventClick }) {
   if (!events.length) return null;
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <Typography variant="caption" color={color.text} fontWeight={700} textTransform="uppercase" letterSpacing="0.5px" sx={{ fontSize: 10, mb: 4 }}>
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <Typography variant="caption" color={color.text} fontWeight={700} textTransform="uppercase" letterSpacing="0.5px" sx={{ fontSize: 9, mb: 2, opacity: 0.7 }}>
         {title}
       </Typography>
       {events.map(({ key, event }) => (
@@ -347,7 +347,7 @@ export function Activity({ events }) {
           .filter(Boolean);
 
         return (
-          <Accordion key={agent} defaultExpanded sx={{ border: `1px solid ${color.border}`, borderRadius: 12, background: color.light }}>
+          <Accordion key={agent} defaultExpanded={false} sx={{ border: `1px solid ${color.border}`, borderRadius: 12, background: color.light, overflow: "hidden" }}>
             <AccordionSummary
               expandIcon={<ExpandMoreIcon />}
               sx={{ background: color.light, borderBottom: `1px solid ${color.border}` }}
@@ -376,16 +376,16 @@ export function Activity({ events }) {
                 </Box>
               </Box>
             </AccordionSummary>
-            <AccordionDetails sx={{ p: 2, display: "flex", flexDirection: "column", gap: 12 }}>
+            <AccordionDetails sx={{ p: 1.5, display: "flex", flexDirection: "column", gap: 10 }}>
               {/* Trip Plan Contributions Summary */}
               {contributions.length > 0 && (
-                <Box sx={{ p: 2, background: `${color.border}15`, borderRadius: 8, border: `1px solid ${color.border}40` }}>
-                  <Typography variant="subtitle2" color={color.text} gutterBottom fontWeight={700}>
+                <Box sx={{ p: 1.5, background: `${color.border}12`, borderRadius: 6, border: `1px solid ${color.border}30`, mb: 1 }}>
+                  <Typography variant="caption" color={color.text} gutterBottom fontWeight={700} sx={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.5px" }}>
                     Trip Plan Contributions
                   </Typography>
-                  <Box sx={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
                     {contributions.map((c, i) => (
-                      <Typography variant="body2" color={color.text} key={i} sx={{ fontSize: 12 }}>
+                      <Typography variant="body2" color={color.text} key={i} sx={{ fontSize: 11, lineHeight: 1.4 }}>
                         {c}
                       </Typography>
                     ))}
