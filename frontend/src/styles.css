@@ -241,41 +241,14 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .chat-page .page-title .muted{max-width:70ch}
 
 /* Balanced panes: chat comfortable, trip plan large */
-.chat-workspace{grid-template-columns:minmax(0,1fr);align-items:start}
-.chat-workspace.has-plan{grid-template-columns:minmax(380px,0.92fr) minmax(520px,1.6fr)}
-.chat-workspace.has-plan.plan-collapsed{grid-template-columns:minmax(0,1fr)}
 
 /* Never clip message content */
-.chat-panel{min-width:0}
-.chat-side{min-width:0}
-.messages{height:clamp(360px,58vh,700px);overflow-wrap:anywhere}
 .messages>*{min-width:0}
 .messages .MuiPaper-root{min-width:0;max-width:100%;overflow-wrap:anywhere}
 .messages table{display:block;max-width:100%;overflow-x:auto}
 .messages pre,.messages code{max-width:100%;overflow-x:auto}
 
-@media(max-width:1150px){.chat-workspace.has-plan{grid-template-columns:minmax(0,1fr)}.chat-side{position:static;max-height:none;overflow:visible}.trip-plan-content{grid-template-columns:1fr}}
-
-/* Keep the chat page within the viewport so the composer never spills past the bottom */
-.chat-page{height:100vh;height:100dvh;max-height:100vh;max-height:100dvh;display:flex;flex-direction:column;overflow:hidden}
-.chat-page>.page-title{flex:0 0 auto}
-.chat-workspace{flex:1 1 auto;min-height:0;align-items:stretch}
-.chat-panel{display:flex;flex-direction:column;min-height:0;height:100%;overflow:hidden}
-.messages{flex:1 1 auto;min-height:140px;height:auto}
-.chat-panel>.workflow-status,
-.chat-panel>.question-box,
-.chat-panel>.next-steps,
-.chat-panel>.composer,
-.chat-panel>.composer-footer{flex:0 0 auto}
-.chat-panel>.activity-card{flex:0 0 auto;width:100%;max-height:50vh;overflow:hidden;display:flex;flex-direction:column;min-height:0}
-.chat-side{height:100%;max-height:none;overflow:auto}
-@media(max-width:1150px){
-  .chat-page{height:auto;max-height:none;overflow:visible;display:block}
-  .chat-workspace{align-items:start}
-  .chat-panel{height:auto}
-  .messages{height:clamp(320px,52vh,560px)}
-  .chat-side{height:auto;overflow:visible}
-}
+@media(max-width:1150px){.trip-plan-content{grid-template-columns:1fr}}
 
 /* Larger route map */
 .trip-map{height:340px}
@@ -331,17 +304,13 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .app[data-color-mode="dark"] .trip-map-marker.airport span{background:#37b37e}
 
 /* Live workflow scrolls to the latest event */
-.chat-panel>.activity-card .activity-items{flex:1 1 auto;width:100%;min-width:0;overflow:auto;overflow-x:hidden;padding-right:4px;scroll-behavior:smooth;min-height:0}
-.chat-panel>.activity-card .activity-items::-webkit-scrollbar{width:8px}
-.chat-panel>.activity-card .activity-items::-webkit-scrollbar-track{background:transparent}
-.chat-panel>.activity-card .activity-items::-webkit-scrollbar-thumb{background:#c7d2e0;border-radius:4px;border:2px solid transparent;background-clip:content-box}
-.chat-panel>.activity-card .activity-items::-webkit-scrollbar-thumb:hover{background:#9fb0c8}
-.app[data-color-mode="dark"] .chat-panel>.activity-card .activity-items::-webkit-scrollbar-thumb{background:#3d4a66}
-.app[data-color-mode="dark"] .chat-panel>.activity-card .activity-items::-webkit-scrollbar-thumb:hover{background:#5c6b8a}
-
-/* Ensure activity card doesn't push content down - fixed height with internal scroll */
-.chat-panel>.activity-card{flex:0 0 auto;max-height:50vh;overflow:hidden}
-.chat-panel>.activity-card[open] .activity-items{max-height:calc(50vh - 60px)}
+.live-workflow-sidebar .activity-items{flex:1 1 auto;width:100%;min-width:0;overflow:auto;overflow-x:hidden;padding-right:4px;scroll-behavior:smooth;min-height:0}
+.live-workflow-sidebar .activity-items::-webkit-scrollbar{width:8px}
+.live-workflow-sidebar .activity-items::-webkit-scrollbar-track{background:transparent}
+.live-workflow-sidebar .activity-items::-webkit-scrollbar-thumb{background:#c7d2e0;border-radius:4px;border:2px solid transparent;background-clip:content-box}
+.live-workflow-sidebar .activity-items::-webkit-scrollbar-thumb:hover{background:#9fb0c8}
+.app[data-color-mode="dark"] .live-workflow-sidebar .activity-items::-webkit-scrollbar-thumb{background:#3d4a66}
+.app[data-color-mode="dark"] .live-workflow-sidebar .activity-items::-webkit-scrollbar-thumb:hover{background:#5c6b8a}
 
 /* Budget: day/category view toggle + per-day breakdown */
 .budget-view-toggle{display:inline-flex;gap:2px;margin-top:10px;padding:2px;border-radius:999px;background:#eef1f8;border:1px solid #e0e5f0}
