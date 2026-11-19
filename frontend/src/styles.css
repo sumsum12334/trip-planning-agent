@@ -267,7 +267,7 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .chat-panel>.next-steps,
 .chat-panel>.composer,
 .chat-panel>.composer-footer{flex:0 0 auto}
-.chat-panel>.activity-card{flex:0 0 auto;width:100%;max-height:50vh;overflow:visible;display:flex;flex-direction:column;min-height:0}
+.chat-panel>.activity-card{flex:0 0 auto;width:100%;max-height:50vh;overflow:hidden;display:flex;flex-direction:column;min-height:0}
 .chat-side{height:100%;max-height:none;overflow:auto}
 @media(max-width:1150px){
   .chat-page{height:auto;max-height:none;overflow:visible;display:block}
