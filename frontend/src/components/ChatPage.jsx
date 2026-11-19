@@ -23,14 +23,21 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
   const [answering, setAnswering] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [selectedOption, setSelectedOption] = useState("");
-  const [planCollapsed] = useState(() => {
-    try { return window.localStorage.getItem("trip-plan-collapsed") === "1"; } catch { return false; }
-  });
+  const [planCollapsed] = useState(false);
   // Floating chat panel - always open by default at bottom right
   const [chatPanelOpen, setChatPanelOpen] = useState(true);
   const [chatPanelMinimized, setChatPanelMinimized] = useState(false);
-  const [chatPanelPosition, setChatPanelPosition] = useState({ x: 0, y: 0 });
+  const [chatPanelPosition, setChatPanelPosition] = useState(() => {
+    if (typeof window !== "undefined") {
+      return {
+        x: Math.max(24, window.innerWidth - 480 - 24),
+        y: Math.max(24, window.innerHeight - 600 - 88 - 24),
+      };
+    }
+    return { x: 24, y: 24 };
+  });
   const [chatPanelSize, setChatPanelSize] = useState({ width: 480, height: 600 });
+  const [isDragging, setIsDragging] = useState(false);
 
   const answerLockRef = useRef(false);
   const abortRef = useRef(null);
@@ -79,6 +86,7 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
 
   useLayoutEffect(() => {
     handleDragEndRef.current = () => {
+      setIsDragging(false);
       dragRef.current.active = false;
       document.removeEventListener('mousemove', handleDragMove);
       document.removeEventListener('mouseup', handleDragEndRef.current);
@@ -87,6 +95,7 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
 
   const handleDragStart = useCallback((e) => {
     if (e.target.closest('button, input, textarea, [role="button"]')) return;
+    setIsDragging(true);
     dragRef.current = {
       active: true,
       startX: e.clientX,
@@ -403,9 +412,13 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
 
     return (
       <section
-        className={`panel chat-panel floating ${chatPanelMinimized ? "minimized" : ""}`}
+        className={`panel chat-panel floating ${chatPanelMinimized ? "minimized" : ""} ${isDragging ? "dragging" : ""}`}
         ref={chatPanelRef}
-        style={{ left: chatPanelPosition.x, top: chatPanelPosition.y, width: chatPanelSize.width, height: chatPanelSize.height }}
+        style={
+          isDragging
+            ? { left: chatPanelPosition.x, top: chatPanelPosition.y, bottom: "auto", right: "auto", width: chatPanelSize.width, height: chatPanelSize.height }
+            : { width: chatPanelSize.width, height: chatPanelSize.height }
+        }
       >
         <div className="floating-header" onMouseDown={handleDragStart}>
           <Tooltip title="Drag to move">
@@ -541,7 +554,7 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
               <div className="welcome-content">
                 <span className="welcome-icon">✦</span>
                 <h2>Where will you go next?</h2>
-                <p>Ask for an itinerary, compare options, or tell me about somewhere you have visited.</p>
+                <p>Ask me to plan an itinerary, search accommodation, check weather, or estimate transport.</p>
                 <NextSteps suggestions={suggestions} onSelect={(text) => sendMessage(null, false, text)} disabled={streaming || answering} />
               </div>
             </div>

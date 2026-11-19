@@ -34,8 +34,9 @@ export function nextStepSuggestions(plan, messages, hasPendingQuestion, busy) {
   if (!hasConversation) {
     return [
       "Plan a 4-day trip to Kyoto in spring",
-      "Suggest a budget weekend getaway for two",
-      "I have been to Tokyo before — plan something new",
+      "Search accommodation in Tokyo under $200 per night",
+      "Check weather in Paris for next week",
+      "Estimate transport from Hong Kong to Seoul",
     ];
   }
   if (plan) {
@@ -50,6 +51,7 @@ export function nextStepSuggestions(plan, messages, hasPendingQuestion, busy) {
     "Turn this into a day-by-day itinerary",
     "Make it more budget-friendly",
     "Add more cultural activities",
+    "Search accommodation options for this trip",
   ];
 }
 
