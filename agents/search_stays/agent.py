@@ -50,6 +50,7 @@ def run(
         budget=request.budget,
         days=request.days,
         interests=request.interests or None,
+        use_geocoding=settings.geocoding_enabled,
         check_in=request.start_date.isoformat() if request.start_date else None,
         check_out=request.end_date.isoformat() if request.end_date else None,
     )
@@ -78,10 +79,17 @@ def health() -> dict[str, Any]:
             "offline_safe": False,
             "timeout_seconds": s.stays_api_timeout,
         }
+    if s.tool_stays_mode == "stub":
+        provider_configured = True
+    elif s.tool_stays_mode == "overpass":
+        provider_configured = bool(s.overpass_api_url.strip())
+    else:  # api
+        provider_configured = bool(s.stays_api_base_url.strip())
+
     return {
         "agent": "search_stays",
         "tool_mode": s.tool_stays_mode,
-        "provider_configured": True,
+        "provider_configured": provider_configured,
         "catalog": s.tool_stays_mode,
         "provider": provider_info,
     }

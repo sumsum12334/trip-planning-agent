@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     # Optional form default only — not a hard product requirement
     default_origin: str = Field(default="", alias="DEFAULT_ORIGIN")
 
+    # Geocoding for Overpass provider (free Nominatim, rate-limited)
+    geocoding_enabled: bool = Field(default=False, alias="GEOCODING_ENABLED")
+
     # --- OpenStreetMap Overpass API (Agent 1, used when TOOL_STAYS_MODE=overpass) ---
     # Free, no authentication required. Queries OSM for hotels/motels/hostels near
     # the destination. Returns real names, coordinates, and addresses — but no
