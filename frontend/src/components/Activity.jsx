@@ -53,6 +53,55 @@ function formatToolResult(result) {
   return String(result).slice(0, 500);
 }
 
+function getTripPlanContribution(event) {
+  if (!event.data?.result) return null;
+  const result = event.data.result;
+  const tool = event.data.tool;
+
+  // Trip plan tool results
+  if (tool === "start_trip_plan" && result.destination) {
+    return `✈ Started plan: ${result.destination}${result.currency ? ` (${result.currency})` : ""}${result.budget ? ` • Budget: ${result.budget}` : ""}`;
+  }
+  if (tool === "set_trip_day" && result.day) {
+    const acts = result.activities?.length ? ` • ${result.activities.length} activities` : "";
+    const places = result.places?.length ? ` • ${result.places.length} places` : "";
+    return `📅 Day ${result.day}: ${result.title || "Untitled"}${acts}${places}`;
+  }
+  if (tool === "set_trip_budget") {
+    if (result.budget != null) return `💰 Budget set: ${result.currency || ""} ${result.budget}`;
+    if (result.day_budgets?.length) return `💰 Day budgets: ${result.day_budgets.length} days`;
+    if (result.day_items?.length) return `💰 Day items: ${result.day_items.length} entries`;
+    if (result.budget_items?.length) return `💰 Category items: ${result.budget_items.length} categories`;
+  }
+  if (tool === "set_trip_references" && result.references?.length) {
+    return `🔗 Added ${result.references.length} references`;
+  }
+  if (tool === "remove_trip_day" && result.day) {
+    return `🗑 Removed day ${result.day}`;
+  }
+  if (tool === "display_trip_plan" && result.destination) {
+    return `📋 Displayed plan: ${result.destination} (${result.days?.length || 0} days)`;
+  }
+
+  // Agent tool results that contribute to the plan
+  if (tool === "search_stays" && result.stays?.length) {
+    const currencies = [...new Set(result.stays.map(s => s.currency).filter(Boolean))];
+    return `🏨 Found ${result.stays.length} stays${currencies.length ? ` (${currencies.join(", ")})` : ""}`;
+  }
+  if (tool === "estimate_transport" && result.legs?.length) {
+    const modes = [...new Set(result.legs.map(l => l.mode).filter(Boolean))];
+    return `🚌 ${result.legs.length} transport leg(s)${modes.length ? ` via ${modes.join(", ")}` : ""}`;
+  }
+  if (tool === "search_travel_history" && result.entries?.length) {
+    return `🧠 Found ${result.entries.length} history entr${result.entries.length === 1 ? "y" : "ies"}`;
+  }
+  if (tool === "web_search" && result.results?.length) {
+    return `🔍 ${result.results.length} search results`;
+  }
+
+  return null;
+}
+
 function formatDuration(start, end) {
   if (!start || !end) return "";
   const ms = new Date(end) - new Date(start);
@@ -207,6 +256,7 @@ export function Activity({ events }) {
     const color = agentColor(agent);
     const bg = `linear-gradient(90deg, ${color.border}22 0%, transparent 100%)`;
     const hasDetails = event.data && (event.data.arguments || event.data.result);
+    const contribution = getTripPlanContribution(event);
 
     return (
       <div
@@ -227,6 +277,11 @@ export function Activity({ events }) {
           </span>
           <span className={`event-dot ${event.status}`} style={{ background: color.border }} />
         </div>
+        {contribution && (
+          <div className="event-contribution" style={{ color: color.text, fontSize: 11, marginTop: 4, marginLeft: 32, opacity: 0.85 }}>
+            {contribution}
+          </div>
+        )}
         {hasDetails && (
           <span className="event-expand-hint" style={{ color: color.border, fontSize: 10, marginLeft: 8 }}>
             Click for details

@@ -157,6 +157,8 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .app[data-color-mode="dark"] .plan-collapsed-toggle{background:linear-gradient(135deg,#152033,#171e33);border-color:rgba(106,168,255,0.28);color:#9db8ff}
 .app[data-color-mode="dark"] .plan-collapsed-toggle:hover{background:linear-gradient(135deg,#1a2a44,#171e33);border-color:#5a7cc0}
 
+.chat-side-collapsed{display:none}
+
 /* Trip plan side column (separate from the conversation window) */
 .chat-workspace{grid-template-columns:minmax(0,1fr) minmax(320px,390px)}
 .chat-side{display:grid;gap:18px;align-content:start;position:sticky;top:24px;max-height:calc(100vh - 48px);overflow:auto;padding-right:2px}
@@ -241,6 +243,7 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 /* Balanced panes: chat comfortable, trip plan large */
 .chat-workspace{grid-template-columns:minmax(0,1fr);align-items:start}
 .chat-workspace.has-plan{grid-template-columns:minmax(380px,0.92fr) minmax(520px,1.6fr)}
+.chat-workspace.has-plan.plan-collapsed{grid-template-columns:minmax(0,1fr)}
 
 /* Never clip message content */
 .chat-panel{min-width:0}
@@ -389,6 +392,10 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .chat-title{margin:0;font-size:clamp(19px,1.8vw,24px);font-weight:700;letter-spacing:-0.02em;color:#17233d}
 .chat-summary{margin:4px 0 0;color:#74809b;font-size:13px;max-width:70ch}
 .chat-header .hero-icon{width:44px;height:44px;font-size:22px;border-radius:14px;flex:0 0 auto}
+.plan-collapsed-toggle-header{display:flex;align-items:center;justify-content:center;min-width:110px;padding:6px 12px;border:1px solid #dbe6f7;border-radius:10px;background:linear-gradient(135deg,#f1f7ff,#fff);color:#3f5f95;font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px #4c83c212;flex:0 0 auto}
+.plan-collapsed-toggle-header:hover{background:linear-gradient(135deg,#e8f0ff,#fff);border-color:#a9c4ec}
+.app[data-color-mode="dark"] .plan-collapsed-toggle-header{background:linear-gradient(135deg,#152033,#171e33);border-color:rgba(106,168,255,0.28);color:#9db8ff}
+.app[data-color-mode="dark"] .plan-collapsed-toggle-header:hover{background:linear-gradient(135deg,#1a2a44,#171e33);border-color:#5a7cc0}
 .app[data-color-mode="dark"] .chat-header{border-bottom-color:rgba(154,166,196,0.12)}
 .app[data-color-mode="dark"] .chat-title{color:#f2f5ff}
 .app[data-color-mode="dark"] .chat-summary{color:#9aa6c4}

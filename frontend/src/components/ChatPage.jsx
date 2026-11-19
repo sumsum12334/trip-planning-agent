@@ -308,7 +308,7 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
   }
 
   return <section className="page chat-page">
-    <div className={`chat-workspace ${latestPlan ? "has-plan" : ""}`}>
+    <div className={`chat-workspace ${latestPlan ? "has-plan" : ""} ${latestPlan && planCollapsed ? "plan-collapsed" : ""}`}>
       <section className="panel chat-panel">
         <header className="chat-header">
           <div>
@@ -317,6 +317,16 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
             <p className="chat-summary">Your coordinator connects stays, transport, and travel memory in one workflow.</p>
           </div>
           <span className="hero-icon">✦</span>
+          {latestPlan && (
+            <button
+              type="button"
+              className="plan-collapsed-toggle-header"
+              onClick={togglePlanCollapsed}
+              aria-label={planCollapsed ? "Show trip plan" : "Hide trip plan"}
+            >
+              {planCollapsed ? "▸ Trip plan" : "▾ Trip plan"}
+            </button>
+          )}
         </header>
         <Activity events={current.events} />
         <Box className="messages" ref={messagesRef} sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
@@ -386,21 +396,14 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
       </Box>
       <div className="composer-footer"><span>{status || "Markdown supported"}</span>{retryText && <Button className="retry" size="small" color="warning" variant="outlined" disabled={streaming} onClick={(event) => sendMessage(event, true)}>Retry</Button>}</div>
       </section>
-      <div className="chat-side">
-        {latestPlan && !planCollapsed && (
+      {latestPlan && !planCollapsed && (
+        <div className="chat-side">
           <TripPlanCard key={planKey} plan={latestPlan} onSaveBudget={savePlanBudget} onCollapse={togglePlanCollapsed} />
-        )}
-        {latestPlan && planCollapsed && (
-          <button
-            type="button"
-            className="plan-collapsed-toggle"
-            onClick={togglePlanCollapsed}
-            aria-label="Show trip plan"
-          >
-            {"\u25B8"} Trip plan
-          </button>
-        )}
-      </div>
+        </div>
+      )}
+      {latestPlan && planCollapsed && (
+        <div className="chat-side-collapsed" />
+      )}
     </div>
   </section>;
 }
