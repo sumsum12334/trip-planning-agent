@@ -2,7 +2,7 @@
 CSIT6000V Course Project
 
 ## Architecture
-<img width="3066" height="1746" alt="trip_agent_multiagent_overview" src="https://github.com/user-attachments/assets/c9eecec0-1fcf-442e-bbf3-e9a99719cfc7" />
+<img width="3066" height="1746" alt="trip_agent_multiagent_overview" src="docs/figures/trip_agent_multiagent_overview.png" />
 
 ### Architecture flow
 
@@ -390,3 +390,197 @@ Langfuse is optional tracing only. To score the agents, run the fixed-case harne
 
 See [`eval/README.md`](./eval/README.md). The suite compares Baseline A (`ENABLE_TRAVEL_HISTORY=0`) with Proposed (`ENABLE_TRAVEL_HISTORY=1`) on stay budget/location, transport fields, and history avoidance. Stub mode is offline by default; `--mode api` uses the configured QWEN endpoint and requires `QWEN_BASE_URL` (or `--model-url`).
 
+## Getting Started Instructions
+
+This section is a short kick-the-tires path. After a normal Python setup you can confirm that the artifact runs in well under 30 minutes, with no TACC account, API keys, or Docker.
+
+### Prerequisites
+
+- Python 3.11 or newer
+- Git
+- A virtual environment tool (`python -m venv` is enough)
+- **Optional, for the web UI only:** Node.js 18+ with npm
+- **Optional:** Docker, for local container debugging
+- **Optional:** a TACC/`tcloud` login, only if you want to serve the course Qwen model
+
+The commands below are written for Windows PowerShell. On Linux or macOS, use `.venv/bin/python` instead of `.\.venv\Scripts\python.exe`, and `cp` instead of `copy`.
+
+### Setup
+
+```powershell
+git clone https://github.com/sumsum12334/trip-planning-agent.git
+cd trip-planning-agent
+copy .env.example .env
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+If `Activate.ps1` is blocked, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` and retry, or call the venv Python with an explicit path as shown below. Leave the Qwen fields in `.env` blank for this smoke test. Never commit `.env`.
+
+### End-to-end example: one evaluation case
+
+From the repository root, with the virtual environment available:
+
+```powershell
+.\.venv\Scripts\python.exe -m eval.runner --case tokyo_history_avoid_shibuya
+```
+
+This case seeds a visit to Shibuya and asks for a Tokyo plan with `avoid_visited=true`. It runs the same request under Baseline A and Proposed.
+
+**Expected output** (elapsed times vary by machine; the pass/fail fields should match):
+
+```
+Eval 1/1 cases passed (96.6 ms). History contrast 1/1. Tool layer 0/0.
+tokyo_history_avoid_shibuya  kind=plan  baseline=PASS  proposed=PASS  days=4/4  extra=PASS
+Wrote eval/results/eval-YYYYMMDD-HHMMSS.json
+Wrote eval/results/eval-YYYYMMDD-HHMMSS.csv
+```
+
+How to read this line:
+
+- `baseline` and `proposed` are both `PASS`, so both variants return a valid 4-day itinerary (`days (exp)` is `4/4`).
+- `extra` is the history-contrast check: Proposed must drop the already-visited Shibuya stay, while Baseline A (no Agent 4) still recommends it. `PASS` means that contrast holds.
+
+A LangChain/LangGraph deprecation warning from the installed library may appear on stderr. It does not fail the case.
+
+### Optional: start the web app and check `/health`
+
+This is not required to reproduce the evaluation. It confirms that the UI and API start locally.
+
+```powershell
+npm install
+npm run build
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
+Then open:
+
+- UI: http://127.0.0.1:8000/
+- Health: http://127.0.0.1:8000/health — the JSON should include `"ok": true`
+- API docs: http://127.0.0.1:8000/docs
+
+Without `QWEN_BASE_URL`, chat uses a local stub. Stay search defaults to the offline `stub` catalog. Stop the server with `Ctrl+C`. For UI-only development, `npm run dev` starts the Vite dev server; the commands above serve the production build from `frontend/dist`.
+
+## Detailed Instructions
+
+This section explains how to rerun the evaluation that supports the project's main findings, and how to interpret the outputs.
+
+### What the harness measures
+
+`eval/runner.py` runs each plan case twice:
+
+- **Baseline A:** `ENABLE_TRAVEL_HISTORY=0` (Agents 1–3)
+- **Proposed:** `ENABLE_TRAVEL_HISTORY=1` (Agents 1–4)
+
+It always forces stub stay and maps tools and an isolated temporary SQLite database. It does not use your `.env` `DATABASE_URL` or a live model.
+
+The checks cover:
+
+- Stay budget and location constraints
+- Required transport fields and city-consistent catalog matches
+- History avoidance (Proposed drops a visited stay or POI; Baseline A still includes it)
+- Multi-day coverage (`expected_days`)
+- Budget revise (switch to a cheaper stay when the plan is over budget)
+- Fail-closed behaviour for invalid or infeasible requests
+- Gold tool-call cases in `eval/tool_cases.py` (the chat tool layer with the arguments a model should pass). This is **not** live model tool-routing accuracy.
+
+### Reproduce the full evaluation
+
+From the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe -m eval.runner
+```
+
+Useful variants:
+
+```powershell
+.\.venv\Scripts\python.exe -m eval.runner --plan-only
+.\.venv\Scripts\python.exe -m eval.runner --tools-only
+.\.venv\Scripts\python.exe -m eval.runner --case tokyo_revise_cheaper_stay --case tokyo_history_avoid_poi
+```
+
+Optional live-model mode (not required to reproduce the stub results):
+
+```powershell
+.\.venv\Scripts\python.exe -m eval.runner --mode api
+```
+
+API mode requires `QWEN_BASE_URL` (including `/v1`) or `--model-url`. It is separate from the deterministic Baseline A vs Proposed tool checks: it calls the configured model and records response metrics. If `NEMOTRON_API_KEY` and `NEMOTRON_API_URL` are set, the runner can also attach optional Nemotron judge scores. Live scores can vary and are not the graded stub reproduction path.
+
+
+Reports are written to `eval/results/` as JSON and CSV. That directory is gitignored.
+
+Unit tests (including a determinism check that the same stub case twice agrees) are optional:
+
+```powershell
+pip install -e ".[test]"
+.\.venv\Scripts\python.exe -m pytest
+```
+
+### Test cases, data, and configuration
+
+Cases are defined in `eval/cases.py` and `eval/tool_cases.py`. They are written against the stub catalogs in `agents/search_stays/tools.py` and `agents/estimate_transport/tools.py`. No external data download is required.
+
+**Plan cases**
+
+| Case id | What it checks |
+|---------|----------------|
+| `tokyo_budget_ok` | Tokyo stay under budget, location match |
+| `tokyo_history_avoid_shibuya` | Proposed avoids a visited Shibuya stay; Baseline A still recommends it |
+| `tokyo_history_without_avoid_flag` | History exists but `avoid_visited` is off |
+| `hk_budget_ok` | Hong Kong stay under budget |
+| `hk_tight_budget` | Tight budget still yields a feasible stay |
+| `hk_history_avoid_central` | Proposed avoids a visited Central stay |
+| `amsterdam_ok` | Amsterdam stub catalog path |
+| `unknown_city_generic_fallback` | Unknown city may use the generic fallback |
+| `empty_catalog_tight_budget` | No feasible stay: fail closed |
+| `transport_same_place_walk` | Same-place transport is a walk |
+| `tokyo_history_multiple_places` | Several visited places are avoided |
+| `tokyo_history_unrelated_place` | A Hong Kong visit must not drop Tokyo stays |
+| `hk_over_budget_transport` | Over-budget plan is revised or fail-closed |
+| `tokyo_history_alias_shibuya` | Lowercase `shibuya` still matches |
+| `tokyo_history_city_too_broad` | A visit recorded only as `Tokyo` must not drop every Tokyo stay |
+| `paris_airport_not_hk_catalog` | Paris airport transport must not reuse the Hong Kong Airport Express row |
+| `empty_destination_fail_closed` | Empty destination should fail closed at validation |
+| `invalid_days_zero` | `days=0` should fail closed |
+| `tokyo_airport_cost_scale` | Large transport vs stay budget is flagged; the case can still pass |
+| `tokyo_revise_cheaper_stay` | Coordinator revises to a cheaper stay when over budget |
+| `tokyo_pois_interest_food` | POI packing respects interest ranking |
+| `tokyo_history_avoid_poi` | Proposed drops a visited POI; Baseline A still includes it |
+| `tokyo_dates_span_three_days` | Inclusive start/end dates with no `days` field still yield a 3-day itinerary |
+
+**Tool-layer cases** (run with the default suite, or `--tools-only`): `tool_search_stays_tokyo`, `tool_estimate_transport_hk`, `tool_stays_and_transport_amsterdam`, `tool_search_stays_missing_destination`, `tool_unknown_name`.
+
+### Expected results and how they map to the report
+
+On the current codebase, a full run prints a header of the form:
+
+```
+Eval [STUB] 28/28 cases passed (... ms). History contrast 4/4. Tool layer 5/5.
+```
+
+followed by one row per case and `Wrote` paths for the JSON and CSV reports. Latency numbers vary by machine; pass/fail columns should not.
+
+The metrics that support the main findings are:
+
+- **History contrast** (`History contrast 4/4` in the header, and `extra=PASS` on the avoidance cases). This is the Baseline A vs Proposed difference: with a seeded visit and `avoid_visited=true`, Proposed drops the visited stay or POI and Baseline A does not. See the history-avoidance cases above.
+- **Per-agent plan checks** (`baseline` / `proposed` columns): stay budget and location, transport fields, day coverage, revise, and fail-closed.
+- **Tool layer** (`Tool layer 5/5`): the gold tool-call cases succeed independently of a live model.
+
+Please map these outputs to the corresponding tables or figures in the project report when you discuss Baseline A vs Proposed, history avoidance, budget revise, and fail-closed behaviour. The JSON/CSV files in `eval/results/` are the machine-readable source for those numbers.
+
+Environment variables, Docker, TACC deployment, and the live web-app demo are documented in the sections above.
+
+### Known limitations and expected variation
+
+- The graded reproduction path is the stub eval harness. It does not measure live-model tool-routing quality, Overpass/OBO results, or TACC serving performance.
+- Latency in the printed summary varies by machine. Pass/fail on stub cases should be stable; `tests/test_eval_runner.py` checks determinism for a stub case.
+- Live stay/maps modes and live model endpoints can vary with availability, rate limits, and provider data. They may differ from the stub catalogs used in the report's main tables.
+- API-mode results and optional Nemotron judge scores depend on a live endpoint and can vary. They are not required to reproduce the stub evaluation.
+- `tokyo_airport_cost_scale` may print a cost-scale warning without failing the case.
+- TACC jobs expire after the partition limit (1 hour). Leftover vLLM processes on a node can also hold GPU memory and block later jobs; cancel your own jobs when finished.
+- Do not commit `.env`, secrets, `.venv`, or `node_modules`.
+
+Further detail lives in [`eval/README.md`](./eval/README.md), [`tacc/README.md`](./tacc/README.md), and the per-agent README files under `agents/`.
