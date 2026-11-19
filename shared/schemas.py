@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class TripRequest(BaseModel):
@@ -20,6 +20,14 @@ class TripRequest(BaseModel):
     origin: Optional[str] = None  # optional; form default only
     avoid_visited: bool = False
     user_id: Optional[str] = None
+
+    @field_validator("destination")
+    @classmethod
+    def destination_must_not_be_blank(cls, value: str) -> str:
+        destination = value.strip()
+        if not destination:
+            raise ValueError("destination must not be blank")
+        return destination
 
 
 class EstimateTransportRequest(BaseModel):

@@ -54,7 +54,12 @@ def run(
         check_in=request.start_date.isoformat() if request.start_date else None,
         check_out=request.end_date.isoformat() if request.end_date else None,
     )
-    excluded = {place.strip().casefold() for place in excluded_locations if place and place.strip()}
+    destination = request.destination.strip().casefold()
+    excluded = {
+        place.strip().casefold()
+        for place in excluded_locations
+        if place and place.strip() and place.strip().casefold() != destination
+    }
     if not excluded:
         return candidates
     return [stay for stay in candidates if not _overlaps_excluded(stay, excluded)]

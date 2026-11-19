@@ -28,6 +28,7 @@ where = ["."]
 include = ["trip_planning_agent*", "agents*", "backend*", "config*", "shared*", "eval*"]
 
 [tool.pytest.ini_options]
+addopts = "-m 'not live'"
 markers = [
     "live: tests that call real external APIs (Overpass, OBO Travel). May be slow or flaky.",
 ]

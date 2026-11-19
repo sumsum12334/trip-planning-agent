@@ -334,10 +334,11 @@ errors.
 ### Key `.env` knobs
 | Variable | Notes |
 |----------|--------|
-| `QWEN_BASE_URL` / `QWEN_MODEL` / `QWEN_API_KEY` | Model-serving endpoint. Default `QWEN_BASE_URL=https://api.kilo.ai/api/gateway` (Kilo Code Auto Free, no key required). `QWEN_MODEL=kilo-auto/free`. |
+| `QWEN_BASE_URL` / `QWEN_MODEL` / `QWEN_API_KEY` | OpenAI-compatible model endpoint and model identifier. Set the base URL including `/v1`; set the key when required by the provider. |
 | `ENABLE_TRAVEL_HISTORY` | `1` = proposed (Agent1–4); `0` = Baseline A (Agent1–3) |
 | `TOOL_STAYS_MODE` | `stub` (default, offline-safe), `overpass` (OpenStreetMap, no auth), `api` (OBO Travel, live prices) |
 | `TOOL_MAPS_MODE` | `stub` or `api` |
+| `GEOCODING_ENABLED` | Set to `1` to resolve Overpass destinations with rate-limited Nominatim geocoding |
 | `STAYS_API_BASE_URL` | OBO Travel MCP base URL, e.g. `https://onebookingonline.com/mcp` (used when `TOOL_STAYS_MODE=api`) |
 | `STAYS_API_KEY` | Optional OBO Travel API key for higher rate limits |
 | `STAYS_API_TIMEOUT` | Request timeout seconds (default 30) |
@@ -349,6 +350,7 @@ errors.
 | `NEON_BRANCH` | Optional Neon branch name (e.g. `production`) when using Neon. |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST` | Langfuse 5.x credentials and host |
 | `LANGFUSE_ENABLED` | Set to `1` to emit flushed model-generation traces |
+| `NEMOTRON_API_KEY` / `NEMOTRON_API_URL` | Optional Nemotron judge API used by API-mode evaluation |
 
 Install the Langfuse extra before starting the backend:
 
@@ -386,5 +388,5 @@ Langfuse is optional tracing only. To score the agents, run the fixed-case harne
 .\.venv\Scripts\python.exe -m eval.runner
 ```
 
-See [`eval/README.md`](./eval/README.md). The suite compares Baseline A (`ENABLE_TRAVEL_HISTORY=0`) with Proposed (`ENABLE_TRAVEL_HISTORY=1`) on stay budget/location, transport fields, and history avoidance.
+See [`eval/README.md`](./eval/README.md). The suite compares Baseline A (`ENABLE_TRAVEL_HISTORY=0`) with Proposed (`ENABLE_TRAVEL_HISTORY=1`) on stay budget/location, transport fields, and history avoidance. Stub mode is offline by default; `--mode api` uses the configured QWEN endpoint and requires `QWEN_BASE_URL` (or `--model-url`).
 
