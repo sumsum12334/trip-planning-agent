@@ -22,19 +22,45 @@ export const eventIcon = (event) => {
   return "✓";
 };
 
-export const formatEventLabel = (label) => {
+export const formatEventLabel = (label, event) => {
   if (!label) return "";
-  // Convert known function/tool names to human-readable text
-  const replacements = [
-    // Trip plan tool events
-    [/Trip plan updated \(start_trip_plan\)/i, "Start trip plan"],
-    [/Trip plan updated \(set_trip_day\)/i, "Set trip day"],
-    [/Trip plan updated \(set_trip_budget\)/i, "Set trip budget"],
-    [/Trip plan updated \(set_trip_references\)/i, "Set trip references"],
-    [/Trip plan updated \(remove_trip_day\)/i, "Remove trip day"],
-    [/Trip plan updated \(get_trip_plan\)/i, "Get trip plan"],
-    [/Trip plan updated \(display_trip_plan\)/i, "Display trip plan"],
-    // Tool call events
+  // First try to extract context from event data (day numbers, etc.)
+  const data = event?.data;
+  const result = data?.result;
+  const tool = data?.tool;
+  const action = data?.action;
+
+  // Trip plan tool events with day context
+  if (label.includes("Trip plan updated") || label.includes("set_trip_day")) {
+    if (result?.day) return `Set day ${result.day}: ${result.title || "Untitled"}`;
+    if (action === "set_trip_day") return "Set trip day";
+  }
+  if (label.includes("start_trip_plan") || label.includes("Start trip plan")) {
+    if (result?.destination) return `Start plan: ${result.destination}`;
+    return "Start trip plan";
+  }
+  if (label.includes("remove_trip_day")) {
+    if (result?.day) return `Remove day ${result.day}`;
+    return "Remove trip day";
+  }
+  if (label.includes("set_trip_budget")) {
+    if (result?.budget != null) return `Set budget: ${result.currency || ""} ${result.budget}`;
+    if (result?.day_budgets?.length) return `Set day budgets: ${result.day_budgets.length} days`;
+    if (result?.day_items?.length) return `Set day items: ${result.day_items.length} entries`;
+    if (result?.budget_items?.length) return `Set category items: ${result.budget_items.length} categories`;
+    return "Set trip budget";
+  }
+  if (label.includes("set_trip_references")) {
+    if (result?.references?.length) return `Set ${result.references.length} references`;
+    return "Set trip references";
+  }
+  if (label.includes("display_trip_plan")) {
+    if (result?.destination) return `Display plan: ${result.destination} (${result.days?.length || 0} days)`;
+    return "Display trip plan";
+  }
+
+  // Tool call events
+  const callReplacements = [
     [/^Calling (start_trip_plan)$/i, "Start trip plan"],
     [/^Calling (set_trip_day)$/i, "Set trip day"],
     [/^Calling (set_trip_budget)$/i, "Set trip budget"],
@@ -47,20 +73,46 @@ export const formatEventLabel = (label) => {
     [/^Calling (search_travel_history)$/i, "Search travel history"],
     [/^Calling (web_search)$/i, "Web search"],
     [/^Calling (ask_user_question)$/i, "Ask user question"],
-    // Tool result events
-    [/(start_trip_plan) result received/i, "Trip plan started"],
-    [/(set_trip_day) result received/i, "Trip day set"],
-    [/(set_trip_budget) result received/i, "Trip budget set"],
-    [/(set_trip_references) result received/i, "Trip references set"],
-    [/(remove_trip_day) result received/i, "Trip day removed"],
-    [/(get_trip_plan) result received/i, "Trip plan retrieved"],
-    [/(display_trip_plan) result received/i, "Trip plan displayed"],
-    [/(search_stays) result received/i, "Stays found"],
-    [/(estimate_transport) result received/i, "Transport estimated"],
-    [/(search_travel_history) result received/i, "Travel history found"],
-    [/(web_search) result received/i, "Search completed"],
-    [/(ask_user_question) result received/i, "Question asked"],
-    // Agent events
+  ];
+  for (const [pattern, replacement] of callReplacements) {
+    if (pattern.test(label)) return replacement;
+  }
+
+  // Tool result events with context
+  if (label.includes("result received")) {
+    if (tool === "search_stays" && result?.stays?.length) {
+      return `Found ${result.stays.length} stays`;
+    }
+    if (tool === "estimate_transport" && result?.legs?.length) {
+      const modes = [...new Set(result.legs.map(l => l.mode).filter(Boolean))];
+      return `Estimated ${result.legs.length} transport leg(s)${modes.length ? ` via ${modes.join(", ")}` : ""}`;
+    }
+    if (tool === "search_travel_history" && result?.entries?.length) {
+      return `Found ${result.entries.length} history entr${result.entries.length === 1 ? "y" : "ies"}`;
+    }
+    if (tool === "web_search" && result?.results?.length) {
+      return `Search completed (${result.results.length} results)`;
+    }
+    if (tool === "ask_user_question") {
+      return "Question asked";
+    }
+    // Generic result received
+    const resultReplacements = [
+      [/(start_trip_plan) result received/i, "Trip plan started"],
+      [/(set_trip_day) result received/i, "Trip day set"],
+      [/(set_trip_budget) result received/i, "Trip budget set"],
+      [/(set_trip_references) result received/i, "Trip references set"],
+      [/(remove_trip_day) result received/i, "Trip day removed"],
+      [/(get_trip_plan) result received/i, "Trip plan retrieved"],
+      [/(display_trip_plan) result received/i, "Trip plan displayed"],
+    ];
+    for (const [pattern, replacement] of resultReplacements) {
+      if (pattern.test(label)) return replacement;
+    }
+  }
+
+  // Agent events
+  const agentReplacements = [
     [/Coordinator agent started/i, "Coordinator started"],
     [/Coordinator agent completed/i, "Coordinator completed"],
     [/Coordinator agent failed/i, "Coordinator failed"],
@@ -72,22 +124,22 @@ export const formatEventLabel = (label) => {
     [/Continuation failed/i, "Continuation failed"],
     [/Stopped by user/i, "Stopped"],
     [/Answer recorded/i, "Answer recorded"],
+    [/Preparing model request/i, "Preparing model request"],
+    [/Model is thinking/i, "Model thinking"],
   ];
-  let formatted = label;
-  for (const [pattern, replacement] of replacements) {
-    formatted = formatted.replace(pattern, replacement);
+  for (const [pattern, replacement] of agentReplacements) {
+    if (pattern.test(label)) return replacement;
   }
+
   // Fallback: convert snake_case to Title Case
-  if (formatted === label) {
-    formatted = label
-      .replace(/_/g, " ")
-      .replace(/\(([^)]+)\)/, "") // Remove parenthetical
-      .replace(/\s+/g, " ")
-      .trim()
-      .split(" ")
-      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(" ");
-  }
+  let formatted = label
+    .replace(/_/g, " ")
+    .replace(/\(([^)]+)\)/, "") // Remove parenthetical
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
   return formatted;
 };
 

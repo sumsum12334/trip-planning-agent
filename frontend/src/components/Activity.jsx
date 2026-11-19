@@ -109,6 +109,37 @@ function formatDuration(start, end) {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+function EventGroup({ title, events, color, onEventClick }) {
+  if (!events.length) return null;
+  return (
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <Typography variant="caption" color={color.text} fontWeight={700} textTransform="uppercase" letterSpacing="0.5px" sx={{ fontSize: 10, mb: 4 }}>
+        {title}
+      </Typography>
+      {events.map(({ key, event }) => (
+        <div
+          key={key}
+          className={`event ${event.status}`}
+          style={{ borderLeftColor: color.border }}
+          onClick={() => onEventClick(event, color)}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onEventClick(event, color); }}
+        >
+          <div className="event-main">
+            <span className="event-icon">{eventIcon(event)}</span>
+            <span className="event-label">
+              <strong>{formatEventLabel(event.label, event)}</strong>
+              {event.detail && <small className="event-detail">{event.detail}</small>}
+            </span>
+            <span className={`event-dot ${event.status}`} style={{ background: color.border }} />
+          </div>
+        </div>
+      ))}
+    </Box>
+  );
+}
+
 function EventDetailDialog({ event, agent, open, onClose }) {
   if (!open || !event) return null;
   const color = agentColor(agent);
@@ -125,7 +156,7 @@ function EventDetailDialog({ event, agent, open, onClose }) {
             sx={{ background: color.border, color: "#fff", fontWeight: 700 }}
           />
           <Typography variant="h6" sx={{ color: color.text, fontWeight: 700 }}>
-            {formatEventLabel(event.label)}
+            {formatEventLabel(event.label, event)}
           </Typography>
         </Box>
         <IconButton onClick={onClose} size="small" sx={{ color: color.text }}>
@@ -271,7 +302,7 @@ export function Activity({ events }) {
         <div className="event-main">
           <span className="event-icon">{eventIcon(event)}</span>
           <span className="event-label">
-            <strong>{formatEventLabel(event.label)}</strong>
+            <strong>{formatEventLabel(event.label, event)}</strong>
             {event.detail && <small className="event-detail">{event.detail}</small>}
             {handover && <small className="event-agent" style={{ color: color.text }}>{agent}</small>}
           </span>
@@ -302,6 +333,19 @@ export function Activity({ events }) {
       {Object.entries(byAgent).map(([agent, evs]) => {
         const stats = agentStats[agent];
         const color = agentColor(agent);
+
+        // Group events by type for a summary
+        const toolCalls = evs.filter(({ event }) => event.label.toLowerCase().includes("call") || event.label.toLowerCase().startsWith("calling"));
+        const toolResults = evs.filter(({ event }) => event.label.toLowerCase().includes("result received"));
+        const agentEvents = evs.filter(({ event }) => event.type === "agent");
+        const modelEvents = evs.filter(({ event }) => event.type === "model");
+        const otherEvents = evs.filter(({ event }) => !toolCalls.includes({ key: "", event }) && !toolResults.includes({ key: "", event }) && !agentEvents.includes({ key: "", event }) && !modelEvents.includes({ key: "", event }));
+
+        // Extract trip plan contributions for this agent
+        const contributions = evs
+          .map(({ event }) => getTripPlanContribution(event))
+          .filter(Boolean);
+
         return (
           <Accordion key={agent} defaultExpanded sx={{ border: `1px solid ${color.border}`, borderRadius: 12, background: color.light }}>
             <AccordionSummary
@@ -332,27 +376,39 @@ export function Activity({ events }) {
                 </Box>
               </Box>
             </AccordionSummary>
-            <AccordionDetails sx={{ p: 2, display: "flex", flexDirection: "column", gap: 8 }}>
-              {evs.map(({ key, event }) => (
-                <div
-                  key={key}
-                  className={`event ${event.status}`}
-                  style={{ borderLeftColor: color.border }}
-                  onClick={() => openEventDetail(event, agent)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openEventDetail(event, agent); }}
-                >
-                  <div className="event-main">
-                    <span className="event-icon">{eventIcon(event)}</span>
-                    <span className="event-label">
-                      <strong>{formatEventLabel(event.label)}</strong>
-                      {event.detail && <small className="event-detail">{event.detail}</small>}
-                    </span>
-                    <span className={`event-dot ${event.status}`} style={{ background: color.border }} />
-                  </div>
-                </div>
-              ))}
+            <AccordionDetails sx={{ p: 2, display: "flex", flexDirection: "column", gap: 12 }}>
+              {/* Trip Plan Contributions Summary */}
+              {contributions.length > 0 && (
+                <Box sx={{ p: 2, background: `${color.border}15`, borderRadius: 8, border: `1px solid ${color.border}40` }}>
+                  <Typography variant="subtitle2" color={color.text} gutterBottom fontWeight={700}>
+                    Trip Plan Contributions
+                  </Typography>
+                  <Box sx={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    {contributions.map((c, i) => (
+                      <Typography variant="body2" color={color.text} key={i} sx={{ fontSize: 12 }}>
+                        {c}
+                      </Typography>
+                    ))}
+                  </Box>
+                </Box>
+              )}
+
+              {/* Event Groups */}
+              {toolCalls.length > 0 && (
+                <EventGroup title="Tool Calls" events={toolCalls} color={color} onEventClick={openEventDetail} />
+              )}
+              {toolResults.length > 0 && (
+                <EventGroup title="Tool Results" events={toolResults} color={color} onEventClick={openEventDetail} />
+              )}
+              {agentEvents.length > 0 && (
+                <EventGroup title="Agent Events" events={agentEvents} color={color} onEventClick={openEventDetail} />
+              )}
+              {modelEvents.length > 0 && (
+                <EventGroup title="Model Events" events={modelEvents} color={color} onEventClick={openEventDetail} />
+              )}
+              {otherEvents.length > 0 && (
+                <EventGroup title="Other" events={otherEvents} color={color} onEventClick={openEventDetail} />
+              )}
             </AccordionDetails>
           </Accordion>
         );
