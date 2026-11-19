@@ -1,11 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from "react";
-import { Box, Button, Stack, TextField, Typography, IconButton, Tooltip, Fab } from "@mui/material";
+import { Box, Button, Stack, TextField, Typography, IconButton, Tooltip, Fab, Dialog, DialogTitle, DialogContent } from "@mui/material";
 import SendIcon from "@mui/icons-material/Send";
 import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
 import MinimizeIcon from "@mui/icons-material/Minimize";
 import MaximizeIcon from "@mui/icons-material/Maximize";
 import CloseIcon from "@mui/icons-material/Close";
-import ChatBubbleOutlinedIcon from "@mui/icons-material/ChatBubbleOutlined";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import { planBudgetItems, planFromEvents } from "../lib/planUtils.js";
 import { readSseFrames } from "../lib/sse.js";
@@ -24,13 +23,13 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
   const [answering, setAnswering] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [selectedOption, setSelectedOption] = useState("");
-  const [planCollapsed, setPlanCollapsed] = useState(() => {
+  const [planCollapsed] = useState(() => {
     try { return window.localStorage.getItem("trip-plan-collapsed") === "1"; } catch { return false; }
   });
-  // Chat panel state - now a floating panel from bottom-right
-  const [chatPanelOpen, setChatPanelOpen] = useState(false);
+  // Floating chat panel - always open by default at bottom right
+  const [chatPanelOpen, setChatPanelOpen] = useState(true);
   const [chatPanelMinimized, setChatPanelMinimized] = useState(false);
-  const [chatPanelPosition, setChatPanelPosition] = useState({ x: 24, y: 24 });
+  const [chatPanelPosition, setChatPanelPosition] = useState({ x: 0, y: 0 });
   const [chatPanelSize, setChatPanelSize] = useState({ width: 480, height: 600 });
 
   const answerLockRef = useRef(false);
@@ -44,7 +43,23 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
   const latestPlanEvent = useMemo(() => planFromEvents(current.events), [current.events]);
   const latestPlan = latestPlanEvent?.data?.result || null;
 
+  // Check if there's a pending question needing attention
+  const pendingQuestionEvent = useMemo(() => {
+    return [...current.events].reverse().find(
+      (event) => event.data?.tool === "ask_user_question" && event.data?.result?.question && !event.data?.selected,
+    );
+  }, [current.events]);
+
   useEffect(() => { if (messagesRef.current) messagesRef.current.scrollTop = messagesRef.current.scrollHeight; }, [current.messages, current.events]);
+
+  // Auto-scroll floating panel messages
+  useEffect(() => {
+    if (chatPanelRef.current && !chatPanelMinimized && chatPanelOpen) {
+      const panel = chatPanelRef.current;
+      const items = panel.querySelector('.activity-items') || panel.querySelector('.messages');
+      if (items) items.scrollTop = items.scrollHeight;
+    }
+  }, [current.events, latestPlan, chatPanelMinimized, chatPanelOpen]);
 
   const handleDragMove = useCallback((e) => {
     if (!dragRef.current.active) return;
@@ -282,12 +297,6 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
   const workflow = workflowState(current.events, selectedOption ? null : pendingEvent, status);
   const suggestions = nextStepSuggestions(latestPlan, current.messages, Boolean(pendingEvent), streaming || answering);
 
-  function togglePlanCollapsed() {
-    const next = !planCollapsed;
-    setPlanCollapsed(next);
-    try { window.localStorage.setItem("trip-plan-collapsed", next ? "1" : "0"); } catch { /* ignore */ }
-  }
-
   async function answerQuestion(option, custom = false) {
     if (answerLockRef.current || streaming) return;
     answerLockRef.current = true;
@@ -388,7 +397,7 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
     }
   }
 
-  // Render the floating chat panel
+  // Render the floating chat panel - always visible at bottom right
   const renderFloatingChatPanel = () => {
     if (!chatPanelOpen) return null;
 
@@ -468,6 +477,12 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
                 );
               })()}
             </Box>
+            {pendingQuestionEvent && (
+              <div className="question-alert">
+                <span className="question-alert-icon">⚠</span>
+                <span className="question-alert-text">The assistant is waiting for your choice.</span>
+              </div>
+            )}
             <div className={`workflow-status ${workflow.className}`}><span>{workflow.icon}</span><strong>{workflow.label}</strong><small>{workflow.className === "waiting" ? "Choose an option below." : workflow.className === "working" ? "The assistant is processing your request." : ""}</small></div>
             {(pendingEvent || retryOption) && <QuestionBox event={activeQuestionEvent} onOption={answerQuestion} disabled={answering} retryOption={retryOption} selectedOption={selectedOption} />}
             <NextSteps suggestions={suggestions} onSelect={(text) => sendMessage(null, false, text)} disabled={streaming || answering} />
@@ -513,7 +528,7 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
               {/* Trip Plan + Live Workflow side by side */}
               <div className="trip-plan-with-workflow">
                 <div className="trip-plan-main">
-                  <TripPlanCard key={planKey} plan={latestPlan} onSaveBudget={savePlanBudget} onCollapse={togglePlanCollapsed} />
+                  <TripPlanCard key={planKey} plan={latestPlan} onSaveBudget={savePlanBudget} />
                 </div>
                 <aside className="live-workflow-sidebar">
                   <Activity events={current.events} />
@@ -532,20 +547,6 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
             </div>
           )}
         </main>
-
-        {/* Right sidebar - collapsed trip plan toggle or empty when plan is open */}
-        <aside className="right-sidebar">
-          {latestPlan && (
-            <button
-              type="button"
-              className="plan-collapsed-toggle-sidebar"
-              onClick={togglePlanCollapsed}
-              aria-label={planCollapsed ? "Show trip plan" : "Hide trip plan"}
-            >
-              {planCollapsed ? "▸ Trip Plan" : "▾ Trip Plan"}
-            </button>
-          )}
-        </aside>
 
         {/* Floating chat panel */}
         {renderFloatingChatPanel()}

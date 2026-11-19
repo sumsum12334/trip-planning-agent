@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect, useCallback } from "react";
+import { Dialog, DialogTitle, DialogContent, DialogActions, Button, Typography } from "@mui/material";
 import {
   formatBudget,
   markerNumbersForDay,
@@ -9,7 +10,7 @@ import { downloadPlanMarkdown, printPlanReport } from "../lib/planExport.js";
 import { CategoryBudgetEditor, DayEditor } from "./BudgetEditors.jsx";
 import { TripMap } from "./TripMap.jsx";
 
-export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
+export function TripPlanCard({ plan, onSaveBudget }) {
   const points = useMemo(() => routePoints(plan), [plan]);
   const currency = plan.currency || "";
   const items = planBudgetItems(plan);
@@ -40,25 +41,39 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
   const [expandedDays, setExpandedDays] = useState({});
   const allDaysOpen = days.length > 0 && days.every((day) => expandedDays[day.day]);
 
-  // Weather state - per day weather
+  // Weather date state - read-only display
+  const [weatherFromDate, setWeatherFromDate] = useState(() => plan.start_date ? String(plan.start_date) : "");
+  const [weatherToDate, setWeatherToDate] = useState("");
   const [weatherData, setWeatherData] = useState({});
   const [weatherLoading, setWeatherLoading] = useState({});
   const [weatherError, setWeatherError] = useState({});
-  const [weatherFromDate, setWeatherFromDate] = useState(() => plan.start_date ? String(plan.start_date) : "");
 
   // Accommodation state
   const [staysData, setStaysData] = useState(null);
   const [staysLoading, setStaysLoading] = useState(false);
   const [staysError, setStaysError] = useState("");
+  const [staysDialogOpen, setStaysDialogOpen] = useState(false);
+
+  // Calculate to-date from from-date + days count
+  useEffect(() => {
+    if (weatherFromDate && days.length > 0) {
+      const from = new Date(weatherFromDate + "T00:00:00");
+      const to = new Date(from);
+      to.setDate(from.getDate() + days.length - 1);
+      setWeatherToDate(to.toISOString().split("T")[0]);
+    } else {
+      setWeatherToDate("");
+    }
+  }, [weatherFromDate, days.length]);
 
   // Sync weather from date with plan
   useEffect(() => {
-    if (plan.start_date) {
+    if (plan.start_date && !weatherFromDate) {
       setWeatherFromDate(String(plan.start_date));
     }
-  }, [plan.start_date]);
+  }, [plan.start_date, weatherFromDate]);
 
-  // Fetch weather for all days when fromDate changes
+  // Auto-fetch weather for all days when fromDate changes
   const fetchAllWeather = useCallback(async () => {
     if (!weatherFromDate || days.length === 0) return;
     
@@ -66,7 +81,6 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
     setWeatherError(prev => ({ ...prev, global: "" }));
     
     try {
-      // Calculate dates for each day
       const fromDate = new Date(weatherFromDate + "T00:00:00");
       const dayWeatherPromises = days.map(async (day, index) => {
         const dayDate = new Date(fromDate);
@@ -114,7 +128,6 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
     fetchAllWeather();
   }, [fetchAllWeather]);
 
-  // Accommodation fetch
   const fetchStays = useCallback(async () => {
     setStaysLoading(true);
     setStaysError("");
@@ -177,11 +190,20 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
           {allDaysOpen ? "Collapse all" : "Expand all"} 
         </button>
       )}
+      {/* Weather date selector aligned right */}
+      {days.length > 0 && weatherFromDate && (
+        <div className="weather-date-selector">
+          <span className="weather-date-label">🌤 Weather: {weatherFromDate} → {weatherToDate}</span>
+          {weatherData && Object.keys(weatherData).length > 0 && (
+            <span className="weather-data-chip">
+              {days.map(d => weatherData[d.day]?.condition && `${d.day}: ${weatherData[d.day].temperature_c != null ? weatherData[d.day].temperature_c + "°C" : "?"}`).join(" · ")}
+            </span>
+          )}
+        </div>
+      )}
+      {weatherLoading?.global && <span className="weather-loading-chip">Loading weather…</span>}
       <button type="button" className="plan-tool" onClick={() => downloadPlanMarkdown(plan)}>⬇ Markdown</button>
       <button type="button" className="plan-tool" onClick={() => printPlanReport(plan)}>🖨 PDF report</button>
-      {onCollapse && (
-        <button type="button" className="plan-tool plan-collapse-toggle" onClick={onCollapse} aria-label="Collapse trip plan panel">▸ Hide panel</button>
-      )}
     </div>
     <div className="trip-plan-content">
       {mapOpen && <TripMap plan={plan} />}
@@ -197,8 +219,8 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
               <span className="overview-meta">{day.activities.length} activities{dayMarkers.length ? ` · 🗺 ${dayMarkers.join("·")}` : ""}</span>
               <b className="overview-budget">{budget && budget.amount != null ? formatBudget(budget.amount, currency) : "—"}</b>
               {weather && (
-                <span className="overview-weather" style={{fontSize: 11, color: '#6c63ff', marginLeft: 8}}>
-                  {weather.condition} {weather.temperature_c != null ? `${weather.temperature_c}°C` : ""}
+                <span className="overview-weather">
+                  {weather.temperature_c != null ? `${weather.temperature_c}°C` : "?"}
                 </span>
               )}
             </button>;
@@ -237,9 +259,9 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
                 <div className="day-weather-inline">
                   <span className="day-weather-icon">🌤</span>
                   {weatherLoadingDay ? (
-                    <span className="day-weather-temp">Loading...</span>
+                    <span className="day-weather-temp">Loading…</span>
                   ) : weatherErrorDay ? (
-                    <span style={{color: '#a23f50'}}>Error: {weatherErrorDay}</span>
+                    <span style={{color: '#aa6c16', fontSize: '11px'}}>Weather unavailable</span>
                   ) : (
                     <>
                       <span className="day-weather-condition">{weather.condition}</span>
@@ -248,7 +270,7 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
                         {weather.temperature_f != null ? ` (${weather.temperature_f}°F)` : ""}
                       </span>
                       {weather.humidity != null && <span className="day-weather-humidity">💧 {weather.humidity}%</span>}
-                      {weather.stub && <span style={{color: '#aa6c16', fontSize: 10, marginLeft: 8}}>(Stub data)</span>}
+                      {weather.stub && <span style={{color: '#aa6c16', fontSize: 10, marginLeft: 8}}>(stub)</span>}
                     </>
                   )}
                 </div>
@@ -279,77 +301,70 @@ export function TripPlanCard({ plan, onSaveBudget, onCollapse }) {
       )}
     </div>
 
-    {/* Weather Section - Date picker for all days */}
-    <div className="trip-weather-block">
-      <div className="trip-weather-head">
-        <span>🌤 WEATHER FORECAST (All Days)</span>
-        <div className="weather-date-inputs">
-          <label>
-            From Date
-            <input type="date" value={weatherFromDate} onChange={(e) => setWeatherFromDate(e.target.value)} />
-          </label>
-          <button type="button" className="plan-tool primary" onClick={fetchAllWeather} disabled={weatherLoading.global || !weatherFromDate}>
-            {weatherLoading.global ? "Loading..." : "Refresh Weather"}
-          </button>
-        </div>
-      </div>
-      {weatherError.global && <div className="weather-error">{weatherError.global}</div>}
-      {!weatherFromDate && <small className="budget-notice">Set a start date in the trip plan to auto-fetch weather for all days.</small>}
+    {/* Accommodation button (opens popup) */}
+    <div className="trip-stays-action">
+      <button type="button" className="plan-tool primary" onClick={() => { fetchStays(); setStaysDialogOpen(true); }} disabled={staysLoading}>
+        {staysLoading ? "Loading stays…" : "Find Accommodation"}
+      </button>
     </div>
 
-    {/* Accommodation Section */}
-    <div className="trip-stays-block">
-      <div className="trip-stays-head">
-        <span>🏨 ACCOMMODATION OPTIONS</span>
-        <button type="button" className="plan-tool" onClick={fetchStays} disabled={staysLoading}>
-          {staysLoading ? "Loading..." : staysData ? "Refresh" : "Find Stays"}
-        </button>
-      </div>
-      {staysError && <div className="weather-error">{staysError}</div>}
-      {staysData && staysData.length > 0 && (
-        <ul className="stays-list">
-          {staysData.map((stay, index) => (
-            <li key={`${stay.name}-${index}`} className="stay-item">
-              <div className="stay-info">
-                <strong>{stay.name}</strong>
-                <span className="stay-location">📍 {stay.location}</span>
-                {stay.nightly_cost != null && (
-                  <span className="stay-price">{formatBudget(stay.nightly_cost, stay.currency || "USD")}/night</span>
-                )}
-                {stay.rating != null && (
-                  <span className="stay-rating">⭐ {stay.rating}</span>
-                )}
-                {stay.amenities?.length > 0 && (
-                  <span className="stay-amenities">{stay.amenities.join(", ")}</span>
-                )}
-                {stay.cancellation_policy && (
-                  <span className="stay-cancellation">🔄 {stay.cancellation_policy}</span>
-                )}
-              </div>
-              <div style={{display: 'flex', gap: 8, alignItems: 'center'}}>
-                {stay.source_url && (
-                  <a href={stay.source_url} target="_blank" rel="noopener noreferrer" className="stay-book-link">
-                    View / Book
-                  </a>
-                )}
-                {stay.coordinates && (
-                  <a href={`https://www.openstreetmap.org/?mlat=${stay.coordinates.lat}&mlon=${stay.coordinates.lng}#map=16/${stay.coordinates.lat}/${stay.coordinates.lng}`} 
-                     target="_blank" rel="noopener noreferrer" className="stay-map-link">
-                    🗺 Map
-                  </a>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-      {staysData && staysData.length === 0 && !staysLoading && (
-        <small className="budget-notice">No stays found for this destination.</small>
-      )}
-      {!staysData && !staysLoading && !staysError && (
-        <small className="budget-notice">Click "Find Stays" to search for accommodation options.</small>
-      )}
-    </div>
+    {/* Accommodation popup */}
+    <Dialog open={staysDialogOpen} onClose={() => setStaysDialogOpen(false)} maxWidth="lg" fullWidth>
+      <DialogTitle sx={{ p: 2, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <Typography variant="h6" fontWeight={700}>🏨 Accommodation Options for {plan.destination}</Typography>
+        <Button size="small" onClick={() => setStaysDialogOpen(false)}>Close</Button>
+      </DialogTitle>
+      <DialogContent sx={{ p: 2, maxHeight: "50vh", overflow: "auto" }}>
+        {staysError && <div className="weather-error" style={{ marginBottom: 12 }}>{staysError}</div>}
+        {staysLoading && <div className="budget-notice">Loading accommodation options…</div>}
+        {staysData && staysData.length > 0 && (
+          <ul className="stays-list">
+            {staysData.map((stay, index) => (
+              <li key={`${stay.name}-${index}`} className="stay-item">
+                <div className="stay-info">
+                  <strong>{stay.name}</strong>
+                  <span className="stay-location">📍 {stay.location}</span>
+                  {stay.nightly_cost != null && (
+                    <span className="stay-price">{formatBudget(stay.nightly_cost, stay.currency || "USD")}/night</span>
+                  )}
+                  {stay.rating != null && (
+                    <span className="stay-rating">⭐ {stay.rating}</span>
+                  )}
+                  {stay.amenities?.length > 0 && (
+                    <span className="stay-amenities">{stay.amenities.join(", ")}</span>
+                  )}
+                  {stay.cancellation_policy && (
+                    <span className="stay-cancellation">🔄 {stay.cancellation_policy}</span>
+                  )}
+                </div>
+                <div style={{display: 'flex', gap: 8, alignItems: 'center'}}>
+                  {stay.source_url && (
+                    <a href={stay.source_url} target="_blank" rel="noopener noreferrer" className="stay-book-link">
+                      View / Book
+                    </a>
+                  )}
+                  {stay.coordinates && (
+                    <a href={`https://www.openstreetmap.org/?mlat=${stay.coordinates.lat}&mlon=${stay.coordinates.lng}#map=16/${stay.coordinates.lat}/${stay.coordinates.lng}`} 
+                       target="_blank" rel="noopener noreferrer" className="stay-map-link">
+                      🗺 Map
+                    </a>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {staysData && staysData.length === 0 && !staysLoading && (
+          <div className="budget-notice">No stays found for this destination.</div>
+        )}
+        {!staysData && !staysLoading && !staysError && (
+          <div className="budget-notice">Click "Find Accommodation" to search for options.</div>
+        )}
+      </DialogContent>
+      <DialogActions sx={{ p: 1 }}>
+        <Button onClick={() => setStaysDialogOpen(false)}>Done</Button>
+      </DialogActions>
+    </Dialog>
 
     <div className="trip-budget-block">
       <div className="trip-budget-head">
