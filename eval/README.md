@@ -76,9 +76,11 @@ Append a dict to `CASES` in `cases.py` with:
 
 - More history cases: multiple visited places, and an unrelated-history control
   (Tokyo trip should not drop stays just because Hong Kong was visited).
-- Over-budget transport (`hk_over_budget_transport`): records whether the
-  coordinator revises an itinerary that exceeds the total budget. This is a
-  **known Agent 3 gap** today (no revise loop) and does not fail the suite alone.
+- Over-budget transport (`hk_over_budget_transport`): the coordinator must
+  revise an itinerary that exceeds the total budget (cheaper stay) or fail
+  closed when no alternative fits.
+- Revise loop (`REVISE_CASES`): plan, then re-enter the pipeline through
+  `agents.coordinator.agent.revise` with a changed budget or trip length.
 - Gold tool-call cases (`eval/tool_cases.py`): execute the chat tool layer with
   the arguments a model should pass. Run with the default suite, or:
 
