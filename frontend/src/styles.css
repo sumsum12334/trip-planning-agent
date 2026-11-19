@@ -267,7 +267,7 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .chat-panel>.next-steps,
 .chat-panel>.composer,
 .chat-panel>.composer-footer{flex:0 0 auto}
-.chat-panel>.activity-card{flex:0 0 auto;width:100%;max-height:50vh;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+.chat-panel>.activity-card{flex:0 0 auto;width:100%;max-height:50vh;overflow:visible;display:flex;flex-direction:column;min-height:0}
 .chat-side{height:100%;max-height:none;overflow:auto}
 @media(max-width:1150px){
   .chat-page{height:auto;max-height:none;overflow:visible;display:block}
@@ -327,7 +327,12 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .app[data-color-mode="dark"] .trip-map-marker.airport span{background:#37b37e}
 
 /* Live workflow scrolls to the latest event */
-.chat-panel>.activity-card .activity-items{flex:1 1 auto;width:100%;min-width:0;overflow:auto;padding-right:4px;scroll-behavior:smooth;min-height:0}
+.chat-panel>.activity-card .activity-items{flex:1 1 auto;width:100%;min-width:0;overflow:auto;overflow-x:hidden;padding-right:4px;scroll-behavior:smooth;min-height:0}
+.chat-panel>.activity-card .activity-items::-webkit-scrollbar{width:6px}
+.chat-panel>.activity-card .activity-items::-webkit-scrollbar-thumb{background:#c7d2e0;border-radius:3px}
+.chat-panel>.activity-card .activity-items::-webkit-scrollbar-thumb:hover{background:#9fb0c8}
+.app[data-color-mode="dark"] .chat-panel>.activity-card .activity-items::-webkit-scrollbar-thumb{background:#3d4a66}
+.app[data-color-mode="dark"] .chat-panel>.activity-card .activity-items::-webkit-scrollbar-thumb:hover{background:#5c6b8a}
 
 /* Budget: day/category view toggle + per-day breakdown */
 .budget-view-toggle{display:inline-flex;gap:2px;margin-top:10px;padding:2px;border-radius:999px;background:#eef1f8;border:1px solid #e0e5f0}
