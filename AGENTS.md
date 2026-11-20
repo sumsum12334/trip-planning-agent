@@ -12,10 +12,12 @@
 - Reuse `shared/prompts.py` for model system prompts; keep trip-planning
   behavior, uncertainty handling, clarification guidance, Markdown formatting,
   and hidden chain-of-thought boundaries consistent across chat and agents.
-- Keep the trip plan as the focal browser UI: a wide panel beside a smaller chat
-  pane, a collapsible sidebar, and a separate Live workflow panel that names the
-  agent currently working and the handover between agents. Keep it theme-aware
-  (light/dark) and responsive, and keep Travel history organized by country.
+- Keep the trip plan as the focal browser UI: a wide plan panel with a separate
+  Live workflow panel that names the agent currently working and the handover
+  between agents, plus a fixed floating chat box in the bottom-right corner once
+  the conversation has started (the landing page keeps its centered composer).
+  Keep it theme-aware (light/dark) and responsive, and keep Travel history
+  organized by country.
 - Build the trip plan with several small tools (`start_trip_plan`, `set_trip_day`
   per day, `set_trip_budget`, `set_trip_references`, `remove_trip_day`,
   `get_trip_plan`) instead of one large payload, so follow-up edits stay small

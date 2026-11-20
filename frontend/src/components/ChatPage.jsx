@@ -1,16 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from "react";
-import { Box, Button, Stack, TextField, Typography, IconButton, Tooltip, Fab, Dialog, DialogTitle, DialogContent } from "@mui/material";
+import { useEffect, useRef, useState, useMemo } from "react";
+import { Box, Button, TextField } from "@mui/material";
 import SendIcon from "@mui/icons-material/Send";
-import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
-import MinimizeIcon from "@mui/icons-material/Minimize";
-import MaximizeIcon from "@mui/icons-material/Maximize";
-import CloseIcon from "@mui/icons-material/Close";
-import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
+import { buildChatMessages } from "../lib/chatMessages.js";
 import { planBudgetItems, planFromEvents } from "../lib/planUtils.js";
 import { readSseFrames } from "../lib/sse.js";
 import { nextStepSuggestions, workflowState } from "../lib/workflow.js";
 import { Activity } from "./Activity.jsx";
-import { MessageBubble } from "./MessageBubble.jsx";
+import { ChatMessages } from "./ChatMessages.jsx";
 import { NextSteps } from "./NextSteps.jsx";
 import { QuestionBox } from "./QuestionBox.jsx";
 import { TripPlanCard } from "./TripPlanCard.jsx";
@@ -23,116 +19,30 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
   const [answering, setAnswering] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [selectedOption, setSelectedOption] = useState("");
-  const [planCollapsed] = useState(false);
-  // Floating chat panel - always open by default at bottom right
-  const [chatPanelOpen, setChatPanelOpen] = useState(true);
-  const [chatPanelMinimized, setChatPanelMinimized] = useState(false);
-  const [chatPanelPosition, setChatPanelPosition] = useState(() => {
-    if (typeof window !== "undefined") {
-      return {
-        x: Math.max(24, window.innerWidth - 480 - 24),
-        y: Math.max(24, window.innerHeight - 600 - 88 - 24),
-      };
-    }
-    return { x: 24, y: 24 };
-  });
-  const [chatPanelSize, setChatPanelSize] = useState({ width: 480, height: 600 });
-  const [isDragging, setIsDragging] = useState(false);
+  const [chatMinimized, setChatMinimized] = useState(false);
 
   const answerLockRef = useRef(false);
   const abortRef = useRef(null);
   const requestIdRef = useRef(null);
   const messagesRef = useRef(null);
-  const chatPanelRef = useRef(null);
-  const dragRef = useRef({ active: false, startX: 0, startY: 0, startLeft: 0, startTop: 0 });
 
-  // Compute latestPlan early
   const latestPlanEvent = useMemo(() => planFromEvents(current.events), [current.events]);
   const latestPlan = latestPlanEvent?.data?.result || null;
 
-  // Check if there's a pending question needing attention
   const pendingQuestionEvent = useMemo(() => {
     return [...current.events].reverse().find(
       (event) => event.data?.tool === "ask_user_question" && event.data?.result?.question && !event.data?.selected,
     );
   }, [current.events]);
 
-  useEffect(() => { if (messagesRef.current) messagesRef.current.scrollTop = messagesRef.current.scrollHeight; }, [current.messages, current.events]);
+  const messageItems = useMemo(
+    () => buildChatMessages(current.messages, current.events),
+    [current.messages, current.events],
+  );
 
-  // Auto-scroll floating panel messages
-  useEffect(() => {
-    if (chatPanelRef.current && !chatPanelMinimized && chatPanelOpen) {
-      const panel = chatPanelRef.current;
-      const items = panel.querySelector('.activity-items') || panel.querySelector('.messages');
-      if (items) items.scrollTop = items.scrollHeight;
-    }
-  }, [current.events, latestPlan, chatPanelMinimized, chatPanelOpen]);
+  const hasConversation = current.messages.length > 0;
 
-  const handleDragMove = useCallback((e) => {
-    if (!dragRef.current.active) return;
-    const dx = e.clientX - dragRef.current.startX;
-    const dy = e.clientY - dragRef.current.startY;
-    setChatPanelPosition({
-      x: Math.max(0, dragRef.current.startLeft + dx),
-      y: Math.max(0, dragRef.current.startTop + dy),
-    });
-  }, []);
-
-  const handleDragEndRef = useRef(null);
-
-  const handleDragEnd = useCallback(() => {
-    if (handleDragEndRef.current) handleDragEndRef.current();
-  }, []);
-
-  useLayoutEffect(() => {
-    handleDragEndRef.current = () => {
-      setIsDragging(false);
-      dragRef.current.active = false;
-      document.removeEventListener('mousemove', handleDragMove);
-      document.removeEventListener('mouseup', handleDragEndRef.current);
-    };
-  }, [handleDragMove]);
-
-  const handleDragStart = useCallback((e) => {
-    if (e.target.closest('button, input, textarea, [role="button"]')) return;
-    setIsDragging(true);
-    dragRef.current = {
-      active: true,
-      startX: e.clientX,
-      startY: e.clientY,
-      startLeft: chatPanelPosition.x,
-      startTop: chatPanelPosition.y,
-    };
-    document.addEventListener('mousemove', handleDragMove);
-    document.addEventListener('mouseup', handleDragEnd);
-    e.preventDefault();
-  }, [chatPanelPosition, handleDragMove, handleDragEnd]);
-
-  const handleResize = useCallback((e, direction) => {
-    e.stopPropagation();
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const startWidth = chatPanelSize.width;
-    const startHeight = chatPanelSize.height;
-
-    const doResize = (moveEvent) => {
-      let newWidth = startWidth;
-      let newHeight = startHeight;
-      if (direction.includes('e')) newWidth = Math.max(320, startWidth + (moveEvent.clientX - startX));
-      if (direction.includes('w')) newWidth = Math.max(320, startWidth - (moveEvent.clientX - startX));
-      if (direction.includes('s')) newHeight = Math.max(300, startHeight + (moveEvent.clientY - startY));
-      if (direction.includes('n')) newHeight = Math.max(300, startHeight - (moveEvent.clientY - startY));
-      setChatPanelSize({ width: newWidth, height: newHeight });
-    };
-
-    const stopResize = () => {
-      document.removeEventListener('mousemove', doResize);
-      document.removeEventListener('mouseup', stopResize);
-    };
-
-    document.addEventListener('mousemove', doResize);
-    document.addEventListener('mouseup', stopResize);
-  }, [chatPanelSize]);
+  useEffect(() => { if (messagesRef.current) messagesRef.current.scrollTop = messagesRef.current.scrollHeight; }, [current.messages, current.events, latestPlan, chatMinimized]);
 
   function planContextFromEvents(events) {
     const event = planFromEvents(events);
@@ -153,6 +63,7 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
     const text = (overrideText != null ? overrideText : retry ? retryText : message).trim();
     if (!text) return;
     setMessage(""); setRetryText(""); setRetryOption(""); setStatus("Working...");
+    setChatMinimized(false);
     const controller = new AbortController();
     abortRef.current = controller;
     const requestId = `req-${crypto.randomUUID()}`;
@@ -250,32 +161,19 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
       const target = planFromEvents(previous.events);
       if (!target) return previous;
       const result = target.data.result;
-      let days = (result.days || []).map((day) => ({ ...day }));
+      const merged = { ...result };
       if (Array.isArray(payload.days) && payload.days.length) {
+        const days = (result.days || []).map((day) => ({ ...day }));
         payload.days.forEach((updatedDay) => {
           const index = days.findIndex((day) => day.day === updatedDay.day);
           if (index >= 0) days[index] = { ...days[index], ...updatedDay };
           else days.push({ ...updatedDay });
         });
-        days.sort((a, b) => a.day - b.day);
-      } else {
-        const dayBudgetMap = new Map((payload.day_budgets || []).map((entry) => [entry.day, entry.amount]));
-        const dayItemMap = new Map();
-        (payload.day_items || []).forEach((entry) => {
-          const list = dayItemMap.get(entry.day) || [];
-          list.push({ category: entry.category, amount: entry.amount, currency: payload.currency || result.currency || "" });
-          dayItemMap.set(entry.day, list);
-        });
-        days = days.map((day) => ({
-          ...day,
-          budget: dayBudgetMap.has(day.day) ? dayBudgetMap.get(day.day) : day.budget,
-          budget_items: dayItemMap.has(day.day) ? dayItemMap.get(day.day) : day.budget_items,
-        }));
+        merged.days = days.sort((a, b) => a.day - b.day);
       }
-      const merged = { ...result, days };
+      if (Array.isArray(payload.budget_items)) merged.budget_items = payload.budget_items;
       if ("budget" in payload) merged.budget = payload.budget;
       if (payload.currency) merged.currency = payload.currency;
-      if (payload.mode !== "day" && Array.isArray(payload.budget_items)) merged.budget_items = payload.budget_items;
       return {
         ...previous,
         events: previous.events.map((event) => event === target
@@ -305,6 +203,7 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
   const planKey = latestPlanEvent ? current.events.indexOf(latestPlanEvent) : -1;
   const workflow = workflowState(current.events, selectedOption ? null : pendingEvent, status);
   const suggestions = nextStepSuggestions(latestPlan, current.messages, Boolean(pendingEvent), streaming || answering);
+  const busy = streaming || answering;
 
   async function answerQuestion(option, custom = false) {
     if (answerLockRef.current || streaming) return;
@@ -406,216 +305,125 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
     }
   }
 
-  // Render the floating chat panel - always visible at bottom right
-  const renderFloatingChatPanel = () => {
-    if (!chatPanelOpen) return null;
-
+  function renderComposer(inline = false) {
     return (
-      <section
-        className={`panel chat-panel floating ${chatPanelMinimized ? "minimized" : ""} ${isDragging ? "dragging" : ""}`}
-        ref={chatPanelRef}
-        style={
-          isDragging
-            ? { left: chatPanelPosition.x, top: chatPanelPosition.y, bottom: "auto", right: "auto", width: chatPanelSize.width, height: chatPanelSize.height }
-            : { width: chatPanelSize.width, height: chatPanelSize.height }
-        }
-      >
-        <div className="floating-header" onMouseDown={handleDragStart}>
-          <Tooltip title="Drag to move">
-            <span className="drag-handle"><DragIndicatorIcon fontSize="small" /></span>
-          </Tooltip>
-          <div className="floating-title">
-            <p className="eyebrow">AI TRIP COMPANION</p>
-            <h1 className="chat-title">Plan something memorable.</h1>
-          </div>
-          <div className="floating-controls">
-            <Tooltip title={chatPanelMinimized ? "Expand" : "Minimize"}>
-              <IconButton size="small" onClick={() => setChatPanelMinimized(!chatPanelMinimized)} aria-label={chatPanelMinimized ? "Expand chat" : "Minimize chat"}>
-                {chatPanelMinimized ? <MaximizeIcon fontSize="small" /> : <MinimizeIcon fontSize="small" />}
-              </IconButton>
-            </Tooltip>
-            <Tooltip title="Close chat">
-              <IconButton size="small" onClick={() => { setChatPanelOpen(false); setChatPanelMinimized(false); }} aria-label="Close chat">
-                <CloseIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          </div>
-        </div>
-        {!chatPanelMinimized && (
-          <>
-            <Box className="messages" ref={messagesRef} sx={{ display: "flex", flexDirection: "column", gap: 0.5, maxHeight: "calc(100% - 280px)", overflow: "auto" }}>
-              {!current.messages.length && <div className="welcome"><span>✦</span><h2>Where will you go next?</h2><p>Ask for an itinerary, compare options, or tell me about somewhere you have visited.</p></div>}
-              {(() => {
-                const questions = current.events.filter((event) => event.data?.tool === "ask_user_question" && event.data?.result?.question);
-                const renderedQuestions = new Set();
-                const output = [];
-                current.messages.forEach((item, index) => {
-                  if (item.role === "user") {
-                    const question = questions.find((event) => event.data?.selected === item.content && !renderedQuestions.has(event));
-                    if (question) {
-                      renderedQuestions.add(question);
-                      output.push(
-                        <MessageBubble
-                          key={`question-${index}`}
-                          role="question"
-                          kicker="Question"
-                          content={<Typography component="span">{question.data.result.question}</Typography>}
-                          footer={<Typography variant="caption" color="primary" fontWeight={700} sx={{ display: "block", mt: 1 }}>Answer: {item.content}</Typography>}
-                        />,
-                      );
-                    }
-                  }
-                  output.push(
-                    <MessageBubble
-                      key={`${item.role}-${index}`}
-                      role={item.role}
-                      content={item.content}
-                      reasoning={item.reasoning}
-                    />,
-                  );
-                });
-                questions.filter((event) => !renderedQuestions.has(event)).forEach((event, index) => output.push(
-                  <MessageBubble
-                    key={`pending-question-${index}`}
-                    role="question"
-                    kicker="Question"
-                    content={<Typography component="span">{event.data.result.question}</Typography>}
-                    footer={event.data.selected ? <Typography variant="caption" color="primary" fontWeight={700} sx={{ display: "block", mt: 1 }}>Answer: {event.data.selected}</Typography> : null}
-                  />,
-                ));
-                return (
-                  <Stack spacing={2} sx={{ width: "100%" }}>
-                    {output}
-                  </Stack>
-                );
-              })()}
-            </Box>
-            {pendingQuestionEvent && (
-              <div className="question-alert">
-                <span className="question-alert-icon">⚠</span>
-                <span className="question-alert-text">The assistant is waiting for your choice.</span>
-              </div>
-            )}
-            <div className={`workflow-status ${workflow.className}`}><span>{workflow.icon}</span><strong>{workflow.label}</strong><small>{workflow.className === "waiting" ? "Choose an option below." : workflow.className === "working" ? "The assistant is processing your request." : ""}</small></div>
-            {(pendingEvent || retryOption) && <QuestionBox event={activeQuestionEvent} onOption={answerQuestion} disabled={answering} retryOption={retryOption} selectedOption={selectedOption} />}
-            <NextSteps suggestions={suggestions} onSelect={(text) => sendMessage(null, false, text)} disabled={streaming || answering} />
-            <Box className="composer" component="form" onSubmit={sendMessage} sx={{ display: "flex", flexDirection: "column", gap: 1.25, alignItems: "stretch", p: 2.5, borderTop: "1px solid #edf0f6" }}>
-              <TextField
-                multiline
-                minRows={2}
-                maxRows={5}
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                placeholder="Plan a 3-day trip to Kyoto for $800..."
-              />
-              <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
-                {streaming || answering
-                  ? <Button className="stop-button" type="button" variant="contained" color="error" onClick={stopStreaming}>Stop</Button>
-                  : <Button className="send-button" type="submit" variant="contained" endIcon={<SendIcon />}>Send</Button>}
-              </Box>
-            </Box>
-            <div className="composer-footer"><span>{status || "Markdown supported"}</span>{retryText && <Button className="retry" size="small" color="warning" variant="outlined" disabled={streaming} onClick={(event) => sendMessage(event, true)}>Retry</Button>}</div>
-          </>
-        )}
-        <div className="resize-handles">
-          <div className="resize-handle se" onMouseDown={(e) => handleResize(e, 'se')} />
-          <div className="resize-handle sw" onMouseDown={(e) => handleResize(e, 'sw')} />
-          <div className="resize-handle ne" onMouseDown={(e) => handleResize(e, 'ne')} />
-          <div className="resize-handle nw" onMouseDown={(e) => handleResize(e, 'nw')} />
-          <div className="resize-handle e" onMouseDown={(e) => handleResize(e, 'e')} />
-          <div className="resize-handle w" onMouseDown={(e) => handleResize(e, 'w')} />
-          <div className="resize-handle s" onMouseDown={(e) => handleResize(e, 's')} />
-          <div className="resize-handle n" onMouseDown={(e) => handleResize(e, 'n')} />
-        </div>
-      </section>
+      <Box className={`composer${inline ? " inline-composer" : ""}`} component="form" onSubmit={sendMessage} sx={{ display: "flex", flexDirection: "column", gap: 1.25, alignItems: "stretch", p: 2.5, borderTop: "1px solid #edf0f6" }}>
+        <TextField
+          multiline
+          minRows={2}
+          maxRows={5}
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          placeholder="Plan a 3-day trip to Kyoto for $800..."
+        />
+        <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
+          {busy
+            ? <Button className="stop-button" type="button" variant="contained" color="error" onClick={stopStreaming}>Stop</Button>
+            : <Button className="send-button" type="submit" variant="contained" endIcon={<SendIcon />}>Send</Button>}
+        </Box>
+      </Box>
     );
-  };
+  }
+
+  function renderComposerFooter() {
+    return (
+      <div className="composer-footer">
+        <span>{status || "Markdown supported"}</span>
+        {retryText && <Button className="retry" size="small" color="warning" variant="outlined" disabled={streaming} onClick={(event) => sendMessage(event, true)}>Retry</Button>}
+      </div>
+    );
+  }
+
+  // The chat lives in a fixed floating box in the bottom-right corner once the
+  // conversation has started; the landing page keeps its centered composer.
+  const chatPanel = hasConversation ? (
+    <aside
+      className={`chat-panel floating${chatMinimized ? " minimized" : ""}`}
+      aria-label="Trip assistant"
+    >
+      <div
+        className="chat-panel-header"
+        onClick={chatMinimized ? () => setChatMinimized(false) : undefined}
+      >
+        <div className="chat-panel-title">
+          <p className="eyebrow">AI TRIP COMPANION</p>
+          <h2 className="chat-title">Plan something memorable.</h2>
+        </div>
+        <button
+          type="button"
+          className="chat-panel-toggle"
+          onClick={() => setChatMinimized((value) => !value)}
+          aria-expanded={!chatMinimized}
+          aria-label={chatMinimized ? "Open chat panel" : "Minimize chat panel"}
+        >
+          {chatMinimized ? "▴" : "▾"}
+        </button>
+      </div>
+      {!chatMinimized ? (
+        <>
+          <Box className="messages chat-panel-messages" ref={messagesRef} sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 0.5, overflow: "auto", padding: "16px 18px 8px" }}>
+            <ChatMessages items={messageItems} />
+          </Box>
+          {pendingQuestionEvent && (
+            <div className="question-alert">
+              <span className="question-alert-icon">⚠</span>
+              <span className="question-alert-text">The assistant is waiting for your choice.</span>
+            </div>
+          )}
+          <div className={`workflow-status ${workflow.className}`}><span>{workflow.icon}</span><strong>{workflow.label}</strong><small>{workflow.className === "waiting" ? "Choose an option below." : workflow.className === "working" ? "The assistant is processing your request." : ""}</small></div>
+          {(pendingEvent || retryOption) && <QuestionBox event={activeQuestionEvent} onOption={answerQuestion} disabled={answering} retryOption={retryOption} selectedOption={selectedOption} />}
+          <NextSteps suggestions={suggestions} onSelect={(text) => sendMessage(null, false, text)} disabled={busy} />
+          {renderComposer()}
+          {renderComposerFooter()}
+        </>
+      ) : (
+        <div className={`chat-panel-collapsed-status ${workflow.className}`}>
+          <span>{workflow.icon}</span>
+          <small>
+            {pendingEvent
+              ? `Waiting for your choice: ${activeQuestionEvent?.data?.result?.question || ""}`
+              : streaming
+                ? (status || workflow.label)
+                : workflow.label}
+          </small>
+        </div>
+      )}
+    </aside>
+  ) : null;
 
   return (
     <section className="page chat-page">
-      <div className="chat-workspace-new">
-        {/* Main content area - Trip Plan takes most space */}
+      <div className={`chat-workspace-new${latestPlan ? " has-plan" : ""}`}>
         <main className="main-content">
-          {latestPlan && !planCollapsed ? (
-            <>
-              {/* Trip Plan + Live Workflow side by side */}
-              <div className="trip-plan-with-workflow">
-                <div className="trip-plan-main">
-                  <TripPlanCard key={planKey} plan={latestPlan} onSaveBudget={savePlanBudget} />
-                </div>
-                <aside className="live-workflow-sidebar">
-                  <Activity events={current.events} />
-                </aside>
-              </div>
-            </>
+          {latestPlan ? (
+            <TripPlanCard key={planKey} plan={latestPlan} onSaveBudget={savePlanBudget} />
+          ) : hasConversation ? (
+            <div className="working-area">
+              <Activity events={current.events} />
+            </div>
           ) : (
-            // No trip plan yet - show inline chat box
             <div className="welcome-chat-area">
               <div className="welcome-content">
                 <span className="welcome-icon">✦</span>
                 <h2>Where will you go next?</h2>
                 <p>Ask me to plan an itinerary, search accommodation, check weather, or estimate transport.</p>
-                <NextSteps suggestions={suggestions} onSelect={(text) => sendMessage(null, false, text)} disabled={streaming || answering} />
-                {/* Inline chat box for landing page */}
+                <NextSteps suggestions={suggestions} onSelect={(text) => sendMessage(null, false, text)} disabled={busy} />
                 <div className="inline-chat-box">
-                  <Box className="messages" ref={messagesRef} sx={{ display: "flex", flexDirection: "column", gap: 0.5, maxHeight: 400, overflowY: "auto", marginBottom: 16 }}>
-                    {!current.messages.length && <div className="welcome-inline"><span>✦</span><p>No messages yet. Send your first message above or click a suggestion.</p></div>}
-                    {(() => {
-                      const output = [];
-                      current.messages.forEach((item, index) => {
-                        output.push(
-                          <MessageBubble
-                            key={`${item.role}-${index}`}
-                            role={item.role}
-                            content={item.content}
-                            reasoning={item.reasoning}
-                          />,
-                        );
-                      });
-                      return (
-                        <Stack spacing={2} sx={{ width: "100%" }}>
-                          {output}
-                        </Stack>
-                      );
-                    })()}
-                  </Box>
-                  <Box className="composer inline-composer" component="form" onSubmit={sendMessage} sx={{ display: "flex", flexDirection: "column", gap: 1.25, alignItems: "stretch", p: 2.5, borderTop: "1px solid #edf0f6" }}>
-                    <TextField
-                      multiline
-                      minRows={2}
-                      maxRows={5}
-                      value={message}
-                      onChange={(e) => setMessage(e.target.value)}
-                      placeholder="Plan a 3-day trip to Kyoto for $800..."
-                    />
-                    <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
-                      {streaming || answering
-                        ? <Button className="stop-button" type="button" variant="contained" color="error" onClick={stopStreaming}>Stop</Button>
-                        : <Button className="send-button" type="submit" variant="contained" endIcon={<SendIcon />}>Send</Button>}
-                    </Box>
-                  </Box>
-                  <div className="composer-footer"><span>{status || "Markdown supported"}</span>{retryText && <Button className="retry" size="small" color="warning" variant="outlined" disabled={streaming} onClick={(event) => sendMessage(event, true)}>Retry</Button>}</div>
+                  {renderComposer(true)}
+                  {renderComposerFooter()}
                 </div>
               </div>
             </div>
           )}
         </main>
 
-        {/* Floating chat panel - only when trip plan exists */}
-        {latestPlan && renderFloatingChatPanel()}
-
-        {/* Bottom-right chat FAB - only when trip plan exists */}
-        {latestPlan && (
-          <Fab
-            className="chat-fab"
-            onClick={() => { setChatPanelOpen(true); setChatPanelMinimized(false); }}
-            aria-label="Open chat"
-            size="large"
-          >
-            <AutoAwesomeIcon />
-          </Fab>
+        {latestPlan && current.events.length > 0 && (
+          <aside className="live-workflow-sidebar" aria-label="Live workflow">
+            <Activity events={current.events} />
+          </aside>
         )}
       </div>
+      {chatPanel}
     </section>
   );
 }
