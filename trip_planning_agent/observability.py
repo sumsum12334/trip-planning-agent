@@ -203,6 +203,7 @@ def end_trace(
                 run_id=trace.langsmith_run_id,
                 outputs=output or {},
                 error=str(error) if error else None,
+                end_time=_now_iso(),
             )
     except Exception:
         logger.exception("Could not finish LangSmith trace %s.", trace.langsmith_run_id)
@@ -344,19 +345,32 @@ def ls_finish_generation(
     output: Any | None = None,
     error: Exception | None = None,
 ) -> None:
-    """Finish a LangSmith LLM run."""
+    """Finish a LangSmith LLM run with end_time so it is not stuck loading."""
+    if run is None:
+        return
     try:
-        ls_update_generation(run, output=output, error=error)
-        try:
-            run.end()
-        except Exception:
-            pass
+        ls_client = getattr(run, "client", None)
+        run_id = str(getattr(run, "id", ""))
+        if ls_client is not None and run_id:
+            ls_client.update_run(
+                run_id=run_id,
+                outputs=output or {},
+                error=str(error) if error else None,
+                end_time=_now_iso(),
+            )
         try:
             setattr(run, "_trip_planner_langsmith_ended", True)
         except Exception:
             pass
     except Exception:
         logger.exception("Could not finish LangSmith model tracking.")
+
+
+def _now_iso() -> str:
+    """Return current UTC time in ISO 8601 format for LangSmith end_time."""
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
 
 
 def ls_update_generation(
@@ -369,11 +383,14 @@ def ls_update_generation(
     if run is None:
         return
     try:
-        run.client.update_run(
-            run_id=str(run.id),
-            outputs=output or {},
-            error=str(error) if error else None,
-        )
+        ls_client = getattr(run, "client", None)
+        run_id = str(getattr(run, "id", ""))
+        if ls_client is not None and run_id:
+            ls_client.update_run(
+                run_id=run_id,
+                outputs=output or {},
+                error=str(error) if error else None,
+            )
     except Exception:
         logger.exception("Could not update LangSmith model tracking.")
 
