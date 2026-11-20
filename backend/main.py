@@ -339,6 +339,94 @@ def stop_chat(request: ChatStopRequest) -> dict:
     }
 
 
+def _looks_like_trip_request(message: str) -> bool:
+    """Heuristic: does the user message read like a trip-planning request?"""
+    lowered = message.lower().strip()
+    if not lowered:
+        return False
+    greetings = {"hi", "hello", "hey", "good morning", "good afternoon", "good evening", "yo", "sup"}
+    if lowered in greetings:
+        return False
+    trip_keywords = (
+        "plan", "trip", "visit", "travel", "go to", "flight", "hotel",
+        "stay", "itinerary", "vacation", "holiday", "destination", "tour",
+    )
+    return any(kw in lowered for kw in trip_keywords)
+
+
+def _run_multi_agent_plan(
+    request_message: str,
+    session_id: str,
+    user_id: str,
+    trace_context: dict | None,
+    stream_queue: "queue.Queue[tuple[str, object]]",
+) -> dict | None:
+    """Run the multi-agent coordinator pipeline and stream agent events.
+
+    Emits SSE agent events for Travel History → Stay Search → Coordinator
+    so the Live workflow panel shows each agent working. Returns a dict with
+    the itinerary (or an error) for the ``done`` frame.
+    """
+    from shared.schemas import TripRequest
+
+    def _emit(agent: str, label: str, status: str, detail: str = "", data: dict | None = None) -> None:
+        stream_queue.put(("event", {
+            "type": "agent",
+            "label": label,
+            "status": status,
+            "detail": detail,
+            "data": data or {},
+        }))
+
+    _emit("travel_history", "Travel History Agent", "running", "Checking travel history")
+    _emit("search_stays", "Stay Search Agent", "running", "Searching accommodations")
+    _emit("coordinate", "Coordinator Agent", "running", "Building itinerary")
+
+    trip_request = TripRequest(
+        destination=request_message.strip(),
+        user_id=user_id,
+        budget=None,
+        days=None,
+        interests=[],
+    )
+
+    try:
+        itinerary = coordinate(trip_request, session_id=session_id)
+
+        stay_count = len(itinerary.days[0].stays) if itinerary.days and itinerary.days[0].stays else 0
+        cost = itinerary.total_estimated_cost or 0
+        currency = itinerary.currency or ""
+
+        _emit("travel_history", "Travel History Agent", "completed", "History checked", {})
+        _emit("search_stays", "Stay Search Agent", "completed", f"{stay_count} stays evaluated", {})
+        _emit("coordinate", "Coordinator Agent", "completed", f"Itinerary ready: {currency}{cost}", {})
+
+        return {
+            "kind": "itinerary",
+            "itinerary": itinerary.model_dump(mode="json"),
+            "text": _format_itinerary_summary(itinerary),
+        }
+    except NoFeasiblePlanError as error:
+        _emit("coordinate", "Coordinator Agent", "error", str(error), {})
+        return {"kind": "error", "message": str(error)}
+
+
+def _format_itinerary_summary(itinerary: Any) -> str:
+    """Build a plain-text summary of the itinerary for the chat bubble."""
+    lines = [f"✈️ {itinerary.request.destination} — {len(itinerary.days)} day(s)"]
+    if itinerary.currency and itinerary.total_estimated_cost is not None:
+        lines.append(f"💰 Estimated total: {itinerary.currency}{itinerary.total_estimated_cost}")
+    for day in itinerary.days:
+        lines.append(f"\n**Day {day.day_index}**")
+        for stay in (day.stays or []):
+            lines.append(f"  🏨 {stay.name} — {stay.nightly_cost} {stay.currency or ''}/night")
+        for leg in (day.transports or []):
+            lines.append(f"  🚗 {leg.mode or 'transport'} — {leg.cost} {leg.currency or ''}")
+    if itinerary.notes:
+        lines.append(f"\n📝 {' | '.join(itinerary.notes[:3])}")
+    return "\n".join(lines)
+
+
 @app.post("/api/chat/stream")
 def chat_stream(request: ChatRequest) -> StreamingResponse:
     store = ConversationStore(get_settings().database_url)
@@ -477,20 +565,32 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                 except ValueError as error:
                     return {"ok": False, "tool": name, "error": str(error)}
 
+            use_multi_agent = _looks_like_trip_request(request.message)
+
             try:
-                for delta in client.stream(
-                    prompt,
-                    system=TRIP_PLANNING_SYSTEM_PROMPT,
-                    on_event=lambda event: stream_queue.put(("event", event)),
-                    tools=history_tools,
-                    tool_executor=tool_executor,
-                    on_pause=save_pause,
-                    session_id=conversation_id,
-                    trace_context=trace_context_for(trace),
-                    cancel_event=cancel_event,
-                ):
-                    stream_queue.put(("delta", delta))
-                stream_queue.put(("done", None))
+                if use_multi_agent:
+                    result = _run_multi_agent_plan(
+                        request.message,
+                        conversation_id,
+                        request.user_id or conversation_id,
+                        trace_context_for(trace),
+                        stream_queue,
+                    )
+                    stream_queue.put(("done", result))
+                else:
+                    for delta in client.stream(
+                        prompt,
+                        system=TRIP_PLANNING_SYSTEM_PROMPT,
+                        on_event=lambda event: stream_queue.put(("event", event)),
+                        tools=history_tools,
+                        tool_executor=tool_executor,
+                        on_pause=save_pause,
+                        session_id=conversation_id,
+                        trace_context=trace_context_for(trace),
+                        cancel_event=cancel_event,
+                    ):
+                        stream_queue.put(("delta", delta))
+                    stream_queue.put(("done", None))
             except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
                 stream_queue.put(("error", error))
 
@@ -522,6 +622,41 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                     continue
                 if kind == "done":
                     cancelled = cancel_event.is_set()
+                    if isinstance(payload, dict):
+                        if payload.get("kind") == "itinerary":
+                            itinerary = payload["itinerary"]
+                            assistant_message = {"role": "assistant", "content": payload["text"]}
+                            conversation_with_response = conversation + [assistant_message]
+                            store.save(
+                                conversation_id,
+                                conversation_with_response,
+                                [event.model_dump() for event in activity],
+                            )
+                            end_trace(trace, output=payload["text"])
+                            trace_finished = True
+                            yield (
+                                f"data: {json.dumps({'kind': 'done', 'text': payload['text'], 'reasoning': '', 'model': 'coordinator-multi-agent', 'stub': False, 'conversation_id': conversation_id, 'pending_question': None, 'events': [event.model_dump() for event in activity], 'itinerary': itinerary})}\n\n"
+                            )
+                            return
+                        if payload.get("kind") == "error":
+                            yield emit(
+                                ChatEvent(
+                                    type="model",
+                                    label="Multi-agent plan failed",
+                                    detail=payload["message"],
+                                    status="error",
+                                )
+                            )
+                            end_trace(
+                                trace,
+                                output={"error": payload["message"]},
+                                error=ValueError(payload["message"]),
+                            )
+                            trace_finished = True
+                            yield (
+                                f"data: {json.dumps({'kind': 'done', 'text': '', 'reasoning': '', 'model': 'coordinator-multi-agent', 'stub': False, 'conversation_id': conversation_id, 'pending_question': None, 'events': [event.model_dump() for event in activity]})}\n\n"
+                            )
+                            return
                     break
                 delta = payload
                 if delta["kind"] == "reasoning":
