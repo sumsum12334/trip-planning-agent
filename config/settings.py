@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     langfuse_host: str = Field(default="https://cloud.langfuse.com", alias="LANGFUSE_HOST")
     langfuse_enabled: bool = Field(default=False, alias="LANGFUSE_ENABLED")
 
+    # LangSmith (optional) — traces all LLM calls
+    langsmith_api_key: str = Field(default="", alias="LANGSMITH_API_KEY")
+    langsmith_endpoint: str = Field(default="https://api.smith.langchain.com", alias="LANGSMITH_ENDPOINT")
+    langsmith_project: str = Field(default="trip-planning-agent", alias="LANGSMITH_PROJECT")
+
     # Optional form default only — not a hard product requirement
     default_origin: str = Field(default="", alias="DEFAULT_ORIGIN")
 
