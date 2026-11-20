@@ -350,6 +350,10 @@ def ls_finish_generation(
     *,
     output: Any | None = None,
     error: Exception | None = None,
+    first_token_time: float | None = None,
+    latency: float | None = None,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
 ) -> None:
     """Finish a LangSmith LLM run with end_time so it is not stuck loading."""
     if run is None:
@@ -363,6 +367,10 @@ def ls_finish_generation(
                 outputs=output or {},
                 error=str(error) if error else None,
                 end_time=_now_iso(),
+                first_token_time=first_token_time,
+                latency=latency,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
             )
         try:
             setattr(run, "_trip_planner_langsmith_ended", True)
@@ -384,6 +392,10 @@ def ls_update_generation(
     *,
     output: Any | None = None,
     error: Exception | None = None,
+    first_token_time: float | None = None,
+    latency: float | None = None,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
 ) -> None:
     """Update a LangSmith LLM run output."""
     if run is None:
@@ -396,6 +408,10 @@ def ls_update_generation(
                 run_id=run_id,
                 outputs=output or {},
                 error=str(error) if error else None,
+                first_token_time=first_token_time,
+                latency=latency,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
             )
     except Exception:
         logger.exception("Could not update LangSmith model tracking.")
@@ -406,6 +422,10 @@ def finish_generation(
     *,
     output: Any | None = None,
     error: Exception | None = None,
+    first_token_time: float | None = None,
+    latency: float | None = None,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
 ) -> None:
     """Update an observation while keeping telemetry failures isolated."""
     if observation is None:
@@ -420,9 +440,18 @@ def finish_generation(
     except Exception:
         logger.exception("Could not finish Langfuse model tracking.")
     # Also finish the LangSmith run attached to this observation.
-    ls_run = getattr(observation, "_langsmith_run", None)
-    if ls_run is not None:
-        ls_finish_generation(ls_run, output=output, error=error)
+    ls_run_id = getattr(observation, "_langsmith_run_id", None)
+    ls_client = getattr(observation, "_langsmith_client", None)
+    if ls_client is not None and ls_run_id:
+        ls_finish_generation(
+            observation,
+            output=output,
+            error=error,
+            first_token_time=first_token_time,
+            latency=latency,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
 
 
 def update_generation(
@@ -430,6 +459,10 @@ def update_generation(
     *,
     output: Any | None = None,
     error: Exception | None = None,
+    first_token_time: float | None = None,
+    latency: float | None = None,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
 ) -> None:
     """Persist the current model output without ending the observation."""
     if observation is None:
@@ -443,6 +476,15 @@ def update_generation(
     except Exception:
         logger.exception("Could not update Langfuse model tracking.")
     # Also update the LangSmith run attached to this observation.
-    ls_run = getattr(observation, "_langsmith_run", None)
-    if ls_run is not None:
-        ls_update_generation(ls_run, output=output, error=error)
+    ls_run_id = getattr(observation, "_langsmith_run_id", None)
+    ls_client = getattr(observation, "_langsmith_client", None)
+    if ls_client is not None and ls_run_id:
+        ls_update_generation(
+            observation,
+            output=output,
+            error=error,
+            first_token_time=first_token_time,
+            latency=latency,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )

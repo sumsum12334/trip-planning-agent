@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from collections.abc import Callable, Iterator
 from typing import Any, Optional
 
@@ -150,6 +151,7 @@ class TACCClient:
             settings=self.settings,
         ) as generation:
             try:
+                request_start_time = time.perf_counter()
                 with httpx.Client(timeout=300.0) as client:
                     response = client.post(
                         self.base_url.rstrip("/") + "/chat/completions",
@@ -171,12 +173,23 @@ class TACCClient:
                     self._raise_for_status(response)
                     data = response.json()
                 text = data["choices"][0]["message"]["content"]
-                finish_generation(generation, output=text)
+                completion_tokens = max(len(text) // 4, 0)
+                finish_generation(
+                    generation,
+                    output=text,
+                    first_token_time=request_start_time,
+                    latency=time.perf_counter() - request_start_time,
+                    completion_tokens=completion_tokens,
+                )
             except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
+                completion_tokens = 0
                 finish_generation(
                     generation,
                     output={"error": str(error)},
                     error=error,
+                    first_token_time=None,
+                    latency=time.perf_counter() - request_start_time,
+                    completion_tokens=completion_tokens,
                 )
                 raise
         if on_event:
@@ -221,6 +234,8 @@ class TACCClient:
             on_event({"type": "model", "label": "Model is thinking", "detail": self.model, "status": "running"})
 
         cancelled = False
+        request_start_time = time.perf_counter()
+        first_chunk_time: float | None = None
         with httpx.Client(timeout=300.0) as client:
             while True:
                 if cancel_event is not None and cancel_event.is_set():
@@ -305,6 +320,8 @@ class TACCClient:
                                 if content:
                                     text = self._chunk_text(content)
                                     streamed_text.append(text)
+                                    if first_chunk_time is None:
+                                        first_chunk_time = time.perf_counter()
                                     update_generation(
                                         generation,
                                         output="".join(streamed_text),
@@ -333,12 +350,23 @@ class TACCClient:
                             }
                         else:
                             generation_output = {"text": ""}
-                        finish_generation(generation, output=generation_output)
+                        completion_tokens = max(len(output_text) // 4, 0)
+                        finish_generation(
+                            generation,
+                            output=generation_output,
+                            first_token_time=first_chunk_time,
+                            latency=time.perf_counter() - request_start_time,
+                            completion_tokens=completion_tokens,
+                        )
                     except (httpx.HTTPError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+                        completion_tokens = max(len("".join(streamed_text)) // 4, 0)
                         finish_generation(
                             generation,
                             output="".join(streamed_text) or {"error": str(error)},
                             error=error,
+                            first_token_time=first_chunk_time,
+                            latency=time.perf_counter() - request_start_time,
+                            completion_tokens=completion_tokens,
                         )
                         raise
                 if cancelled:
