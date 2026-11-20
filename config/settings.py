@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     # Baseline A = 0 (Agents 1–3); Proposed = 1 (include Agent 4 Travel_History)
     enable_travel_history: bool = Field(default=True, alias="ENABLE_TRAVEL_HISTORY")
 
+    # UI workflow: after a manual plan edit, offer "ask the AI to reconsider".
+    # Users can override this per browser via the Settings page.
+    reconsider_prompt_enabled: bool = Field(
+        default=True, alias="RECONSIDER_PROMPT_ENABLED"
+    )
+
     # Tools
     tool_stays_mode: Literal["stub", "overpass", "api"] = Field(default="stub", alias="TOOL_STAYS_MODE")
     tool_maps_mode: Literal["stub", "api"] = Field(default="stub", alias="TOOL_MAPS_MODE")

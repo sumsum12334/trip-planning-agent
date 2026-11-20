@@ -177,3 +177,30 @@ def test_api_live_tokyo_returns_live_prices(monkeypatch):
         assert stay.name, "stay should have a name"
         assert stay.location, "stay should have a location"
         assert stay.currency == "USD", f"expected USD currency, got {stay.currency}"
+
+
+def test_stub_stays_get_trip_com_search_links():
+    req = TripRequest(destination="Tokyo", budget=400, days=4)
+    stays = run(req)
+    assert stays
+    for stay in stays:
+        assert stay.source_url
+        assert stay.source_url.startswith("https://www.trip.com/hotels/list?")
+        assert "searchWord=" in stay.source_url
+
+
+def test_search_links_keep_provider_urls():
+    from agents.search_stays.agent import _with_search_links
+
+    real = StayCandidate(
+        name="Real Hotel", location="Tokyo", source_url="https://www.trip.com/hotels/real"
+    )
+    filled = _with_search_links([real], "Tokyo")
+    assert filled[0].source_url == "https://www.trip.com/hotels/real"
+
+
+def test_search_links_encode_query():
+    from agents.search_stays.agent import _trip_com_search_url
+
+    url = _trip_com_search_url("Park Hyatt", "Tokyo")
+    assert url == "https://www.trip.com/hotels/list?searchWord=Park+Hyatt+Tokyo"

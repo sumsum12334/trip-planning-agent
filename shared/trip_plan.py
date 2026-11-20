@@ -18,6 +18,7 @@ continuation endpoints consistent.
 
 from __future__ import annotations
 
+import datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -112,6 +113,13 @@ TRIP_PLAN_TOOLS: list[dict[str, Any]] = [
                     "destination": {"type": "string"},
                     "destination_coordinates": _COORDINATE_SCHEMA,
                     "airport": _AIRPORT_SCHEMA,
+                    "start_date": {
+                        "type": "string",
+                        "description": (
+                            "Trip start (arrival) date in YYYY-MM-DD format, when "
+                            "the user mentioned one. Drives the UI weather view."
+                        ),
+                    },
                     "currency": {"type": "string"},
                     "budget": {"type": "number", "minimum": 0, "description": "Estimated total budget (independent of item breakdowns)."},
                     "notes": {"type": "array", "items": {"type": "string"}},
@@ -276,6 +284,28 @@ def _number_or_none(value: Any) -> float | None:
     return float(value)
 
 
+def _date_string(value: Any, *, field: str) -> str:
+    """Validate a required-format ISO ``YYYY-MM-DD`` date string."""
+    text = str(value or "").strip()
+    try:
+        datetime.date.fromisoformat(text)
+    except ValueError as error:
+        raise ValueError(f"{field} must be a YYYY-MM-DD date.") from error
+    return text
+
+
+def _date_or_none(value: Any) -> str | None:
+    """Lenient ISO date read for stored plans; invalid values become None."""
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    try:
+        datetime.date.fromisoformat(text)
+    except ValueError:
+        return None
+    return text
+
+
 def _places(value: Any, *, day_number: int) -> list[dict[str, Any]]:
     """Normalize an optional list of per-day places with coordinates and links."""
     if value in (None, ""):
@@ -422,6 +452,7 @@ def empty_trip_plan() -> dict[str, Any]:
         "destination": "",
         "destination_coordinates": None,
         "airport": None,
+        "start_date": None,
         "currency": "",
         "budget": None,
         "budget_items": [],
@@ -459,6 +490,7 @@ def assemble_trip_plan(plan: dict[str, Any] | None) -> dict[str, Any]:
         "destination": str(source.get("destination", "")).strip(),
         "destination_coordinates": source.get("destination_coordinates") or None,
         "airport": source.get("airport") or None,
+        "start_date": _date_or_none(source.get("start_date")),
         "currency": str(source.get("currency", "")).strip()[:MAX_CURRENCY_CHARS],
         "budget": _number_or_none(source.get("budget")),
         "budget_items": source.get("budget_items") if isinstance(source.get("budget_items"), list) else [],
@@ -506,6 +538,13 @@ def apply_trip_plan_tool(
             )
         if "airport" in arguments:
             current["airport"] = _airport(arguments.get("airport"))
+        if "start_date" in arguments:
+            # An empty value clears the date; otherwise it must parse as ISO.
+            current["start_date"] = (
+                _date_string(arguments.get("start_date"), field="start_date")
+                if str(arguments.get("start_date") or "").strip()
+                else None
+            )
         if "currency" in arguments:
             currency = str(arguments.get("currency", "")).strip()[:MAX_CURRENCY_CHARS]
             current["currency"] = currency
@@ -620,6 +659,7 @@ def format_plan_context(context: dict[str, Any] | None) -> str:
     days = context.get("days") if isinstance(context.get("days"), list) else []
     airport = context.get("airport") if isinstance(context.get("airport"), dict) else None
     total = context.get("budget")
+    start_date = context.get("start_date")
     if not destination and total in (None, "") and not items and not days:
         return ""
     lines = [
@@ -630,6 +670,8 @@ def format_plan_context(context: dict[str, Any] | None) -> str:
         lines.append(f"- Destination: {destination}")
     if airport and str(airport.get("name", "")).strip():
         lines.append(f"- Arrival airport: {str(airport['name']).strip()}")
+    if start_date:
+        lines.append(f"- Start date: {start_date}")
     if total not in (None, ""):
         lines.append(f"- Total budget: {currency + ' ' if currency else ''}{total}")
     for day in days:

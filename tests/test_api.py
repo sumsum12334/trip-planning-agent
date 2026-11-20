@@ -203,6 +203,7 @@ def test_settings_endpoints(client: TestClient) -> None:
     current = client.get("/api/settings")
     assert current.status_code == 200
     assert current.json()["qwen_configured"] is False
+    assert current.json()["reconsider_prompt_enabled"] is True
 
     updated = client.put(
         "/api/settings/model",

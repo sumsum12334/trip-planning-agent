@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from typing import Any
+from urllib.parse import urlencode, urlparse
 
 from config.settings import get_settings
 from shared.history_match import stay_overlaps_places
@@ -31,6 +32,34 @@ def _overlaps_excluded(stay: StayCandidate, excluded: set[str]) -> bool:
     if not excluded:
         return False
     return stay_overlaps_places(stay.name, stay.location, excluded)
+
+
+def _trip_com_search_url(name: str, destination: str) -> str:
+    """Build a trip.com hotel-search link for a stay without a provider URL."""
+    query = " ".join(part for part in (name.strip(), destination.strip()) if part)
+    return "https://www.trip.com/hotels/list?" + urlencode({"searchWord": query})
+
+
+def _needs_search_link(url: str | None) -> bool:
+    """True when a stay has no real provider link (missing or placeholder)."""
+    text = str(url or "").strip()
+    if not text:
+        return True
+    try:
+        host = urlparse(text).netloc.casefold()
+    except ValueError:
+        return True
+    return (not host) or "example.com" in host
+
+
+def _with_search_links(
+    candidates: list[StayCandidate], destination: str
+) -> list[StayCandidate]:
+    """Give every stay a clickable travel-site link when the provider has none."""
+    for stay in candidates:
+        if _needs_search_link(stay.source_url):
+            stay.source_url = _trip_com_search_url(stay.name, destination)
+    return candidates
 
 
 def run(
@@ -63,6 +92,7 @@ def run(
         for place in excluded_locations
         if place and place.strip() and place.strip().casefold() != destination
     }
+    candidates = _with_search_links(candidates, request.destination)
     if not excluded:
         return candidates
     return [stay for stay in candidates if not _overlaps_excluded(stay, excluded)]

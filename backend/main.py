@@ -277,6 +277,7 @@ def public_settings() -> dict:
         "endpoint_url": model_config["base_url"],
         "api_key_configured": bool(model_config["api_key"]),
         "enable_travel_history": s.enable_travel_history,
+        "reconsider_prompt_enabled": s.reconsider_prompt_enabled,
         "tool_stays_mode": s.tool_stays_mode,
         "tool_maps_mode": s.tool_maps_mode,
         "web_search_mode": s.web_search_mode,
