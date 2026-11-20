@@ -9,7 +9,8 @@ from agents.chat_tools import AGENT_TOOL_NAMES, AGENT_TOOL_SCHEMAS, execute_agen
 
 def test_schemas_cover_expected_agent_tools():
     names = {schema["function"]["name"] for schema in AGENT_TOOL_SCHEMAS}
-    assert names == AGENT_TOOL_NAMES == {"search_stays", "estimate_transport", "web_search", "weather"}
+    # Weather is deliberately absent: the trip-plan UI integrates it directly.
+    assert names == AGENT_TOOL_NAMES == {"search_stays", "estimate_transport", "web_search"}
 
 
 def test_search_stays_returns_stub_candidates():
@@ -54,22 +55,13 @@ def test_web_search_stub_mode():
     assert result["results"]
 
 
-def test_weather_stub_mode():
-    result = execute_agent_tool("weather", {"destination": "Kyoto"})
-    assert result["destination"] == "Kyoto"
-    assert result["mode"] == "stub"
-    assert result["condition"]
-    assert result["stub"] is True
-    assert result["temperature_c"] is not None
-
-
 @pytest.mark.parametrize(
     "name,arguments",
     [
         ("search_stays", {"destination": "  "}),
         ("estimate_transport", {"from_place": "A"}),
         ("web_search", {"query": ""}),
-        ("weather", {"destination": "  "}),
+        ("weather", {"destination": "Kyoto"}),
         ("not_a_tool", {}),
     ],
 )

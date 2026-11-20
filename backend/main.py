@@ -356,6 +356,22 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
     memory_user_id = request.user_id or conversation_id
     remembered_places = remember_from_message(memory_user_id, request.message)
     history_store = TravelHistoryStore(get_settings().database_url)
+    # Make the coordinator's mandatory travel-history check verifiable even if
+    # the model skips the tool call: surface the known places up front (labeled,
+    # capped) and require the search in the system prompt.
+    known_places = (
+        history_store.list_places(memory_user_id)[:20]
+        if get_settings().enable_travel_history
+        else []
+    )
+    if known_places:
+        prompt = (
+            "Known travel history for this user (always verify with the "
+            "search_travel_history tool before planning): "
+            + ", ".join(known_places)
+            + "\n\n"
+            + prompt
+        )
     history_tools = [{
         "type": "function",
         "function": {

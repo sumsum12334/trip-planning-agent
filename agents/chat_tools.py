@@ -4,6 +4,10 @@ These wrap the existing agent modules (Agent 1 `search_stays`, Agent 2
 `estimate_transport`, and the optional `web_search`) so the chat model can call
 them during a turn. Provider failures are returned as labeled error results so a
 single failed tool does not abort the whole turn.
+
+Weather is intentionally NOT a chat tool: the trip-plan UI integrates it
+directly (per-day forecasts via POST /agents/weather), so the model neither
+calls nor fabricates forecasts.
 """
 
 from __future__ import annotations
@@ -15,11 +19,10 @@ import httpx
 from agents.estimate_transport.agent import run as estimate_transport_run
 from agents.search_stays.agent import run as search_stays_run
 from agents.web_search.agent import run as web_search_run
-from agents.weather.agent import run as weather_run
 from config.settings import get_settings
 from shared.schemas import TripRequest
 
-AGENT_TOOL_NAMES = {"search_stays", "estimate_transport", "web_search", "weather"}
+AGENT_TOOL_NAMES = {"search_stays", "estimate_transport", "web_search"}
 
 AGENT_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
@@ -79,25 +82,6 @@ AGENT_TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "limit": {"type": "integer", "minimum": 1, "maximum": 10},
                 },
                 "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "weather",
-            "description": (
-                "Get approximate weather conditions for a destination. "
-                "Results are stub estimates, not live forecasts."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "destination": {"type": "string"},
-                    "start_date": {"type": "string", "format": "date", "description": "Optional start date (YYYY-MM-DD)"},
-                    "end_date": {"type": "string", "format": "date", "description": "Optional end date (YYYY-MM-DD)"},
-                },
-                "required": ["destination"],
             },
         },
     },
@@ -174,13 +158,5 @@ def execute_agent_tool(name: str, arguments: dict[str, Any]) -> Any:
         except httpx.HTTPError as error:
             return {"mode": mode, "error": f"Web search failed: {error}", "results": []}
         return {"mode": mode, "results": [result.model_dump() for result in results]}
-
-    if name == "weather":
-        destination = str(arguments.get("destination", "")).strip()
-        if not destination:
-            raise ValueError("weather requires a destination.")
-        start_date = arguments.get("start_date")
-        end_date = arguments.get("end_date")
-        return weather_run(destination, start_date, end_date)
 
     raise ValueError(f"Unknown agent tool requested: {name}")
