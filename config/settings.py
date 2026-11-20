@@ -46,7 +46,10 @@ class Settings(BaseSettings):
     )
 
     # Tools
-    tool_stays_mode: Literal["stub", "overpass", "api"] = Field(default="stub", alias="TOOL_STAYS_MODE")
+    # TOOL_STAYS_MODE=web prefers live web-search results (requires
+    # WEB_SEARCH_MODE=duckduckgo); "api" is the legacy OBO Travel provider.
+    # Default stays "stub" (offline-safe).
+    tool_stays_mode: Literal["stub", "overpass", "api", "web"] = Field(default="stub", alias="TOOL_STAYS_MODE")
     tool_maps_mode: Literal["stub", "api"] = Field(default="stub", alias="TOOL_MAPS_MODE")
     web_search_mode: Literal["stub", "duckduckgo"] = Field(
         default="stub", alias="WEB_SEARCH_MODE"
@@ -83,9 +86,10 @@ class Settings(BaseSettings):
     overpass_timeout: float = Field(default=30.0, alias="OVERPASS_TIMEOUT")
     overpass_radius_meters: int = Field(default=5000, alias="OVERPASS_RADIUS_METERS")
 
-    # --- Stay search provider (Agent 1, used when TOOL_STAYS_MODE=api) ---
-    # OBO Travel MCP API (https://onebookingonline.com/mcp) — free, no auth
-    # required for keyless access (30 req/min, 500 req/day). Set
+    # --- Stay search provider (Agent 1, legacy; used when TOOL_STAYS_MODE=api) ---
+    # OBO Travel MCP API (https://onebookingonline.com/mcp) — kept for
+    # rollback; prefer TOOL_STAYS_MODE=web (live web-search results).
+    # Free, no auth required for keyless access (30 req/min, 500 req/day). Set
     # STAYS_API_KEY for higher limits (60 req/min, 2000 req/day).
     stays_api_base_url: str = Field(
         default="https://onebookingonline.com/mcp", alias="STAYS_API_BASE_URL"

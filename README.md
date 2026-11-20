@@ -67,7 +67,10 @@ Agent 1 uses the curated stub catalog in `agents/search_stays/tools.py`
 (city match + generic fallback, ordered by nightly cost under budget/nights).
 `run(..., excluded_locations=...)` filters out name/location overlaps from
 Agent 4 when `avoid_visited=true`. Direct probe: `POST /agents/search_stays`.
-`TOOL_STAYS_MODE=api` fails explicitly until a real provider is configured.
+`TOOL_STAYS_MODE=web` sources live stay results from the DuckDuckGo
+web-search tool (requires `WEB_SEARCH_MODE=duckduckgo`; falls back to the
+labeled stub catalog when web search is unavailable).
+`TOOL_STAYS_MODE=api` is the legacy OBO Travel provider, kept for rollback.
 
 Agent 4 uses `DATABASE_URL` and stores visits in the `travel_history`
 table, keyed by `TripRequest.user_id`. It returns distinct places in
@@ -231,15 +234,18 @@ as reservations or verified live availability.
 ### Stay search (Agent 1)
 
 `search_stays` returns accommodation candidates under budget near the
-destination. Three modes are controlled by `TOOL_STAYS_MODE`:
+destination. Four modes are controlled by `TOOL_STAYS_MODE`:
 
 | Mode | Source | Returns |
 |------|--------|---------|
 | `stub` | Curated local catalog | Name, location, nightly cost, phone, website, rating, amenities |
 | `overpass` | OpenStreetMap Overpass API | Real names, coordinates, addresses, star ratings (no cost/availability) |
-| `api` | OBO Travel MCP | Live nightly rates, booking URLs, star ratings, cancellation policy |
+| `web` | DuckDuckGo web search (via `agents/web_search`) | Real stay pages with provenance (`web search: <host>`); nightly prices parsed from snippets when confidently listed (normalized to approximate USD), labeled estimates otherwise |
+| `api` | OBO Travel MCP (legacy, kept for rollback) | Live nightly rates, booking URLs, star ratings, cancellation policy |
 
-Set `TOOL_STAYS_MODE` in `.env` (default: `stub`). For `api` mode, also set
+Set `TOOL_STAYS_MODE` in `.env` (default: `stub`). `web` mode also needs
+`WEB_SEARCH_MODE=duckduckgo`; when web search is unavailable it falls back to
+the labeled stub catalog. For legacy `api` mode, also set
 `STAYS_API_BASE_URL=https://onebookingonline.com/mcp`. The OBO Travel API is
 free for anonymous use (30 req/min, 500 req/day); no signup or credit card
 required.
@@ -389,11 +395,12 @@ errors.
 | `MODEL_MAX_TOKENS` / `MODEL_TEMPERATURE` / `MODEL_TOP_P` / `MODEL_REASONING_BUDGET` | Sampling defaults sent in the chat-completions payload (defaults: `16384` / `1.0` / `0.95` / `16384`). |
 | `MODEL_ENABLE_THINKING` | Optional override for Qwen thinking mode. Unset keeps the default: enabled while streaming, disabled for one-shot completions. |
 | `ENABLE_TRAVEL_HISTORY` | `1` = proposed (Agent1–4); `0` = Baseline A (Agent1–3) |
-| `TOOL_STAYS_MODE` | `stub` (default, offline-safe), `overpass` (OpenStreetMap, no auth), `api` (OBO Travel, live prices) |
+| `TOOL_STAYS_MODE` | `stub` (default, offline-safe), `overpass` (OpenStreetMap, no auth), `web` (live web-search results; needs `WEB_SEARCH_MODE=duckduckgo`, falls back to stub), `api` (OBO Travel — legacy, kept for rollback) |
 | `TOOL_MAPS_MODE` | `stub` or `api` |
+| `WEB_SEARCH_MODE` | `stub` (default, offline-safe) or `duckduckgo` (live DuckDuckGo HTML search; powers the web-search tool and `TOOL_STAYS_MODE=web`) |
 | `WEATHER_MODE` | `stub` (default, offline-safe) or `open-meteo` (live Open-Meteo forecasts, no auth; falls back to stub on failure) |
 | `GEOCODING_ENABLED` | Set to `1` to resolve Overpass destinations with rate-limited Nominatim geocoding |
-| `STAYS_API_BASE_URL` | OBO Travel MCP base URL, e.g. `https://onebookingonline.com/mcp` (used when `TOOL_STAYS_MODE=api`) |
+| `STAYS_API_BASE_URL` | OBO Travel MCP base URL, e.g. `https://onebookingonline.com/mcp` (legacy; used when `TOOL_STAYS_MODE=api`) |
 | `STAYS_API_KEY` | Optional OBO Travel API key for higher rate limits |
 | `STAYS_API_TIMEOUT` | Request timeout seconds (default 30) |
 | `OVERPASS_API_URL` | Comma-separated Overpass mirror URLs (used when `TOOL_STAYS_MODE=overpass`) |

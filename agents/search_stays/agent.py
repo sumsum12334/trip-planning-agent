@@ -3,11 +3,11 @@
 Provider selection is driven by ``TOOL_STAYS_MODE``:
   * ``stub``   — curated local catalog (default, offline-safe).
   * ``overpass`` — real OpenStreetMap lodging via Overpass API (no auth).
-  * ``api``    — real accommodation provider via OBO Travel MCP API
-                 (live prices, booking URLs, no API key required).
-
-OBO Travel requires destination and dates (check_in/check_out). Dates are
-derived from TripRequest.start_date/end_date or from ``days``.
+  * ``web``    — live results via the shared DuckDuckGo web-search tool
+                 (preferred live mode; needs ``WEB_SEARCH_MODE=duckduckgo``,
+                 falls back to the stub catalog when search is unavailable).
+  * ``api``    — legacy OBO Travel MCP provider (live prices, booking URLs,
+                 no API key required). Kept for rollback; prefer ``web``.
 """
 
 from __future__ import annotations
@@ -131,7 +131,7 @@ def run(
     """
     settings = get_settings()
     mode = settings.tool_stays_mode
-    if mode not in ("stub", "overpass", "api"):
+    if mode not in ("stub", "overpass", "api", "web"):
         # tools.search_stays already falls back to stub for unknown modes
         pass
 
@@ -167,7 +167,14 @@ def health() -> dict[str, Any]:
             "offline_safe": False,
             "timeout_seconds": s.overpass_timeout,
         }
-    elif s.tool_stays_mode == "api":
+    elif s.tool_stays_mode == "web":
+        engine = s.web_search_mode
+        provider_info = {
+            "provider": "web_search",
+            "engine_mode": engine,
+            "offline_safe": engine == "stub",  # stub engine falls back to the catalog
+        }
+    elif s.tool_stays_mode == "api":  # legacy; prefer web
         provider_info = {
             "provider": "obo_travel",
             "endpoint": s.stays_api_base_url,
@@ -179,7 +186,9 @@ def health() -> dict[str, Any]:
         provider_configured = True
     elif s.tool_stays_mode == "overpass":
         provider_configured = bool(s.overpass_api_url.strip())
-    else:  # api
+    elif s.tool_stays_mode == "web":
+        provider_configured = True  # DuckDuckGo search needs no key
+    else:  # api (legacy OBO Travel)
         provider_configured = bool(s.stays_api_base_url.strip())
 
     return {
