@@ -29,6 +29,8 @@ export function HistoryPage({ userId }) {
   const [editForm, setEditForm] = useState("");
   const [editingCity, setEditingCity] = useState(null); // { country, originalCity }
   const [editCityForm, setEditCityForm] = useState("");
+  const [editingLocationId, setEditingLocationId] = useState(null); // id of the entry whose location is being edited
+  const [editLocationForm, setEditLocationForm] = useState("");
   
   async function load() {
     const response = await fetch(`/api/travel-history?user_id=${encodeURIComponent(userId)}`);
@@ -90,10 +92,22 @@ export function HistoryPage({ userId }) {
       setEditingCity(null);
       return;
     }
+    // Group headings render "Unspecified country"/"Unspecified city" for empty
+    // values, so normalize those sentinels back to empty when filtering.
+    const countryName = country.trim();
+    const cityName = originalCity.trim();
     const entriesToUpdate = entries.filter(
-      (e) => (e.country || "").trim() === country.trim() &&
-             (e.city || "").trim() === originalCity.trim()
+      (e) =>
+        ((e.country || "").trim() === countryName ||
+          (!(e.country || "").trim() && countryName === "Unspecified country")) &&
+        ((e.city || "").trim() === cityName ||
+          (!(e.city || "").trim() && cityName === "Unspecified city"))
     );
+    if (!entriesToUpdate.length) {
+      setEditingCity(null);
+      setStatus(`No entries found for city "${cityName}" in "${countryName}" - rename cancelled`);
+      return;
+    }
     for (const entry of entriesToUpdate) {
       const response = await fetch(`/api/travel-history/${entry.id}?user_id=${encodeURIComponent(userId)}`, {
         method: "PUT",
@@ -113,6 +127,30 @@ export function HistoryPage({ userId }) {
   function startEditCity(country, city) {
     setEditingCity({ country, originalCity: city });
     setEditCityForm(city);
+  }
+
+  function startEditLocation(entry) {
+    setEditingLocationId(entry.id);
+    setEditLocationForm(entry.location || "");
+  }
+
+  async function updateLocation(entry, newLocation) {
+    const value = newLocation.trim();
+    if (!value || value === entry.location) {
+      setEditingLocationId(null);
+      return;
+    }
+    const response = await fetch(`/api/travel-history/${entry.id}?user_id=${encodeURIComponent(userId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...entry, location: value }),
+    });
+    if (!response.ok) {
+      setStatus(`Failed to update ${entry.location}`);
+      return;
+    }
+    setEditingLocationId(null);
+    await load();
   }
 
   const countries = useMemo(() => {
@@ -233,13 +271,45 @@ export function HistoryPage({ userId }) {
                           </Box>
                         )}
                         {cityGroup.items.map((entry) => (
-                          <div className="history-entry" key={entry.id}>
-                            <span className="place-pin">●</span>
-                            <div><strong>{entry.location}</strong></div>
-                            <IconButton className="icon-button danger" color="error" title="Remove visit" onClick={() => remove(entry.id)} sx={{ ml: "auto" }}>
-                              <DeleteOutlinedIcon fontSize="small" />
-                            </IconButton>
-                          </div>
+                          editingLocationId === entry.id ? (
+                            <div className="history-entry" key={entry.id}>
+                              <span className="place-pin">●</span>
+                              <TextField
+                                size="small"
+                                value={editLocationForm}
+                                onChange={(e) => setEditLocationForm(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') updateLocation(entry, editLocationForm);
+                                  if (e.key === 'Escape') setEditingLocationId(null);
+                                }}
+                                sx={{ flex: 1, minWidth: 150 }}
+                                autoFocus
+                              />
+                              <Tooltip title="Save">
+                                <IconButton size="small" onClick={() => updateLocation(entry, editLocationForm)}>
+                                  <SaveIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                              <Tooltip title="Cancel">
+                                <IconButton size="small" onClick={() => setEditingLocationId(null)}>
+                                  <CancelIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            </div>
+                          ) : (
+                            <div className="history-entry" key={entry.id}>
+                              <span className="place-pin">●</span>
+                              <div><strong>{entry.location}</strong></div>
+                              <Tooltip title="Edit location">
+                                <IconButton size="small" onClick={() => startEditLocation(entry)}>
+                                  <EditIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                              <IconButton className="icon-button danger" color="error" title="Remove visit" onClick={() => remove(entry.id)} sx={{ ml: "auto" }}>
+                                <DeleteOutlinedIcon fontSize="small" />
+                              </IconButton>
+                            </div>
+                          )
                         ))}
                       </Box>
                     );
