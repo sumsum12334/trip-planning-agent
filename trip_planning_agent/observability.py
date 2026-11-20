@@ -6,6 +6,7 @@ import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
 from threading import Lock
+from types import SimpleNamespace
 from typing import Any, Iterator, Optional
 
 from config.settings import Settings, get_settings
@@ -284,10 +285,21 @@ def model_generation(
                 tags=["trip-planning-agent", "llm-call", model],
                 metadata={"model": model, **(metadata or {})},
             )
+
+        # Expose the LangSmith run on the observation so callers that only
+        # call finish_generation() also complete the LangSmith trace.
+        if observation is not None and ls_run is not None:
+            observation._langsmith_run = ls_run  # type: ignore[attr-defined]
+
     except Exception:
         logger.exception("Tracking failed for model request %s.", name)
         observation = None
         ls_run = None
+
+    # When Langfuse is disabled but LangSmith is enabled, observation is None.
+    # Wrap the run in a minimal object so finish_generation() can find it.
+    if observation is None and ls_run is not None:
+        observation = SimpleNamespace(_langsmith_run=ls_run)
 
     try:
         yield observation
@@ -297,7 +309,7 @@ def model_generation(
             # finish_generation; close the generation so telemetry sees it end.
             if observation is not None and not getattr(observation, _ENDED_MARKER, False):
                 finish_generation(observation)
-            if ls_run is not None and not getattr(ls_run, "_trip_planner_langsmith_ended", False):
+            elif ls_run is not None and not getattr(ls_run, "_trip_planner_langsmith_ended", False):
                 ls_finish_generation(ls_run)
         finally:
             try:
@@ -373,6 +385,10 @@ def finish_generation(
             pass
     except Exception:
         logger.exception("Could not finish Langfuse model tracking.")
+    # Also finish the LangSmith run attached to this observation.
+    ls_run = getattr(observation, "_langsmith_run", None)
+    if ls_run is not None:
+        ls_finish_generation(ls_run, output=output, error=error)
 
 
 def update_generation(
@@ -392,3 +408,7 @@ def update_generation(
         )
     except Exception:
         logger.exception("Could not update Langfuse model tracking.")
+    # Also update the LangSmith run attached to this observation.
+    ls_run = getattr(observation, "_langsmith_run", None)
+    if ls_run is not None:
+        ls_update_generation(ls_run, output=output, error=error)
