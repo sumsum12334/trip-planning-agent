@@ -40,6 +40,7 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
 
   // Weather date state - read-only display
   const [weatherFromDate, setWeatherFromDate] = useState(() => plan.start_date ? String(plan.start_date) : "");
+  const [weatherToDate, setWeatherToDate] = useState("");
   const [weatherData, setWeatherData] = useState({});
   const [weatherLoading, setWeatherLoading] = useState({});
   const [weatherError, setWeatherError] = useState({});
@@ -49,6 +50,18 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
   const [staysLoading, setStaysLoading] = useState(false);
   const [staysError, setStaysError] = useState("");
   const [staysDialogOpen, setStaysDialogOpen] = useState(false);
+
+  // Calculate the covered date range (start date + day count)
+  useEffect(() => {
+    if (weatherFromDate && days.length > 0) {
+      const from = new Date(weatherFromDate + "T00:00:00");
+      const to = new Date(from);
+      to.setDate(from.getDate() + days.length - 1);
+      setWeatherToDate(to.toISOString().split("T")[0]);
+    } else {
+      setWeatherToDate("");
+    }
+  }, [weatherFromDate, days.length]);
 
   // Sync weather from date with plan (also picks up a changed start_date)
   useEffect(() => {
@@ -173,6 +186,17 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
             <span className="plan-start-chip" title="Trip start date">From {formatPlanDate(plan.start_date)}</span>
           )}
         </div>
+        {/* Weather summary (direct UI integration, refreshed per plan edit) */}
+        {days.length > 0 && weatherFromDate && (
+          <div className="weather-date-selector">
+            <span className="weather-date-label">🌤 Weather (est.): {weatherFromDate} → {weatherToDate}</span>
+            {Object.keys(weatherData).length > 0 && (
+              <span className="weather-data-chip">
+                {days.map((d) => weatherData[d.day]?.condition && `${d.day}: ${weatherData[d.day].temperature_c != null ? weatherData[d.day].temperature_c + "°C" : "?"}`).join(" · ")}
+              </span>
+            )}
+          </div>
+        )}
       </div>
       <span>✦</span>
     </div>

@@ -119,7 +119,7 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .trip-map-links a{color:#3f6fc4;font-weight:600;text-decoration:none}
 .trip-map-links a:hover{text-decoration:underline}
 .trip-map-marker{background:transparent;border:0}
-.trip-map-marker span{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:#6c63ff;color:#fff;font-weight:700;font-size:12px;border:2px solid #fff;box-shadow:0 2px 8px #33406b80}
+.trip-map-marker span{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:#3b5ecb;color:#fff;font-weight:700;font-size:12px;border:2px solid #fff;box-shadow:0 2px 8px #33406b80}
 .trip-places{display:flex;flex-wrap:wrap;gap:8px;margin-top:7px}
 .trip-places a,.trip-places span{color:#4b6ea8;font-size:11px;text-decoration:none}
 .trip-places a:hover{text-decoration:underline}
@@ -229,7 +229,8 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 /* Day/map cross-references */
 .trip-day-head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
 .day-map-ref{flex:0 0 auto;padding:2px 7px;border-radius:999px;background:#e8f0ff;color:#3f6fc4;font-size:10px;font-weight:700;white-space:nowrap}
-.place-marker-ref{display:inline-grid;place-items:center;width:15px;height:15px;margin-right:4px;border-radius:50%;background:#6c63ff;color:#fff;font-size:9px;font-weight:700;vertical-align:middle}
+.place-marker-ref{display:inline-grid;place-items:center;width:15px;height:15px;margin-right:4px;border-radius:50%;background:#3b5ecb;color:#fff;font-size:9px;font-weight:700;vertical-align:middle}
+.app[data-color-mode="dark"] .place-marker-ref{background:#9db8ff;color:#17233d}
 .app[data-color-mode="dark"] .day-map-ref{background:rgba(106,168,255,0.18);color:#9db8ff}
 
 /* Live workflow text + current-agent chip (light) */
@@ -435,8 +436,14 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .question-alert-text{flex:1;min-width:0}
 .app[data-color-mode="dark"] .question-alert{background:#2a171c;border-color:#5a3038;color:#f0a0ad}
 
-/* Weather loading indicator - the only toolbar weather element */
+/* Weather summary - lives in the plan header, refreshed by the UI itself */
+.weather-date-selector{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px;padding:2px 8px;background:#f1f7ff;border-radius:8px;border:1px solid #dbe6f7;width:fit-content;max-width:100%}
+.weather-date-label{font-size:11px;font-weight:700;color:#3f5f95;white-space:nowrap}
+.weather-data-chip{font-size:11px;color:#6c63ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .weather-loading-chip{font-size:11px;color:#aa6c16;white-space:nowrap}
+.app[data-color-mode="dark"] .weather-date-selector{background:#152033;border-color:rgba(106,168,255,0.28);color:#cfd8f5}
+.app[data-color-mode="dark"] .weather-date-label{color:#9db8ff}
+.app[data-color-mode="dark"] .weather-data-chip{color:#8bb4ff}
 
 /* Stays action button row */
 .trip-stays-action{margin-top:14px;padding-top:12px;border-top:1px solid #e2ebf8;display:flex;justify-content:flex-end}
