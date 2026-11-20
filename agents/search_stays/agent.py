@@ -14,11 +14,12 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from typing import Any
-from urllib.parse import urlencode, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from config.settings import get_settings
 from shared.history_match import stay_overlaps_places
 from shared.schemas import StayCandidate, TripRequest
+from agents.web_search import run as web_search_run
 
 from . import tools
 
@@ -34,10 +35,9 @@ def _overlaps_excluded(stay: StayCandidate, excluded: set[str]) -> bool:
     return stay_overlaps_places(stay.name, stay.location, excluded)
 
 
-def _trip_com_search_url(name: str, destination: str) -> str:
-    """Build a trip.com hotel-search link for a stay without a provider URL."""
-    query = " ".join(part for part in (name.strip(), destination.strip()) if part)
-    return "https://www.trip.com/hotels/list?" + urlencode({"searchWord": query})
+def _trip_com_search_url(query: str) -> str:
+    """Build a trip.com hotel-search link for a destination or hotel name."""
+    return "https://www.trip.com/hotels/list?" + urlencode({"searchWord": query.strip()})
 
 
 def _needs_search_link(url: str | None) -> bool:
@@ -52,13 +52,71 @@ def _needs_search_link(url: str | None) -> bool:
     return (not host) or "example.com" in host
 
 
+def _unwrap_result_url(url: str) -> str:
+    """Resolve DuckDuckGo redirect wrappers (…/l/?uddg=…) to the target page."""
+    text = str(url or "").strip()
+    if not text:
+        return ""
+    if text.startswith("//"):
+        text = "https:" + text
+    try:
+        parsed = urlparse(text)
+    except ValueError:
+        return text
+    if "duckduckgo.com" in parsed.netloc.casefold():
+        return parse_qs(parsed.query).get("uddg", [""])[0] or text
+    return text
+
+
+def _verified_trip_com_urls(
+    candidates: list[StayCandidate], destination: str
+) -> dict[str, str]:
+    """Ask the live web-search agent which stays actually appear on trip.com.
+
+    Only runs when WEB_SEARCH_MODE=duckduckgo; the stub mode never touches the
+    network, so those stays fall back to a destination-level search link.
+    """
+    settings = get_settings()
+    if getattr(settings, "web_search_mode", "stub") != "duckduckgo":
+        return {}
+    verified: dict[str, str] = {}
+    for stay in candidates:
+        if not _needs_search_link(stay.source_url):
+            continue
+        try:
+            results = web_search_run(
+                f"{stay.name} {destination} hotel trip.com", limit=5
+            )
+        except Exception:
+            continue
+        for result in results:
+            url = _unwrap_result_url(str(getattr(result, "url", "") or ""))
+            try:
+                host = urlparse(url).netloc.casefold()
+            except ValueError:
+                continue
+            if "trip.com" in host:
+                verified[stay.name] = url
+                break
+    return verified
+
+
 def _with_search_links(
     candidates: list[StayCandidate], destination: str
 ) -> list[StayCandidate]:
-    """Give every stay a clickable travel-site link when the provider has none."""
+    """Give every stay a clickable travel-site link when the provider has none.
+
+    Real provider URLs (booking APIs, Overpass websites) are kept. Otherwise a
+    live web search verifies the hotel on trip.com when available; the fallback
+    is a destination-level trip.com search, which always lists hotels instead
+    of dead-ending on a name the site may not know.
+    """
+    verified = _verified_trip_com_urls(candidates, destination)
     for stay in candidates:
         if _needs_search_link(stay.source_url):
-            stay.source_url = _trip_com_search_url(stay.name, destination)
+            stay.source_url = verified.get(stay.name) or _trip_com_search_url(
+                destination
+            )
     return candidates
 
 

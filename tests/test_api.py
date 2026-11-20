@@ -419,6 +419,52 @@ def test_trip_plan_update_unknown_conversation(client: TestClient) -> None:
     assert response.status_code == 404
 
 
+def test_trip_plan_update_ignores_removed_legacy_fields(client: TestClient) -> None:
+    """day_budgets/day_items were removed; sending them must be a no-op."""
+    from trip_planning_agent.conversation_store import ConversationStore
+    from config.settings import get_settings
+
+    store = ConversationStore(get_settings().database_url)
+    conversation_id = store.save(None, [{"role": "user", "content": "plan"}], [])
+    store.save_trip_plan(
+        conversation_id,
+        {
+            "destination": "Hong Kong",
+            "currency": "HKD",
+            "budget": 600,
+            "budget_items": [],
+            "days": [
+                {
+                    "day": 1,
+                    "title": "Arrival",
+                    "activities": ["Check in"],
+                    "notes": [],
+                    "coordinates": None,
+                    "places": [],
+                    "stays": [],
+                    "budget": 300,
+                    "budget_items": [],
+                }
+            ],
+            "notes": [],
+            "references": [],
+            "status": "displayed",
+        },
+    )
+    legacy = client.put(
+        f"/api/conversations/{conversation_id}/trip-plan",
+        json={
+            "day_budgets": [{"day": 1, "amount": 999}],
+            "day_items": [{"day": 1, "category": "food", "amount": 1}],
+        },
+    )
+    assert legacy.status_code == 200
+    assert "day_budgets" not in legacy.json()
+    stored = store.get_trip_plan(conversation_id)
+    assert stored["budget"] == 600
+    assert stored["days"][0]["budget"] == 300
+
+
 def test_model_settings_reject_remote_client() -> None:
     from backend.main import app
 

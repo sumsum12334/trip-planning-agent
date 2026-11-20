@@ -179,14 +179,15 @@ def test_api_live_tokyo_returns_live_prices(monkeypatch):
         assert stay.currency == "USD", f"expected USD currency, got {stay.currency}"
 
 
-def test_stub_stays_get_trip_com_search_links():
+def test_stub_stays_get_destination_search_links():
+    """Stub hotels have fictional names, so the link searches the destination."""
     req = TripRequest(destination="Tokyo", budget=400, days=4)
     stays = run(req)
     assert stays
     for stay in stays:
         assert stay.source_url
         assert stay.source_url.startswith("https://www.trip.com/hotels/list?")
-        assert "searchWord=" in stay.source_url
+        assert "searchWord=Tokyo" in stay.source_url
 
 
 def test_search_links_keep_provider_urls():
@@ -202,5 +203,76 @@ def test_search_links_keep_provider_urls():
 def test_search_links_encode_query():
     from agents.search_stays.agent import _trip_com_search_url
 
-    url = _trip_com_search_url("Park Hyatt", "Tokyo")
+    url = _trip_com_search_url("Park Hyatt Tokyo")
     assert url == "https://www.trip.com/hotels/list?searchWord=Park+Hyatt+Tokyo"
+
+
+def test_verified_web_results_win_over_fallback(monkeypatch):
+    """A live web-search hit for the hotel replaces the destination-level link."""
+    from agents.search_stays import agent as stays_agent
+    from types import SimpleNamespace
+
+    def _fake_search(query, limit=5):
+        assert "Mandarin Oriental" in query
+        return [
+            SimpleNamespace(
+                title="Unrelated result",
+                url="https://www.example.com/other",
+                snippet="",
+            ),
+            SimpleNamespace(
+                title="Mandarin Oriental Hong Kong - trip.com",
+                # DuckDuckGo wraps result URLs in its own redirect link.
+                url=(
+                    "//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.trip.com%2Fhotels"
+                    "%2Fhong-kong-mandarin-oriental%2F&rut=abc123"
+                ),
+                snippet="",
+            ),
+        ]
+
+    monkeypatch.setattr(stays_agent, "web_search_run", _fake_search)
+    monkeypatch.setattr(
+        stays_agent,
+        "get_settings",
+        lambda: SimpleNamespace(web_search_mode="duckduckgo"),
+    )
+    other = StayCandidate(name="Unnamed Inn", location="Hong Kong")
+    found = StayCandidate(name="Mandarin Oriental", location="Hong Kong")
+    filled = stays_agent._with_search_links([other, found], "Hong Kong")
+    assert filled[0].source_url == "https://www.trip.com/hotels/list?searchWord=Hong+Kong"
+    assert (
+        filled[1].source_url
+        == "https://www.trip.com/hotels/hong-kong-mandarin-oriental/"
+    )
+
+
+def test_unwrap_result_url_handles_wrappers_and_direct_links():
+    from agents.search_stays.agent import _unwrap_result_url
+
+    wrapped = _unwrap_result_url(
+        "//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.trip.com%2Fhotels%2Fx&rut=z"
+    )
+    assert wrapped == "https://www.trip.com/hotels/x"
+    assert _unwrap_result_url("https://www.trip.com/hotels/y") == (
+        "https://www.trip.com/hotels/y"
+    )
+    assert _unwrap_result_url("") == ""
+
+
+def test_verification_failure_falls_back_to_destination(monkeypatch):
+    from agents.search_stays import agent as stays_agent
+    from types import SimpleNamespace
+
+    def _failing_search(query, limit=5):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(stays_agent, "web_search_run", _failing_search)
+    monkeypatch.setattr(
+        stays_agent,
+        "get_settings",
+        lambda: SimpleNamespace(web_search_mode="duckduckgo"),
+    )
+    stay = StayCandidate(name="Some Hotel", location="Tokyo")
+    filled = stays_agent._with_search_links([stay], "Tokyo")
+    assert filled[0].source_url == "https://www.trip.com/hotels/list?searchWord=Tokyo"

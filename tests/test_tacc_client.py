@@ -174,6 +174,46 @@ def test_sampling_settings_override_payload(monkeypatch):
     assert body["chat_template_kwargs"] == {"enable_thinking": False}
 
 
+def test_complete_explicit_enable_thinking_overrides_non_stream_default(monkeypatch):
+    ok_response = FakeResponse(
+        json_data={"choices": [{"message": {"content": "ok"}}]}
+    )
+    fake = FakeHttpClient([ok_response])
+    monkeypatch.setattr(
+        "trip_planning_agent.tacc_client.httpx.Client", lambda timeout=None: fake
+    )
+    settings = _fake_settings(model_enable_thinking=True)
+    TACCClient(settings).complete("hello")
+    body = fake.request_bodies[0]
+    assert body["chat_template_kwargs"] == {"enable_thinking": True}
+
+
+def test_complete_retries_without_tools_on_missing_tool_support(monkeypatch):
+    """The non-stream path re-posts once without tools on a 400 tool-parser error."""
+    rejected = FakeResponse(status_code=400, body="tool-call-parser is not enabled")
+    ok = FakeResponse(json_data={"choices": [{"message": {"content": "done"}}]})
+    fake = FakeHttpClient([rejected, ok])
+    monkeypatch.setattr(
+        "trip_planning_agent.tacc_client.httpx.Client", lambda timeout=None: fake
+    )
+    client = TACCClient(_fake_settings())
+    result = client.complete(
+        "hello",
+        extra={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "search_stays", "parameters": {}},
+                }
+            ]
+        },
+    )
+    assert result["ok"] is True and result["text"] == "done"
+    assert len(fake.request_bodies) == 2
+    assert fake.request_bodies[0].get("tools")
+    assert "tools" not in fake.request_bodies[1]
+
+
 def test_chunk_text_handles_providers_shapes():
     assert TACCClient._chunk_text("plain") == "plain"
     assert TACCClient._chunk_text([{"text": "a"}, {"text": "b"}]) == "ab"

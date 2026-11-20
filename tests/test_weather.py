@@ -59,6 +59,30 @@ def test_live_mode_falls_back_to_stub_without_geocode(
     assert result["condition"] == "Sunny"
 
 
+def test_live_mode_falls_back_to_stub_when_forecast_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A geocode hit with no forecast data still degrades to the stub."""
+    async def _geocode(destination):
+        return {"latitude": 35.0, "longitude": 139.0, "name": "Tokyo"}
+
+    async def _empty_forecast(lat, lon, start_date, end_date):
+        return None
+
+    monkeypatch.setattr(
+        weather_agent,
+        "get_settings",
+        lambda: SimpleNamespace(weather_mode="open-meteo"),
+    )
+    monkeypatch.setattr(weather_agent, "_geocode_destination", _geocode)
+    monkeypatch.setattr(weather_agent, "_fetch_weather_open_meteo", _empty_forecast)
+    result = weather_agent.run("Tokyo")
+    assert result["mode"] == "open-meteo"
+    assert result["stub"] is True
+    assert result["condition"] == "Sunny"
+    assert result["temperature_c"] == 22
+
+
 def test_live_mode_uses_open_meteo_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _geocode(destination):
         return {"latitude": 35.0, "longitude": 139.0, "name": "Tokyo"}
