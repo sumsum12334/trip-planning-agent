@@ -1,8 +1,16 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { Box, Button, TextField } from "@mui/material";
+import ChatIcon from "@mui/icons-material/Chat";
+import ExpandLessIcon from "@mui/icons-material/ExpandLess";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import SendIcon from "@mui/icons-material/Send";
 import { buildChatMessages } from "../lib/chatMessages.js";
 import { planBudgetItems, planFromEvents } from "../lib/planUtils.js";
+import {
+  effectiveReconsiderEnabled,
+  fetchReconsiderDefault,
+  readReconsiderOverride,
+} from "../lib/reconsider.js";
 import { readSseFrames } from "../lib/sse.js";
 import { nextStepSuggestions, workflowState } from "../lib/workflow.js";
 import { Activity } from "./Activity.jsx";
@@ -20,6 +28,18 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
   const [streaming, setStreaming] = useState(false);
   const [selectedOption, setSelectedOption] = useState("");
   const [chatMinimized, setChatMinimized] = useState(false);
+  const [reconsiderServerDefault, setReconsiderServerDefault] = useState(true);
+  const [reconsiderOverride] = useState(() => readReconsiderOverride());
+
+  // Server default for the reconsider-after-edit prompt; a failed fetch
+  // resolves to enabled without breaking the page.
+  useEffect(() => {
+    let cancelled = false;
+    fetchReconsiderDefault().then((value) => {
+      if (!cancelled) setReconsiderServerDefault(value);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   const answerLockRef = useRef(false);
   const abortRef = useRef(null);
@@ -204,6 +224,17 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
   const workflow = workflowState(current.events, selectedOption ? null : pendingEvent, status);
   const suggestions = nextStepSuggestions(latestPlan, current.messages, Boolean(pendingEvent), streaming || answering);
   const busy = streaming || answering;
+  const reconsiderEnabled = effectiveReconsiderEnabled(reconsiderServerDefault, reconsiderOverride);
+
+  // Sends the reconsideration request through the normal chat flow.
+  function handleReconsider(summary) {
+    if (!summary) return;
+    sendMessage(
+      null,
+      false,
+      `I adjusted the trip plan (changed: ${summary}). Please reconsider the plan and update it if needed.`,
+    );
+  }
 
   async function answerQuestion(option, custom = false) {
     if (answerLockRef.current || streaming) return;
@@ -356,7 +387,7 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
           aria-expanded={!chatMinimized}
           aria-label={chatMinimized ? "Open chat panel" : "Minimize chat panel"}
         >
-          {chatMinimized ? "▴" : "▾"}
+          {chatMinimized ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
         </button>
       </div>
       {!chatMinimized ? (
@@ -378,7 +409,9 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
         </>
       ) : (
         <div className={`chat-panel-collapsed-status ${workflow.className}`}>
-          <span>{workflow.icon}</span>
+          <span className="chat-panel-collapsed-icon">
+            {pendingEvent ? "!" : <ChatIcon fontSize="small" />}
+          </span>
           <small>
             {pendingEvent
               ? `Waiting for your choice: ${activeQuestionEvent?.data?.result?.question || ""}`
@@ -386,6 +419,7 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
                 ? (status || workflow.label)
                 : workflow.label}
           </small>
+          {pendingEvent && <span className="chat-panel-collapsed-badge" aria-hidden="true" />}
         </div>
       )}
     </aside>
@@ -396,7 +430,14 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
       <div className={`chat-workspace-new${latestPlan ? " has-plan" : ""}`}>
         <main className="main-content">
           {latestPlan ? (
-            <TripPlanCard key={planKey} plan={latestPlan} onSaveBudget={savePlanBudget} />
+            <TripPlanCard
+              key={planKey}
+              plan={latestPlan}
+              onSaveBudget={savePlanBudget}
+              onReconsider={handleReconsider}
+              reconsiderEnabled={reconsiderEnabled}
+              busy={busy}
+            />
           ) : hasConversation ? (
             <div className="working-area">
               <Activity events={current.events} />

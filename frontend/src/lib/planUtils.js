@@ -29,6 +29,63 @@ export const planFromEvents = (events, predicate = () => true) =>
     (event) => event.data?.tool === "display_trip_plan" && event.data?.result && predicate(event.data.result),
   );
 
+const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Formats an ISO date (YYYY-MM-DD) as "20 Nov 2026"; returns "" for anything
+// missing or invalid so callers can render nothing instead of a wrong date.
+export function formatPlanDate(value) {
+  if (typeof value !== "string") return "";
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value.trim());
+  if (!match) return "";
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12) return "";
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return "";
+  return `${match[3]} ${MONTHS_SHORT[month - 1]} ${match[1]}`;
+}
+
+const stringListSignature = (values) =>
+  (Array.isArray(values) ? values : []).map((value) => String(value ?? "")).join("␟");
+const placeSignature = (values) =>
+  (Array.isArray(values) ? values : []).map((place) => `${place?.name ?? ""}|${place?.url ?? ""}`).join("␟");
+const budgetItemSignature = (values) =>
+  (Array.isArray(values) ? values : []).map((item) => `${item?.category ?? ""}|${item?.amount ?? ""}`).join("␟");
+
+// Short human summary of what a plan edit changed, used for the
+// "ask the AI to reconsider" message. Returns "" when nothing changed.
+export function summarizePlanEdit(previousPlan, payload) {
+  if (!payload || typeof payload !== "object") return "";
+  if (payload.mode === "day" && Array.isArray(payload.days) && payload.days.length) {
+    const previousDays = Array.isArray(previousPlan?.days) ? previousPlan.days : [];
+    const parts = [];
+    payload.days.forEach((day) => {
+      if (!day || typeof day !== "object") return;
+      const previous = previousDays.find((entry) => entry?.day === day.day);
+      if (!previous) {
+        parts.push(`day ${day.day ?? "?"} added`);
+        return;
+      }
+      const changed = [];
+      if ((day.title ?? "") !== (previous.title ?? "")) changed.push("title");
+      if (stringListSignature(day.activities) !== stringListSignature(previous.activities)) changed.push("activities");
+      if (stringListSignature(day.notes) !== stringListSignature(previous.notes)) changed.push("notes");
+      if (placeSignature(day.places) !== placeSignature(previous.places)) changed.push("route");
+      if ((day.budget ?? null) !== (previous.budget ?? null)) changed.push("budget");
+      if (budgetItemSignature(day.budget_items) !== budgetItemSignature(previous.budget_items)) changed.push("budget items");
+      if (changed.length) parts.push(`day ${day.day} ${changed.join(", ")}`);
+    });
+    return parts.join(", ");
+  }
+  const parts = [];
+  if ("budget" in payload && (payload.budget ?? null) !== (previousPlan?.budget ?? null)) parts.push("estimated total");
+  if ("budget_items" in payload && budgetItemSignature(payload.budget_items) !== budgetItemSignature(planBudgetItems(previousPlan))) {
+    parts.push("category items");
+  }
+  return parts.join(", ");
+}
+
 export function routePoints(plan) {
   if (!plan) return [];
   const points = [];

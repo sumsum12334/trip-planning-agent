@@ -2,15 +2,17 @@ import { useMemo, useState, useEffect, useCallback } from "react";
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, Typography } from "@mui/material";
 import {
   formatBudget,
+  formatPlanDate,
   markerNumbersForDay,
   planBudgetItems,
   routePoints,
+  summarizePlanEdit,
 } from "../lib/planUtils.js";
 import { downloadPlanMarkdown, printPlanReport } from "../lib/planExport.js";
 import { CategoryBudgetEditor, DayEditor } from "./BudgetEditors.jsx";
 import { TripMap } from "./TripMap.jsx";
 
-export function TripPlanCard({ plan, onSaveBudget }) {
+export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabled = false, busy = false }) {
   const points = useMemo(() => routePoints(plan), [plan]);
   const currency = plan.currency || "";
   const items = planBudgetItems(plan);
@@ -35,6 +37,7 @@ export function TripPlanCard({ plan, onSaveBudget }) {
   const [editingCategory, setEditingCategory] = useState(false);
   const [editingDay, setEditingDay] = useState(null);
   const [notice, setNotice] = useState("");
+  const [reconsiderPrompt, setReconsiderPrompt] = useState(null);
   const [mapOpen, setMapOpen] = useState(points.length > 0);
   const [showReferences, setShowReferences] = useState(true);
   const [planView, setPlanView] = useState("overview");
@@ -66,9 +69,9 @@ export function TripPlanCard({ plan, onSaveBudget }) {
     }
   }, [weatherFromDate, days.length]);
 
-  // Sync weather from date with plan
+  // Sync weather from date with plan (also picks up a changed start_date)
   useEffect(() => {
-    if (plan.start_date && !weatherFromDate) {
+    if (plan.start_date && plan.start_date !== weatherFromDate) {
       setWeatherFromDate(String(plan.start_date));
     }
   }, [plan.start_date, weatherFromDate]);
@@ -157,23 +160,38 @@ export function TripPlanCard({ plan, onSaveBudget }) {
     setEditingDay(null);
     setEditingCategory(true);
     setNotice("");
+    setReconsiderPrompt(null);
   }
   function saveCategory(payload) {
+    const summary = summarizePlanEdit(plan, payload);
     onSaveBudget?.(payload);
     setEditingCategory(false);
     setNotice("Saved. The assistant will use this on your next message.");
+    setReconsiderPrompt(reconsiderEnabled && summary ? summary : null);
   }
   function saveDay(dayObject) {
+    const summary = summarizePlanEdit(plan, { mode: "day", days: [dayObject] });
     onSaveBudget?.({ mode: "day", budget: estimate, currency, days: [dayObject] });
     setEditingDay(null);
     setNotice("Day saved. The assistant will use this on your next message.");
+    setReconsiderPrompt(reconsiderEnabled && summary ? summary : null);
+  }
+  function askReconsider() {
+    const summary = reconsiderPrompt;
+    setReconsiderPrompt(null);
+    if (summary) onReconsider?.(summary);
   }
 
   return <div className="trip-plan-card">
     <div className="trip-plan-header">
       <div>
         <div className="question-kicker">YOUR TRIP PLAN</div>
-        <h3>{plan.destination}</h3>
+        <div className="trip-plan-title-row">
+          <h3>{plan.destination}</h3>
+          {formatPlanDate(plan.start_date) && (
+            <span className="plan-start-chip" title="Trip start date">From {formatPlanDate(plan.start_date)}</span>
+          )}
+        </div>
       </div>
       <span>✦</span>
     </div>
@@ -193,7 +211,7 @@ export function TripPlanCard({ plan, onSaveBudget }) {
       {/* Weather date selector aligned right */}
       {days.length > 0 && weatherFromDate && (
         <div className="weather-date-selector">
-          <span className="weather-date-label">🌤 Weather: {weatherFromDate} → {weatherToDate}</span>
+          <span className="weather-date-label">🌤 Weather (est.): {weatherFromDate} → {weatherToDate}</span>
           {weatherData && Object.keys(weatherData).length > 0 && (
             <span className="weather-data-chip">
               {days.map(d => weatherData[d.day]?.condition && `${d.day}: ${weatherData[d.day].temperature_c != null ? weatherData[d.day].temperature_c + "°C" : "?"}`).join(" · ")}
@@ -220,7 +238,7 @@ export function TripPlanCard({ plan, onSaveBudget }) {
               <b className="overview-budget">{budget && budget.amount != null ? formatBudget(budget.amount, currency) : "—"}</b>
               {weather && (
                 <span className="overview-weather">
-                  {weather.temperature_c != null ? `${weather.temperature_c}°C` : "?"}
+                  {weather.temperature_c != null ? `${weather.temperature_c}°C (est.)` : "?"}
                 </span>
               )}
             </button>;
@@ -249,7 +267,7 @@ export function TripPlanCard({ plan, onSaveBudget }) {
               </button>
               <div className="trip-day-head-actions">
                 {dayMarkers.length > 0 && <span className="day-map-ref" title="Map reference">🗺 {dayMarkers.join(" · ")}</span>}
-                {!isEditing && <button type="button" className="plan-tool" onClick={() => { setEditingCategory(false); setEditingDay(day.day); setExpandedDays((previous) => ({ ...previous, [day.day]: true })); setNotice(""); }}>Edit</button>}
+                {!isEditing && <button type="button" className="plan-tool" onClick={() => { setEditingCategory(false); setEditingDay(day.day); setExpandedDays((previous) => ({ ...previous, [day.day]: true })); setNotice(""); setReconsiderPrompt(null); }}>Edit</button>}
               </div>
             </div>
             {isOpen && (isEditing ? <DayEditor day={day} dayBudget={budget} currency={currency} onCancel={() => setEditingDay(null)} onSave={saveDay} /> : <>
@@ -268,6 +286,7 @@ export function TripPlanCard({ plan, onSaveBudget }) {
                         {weather.temperature_c != null ? `${weather.temperature_c}°C` : ""}
                         {weather.temperature_f != null ? ` (${weather.temperature_f}°F)` : ""}
                       </span>
+                      <span className="weather-estimate">(est.)</span>
                       {weather.humidity != null && <span className="day-weather-humidity">💧 {weather.humidity}%</span>}
                       {weather.stub && <span style={{color: '#aa6c16', fontSize: 10, marginLeft: 8}}>(stub)</span>}
                     </>
@@ -324,10 +343,10 @@ export function TripPlanCard({ plan, onSaveBudget }) {
                   <strong>{stay.name}</strong>
                   <span className="stay-location">📍 {stay.location}</span>
                   {stay.nightly_cost != null && (
-                    <span className="stay-price">{formatBudget(stay.nightly_cost, stay.currency || "USD")}/night</span>
+                    <span className="stay-price">{formatBudget(stay.nightly_cost, stay.currency || "USD")}/night (est.)</span>
                   )}
                   {stay.rating != null && (
-                    <span className="stay-rating">⭐ {stay.rating}</span>
+                    <span className="stay-rating">⭐ {stay.rating} (est.)</span>
                   )}
                   {stay.amenities?.length > 0 && (
                     <span className="stay-amenities">{stay.amenities.join(", ")}</span>
@@ -339,7 +358,7 @@ export function TripPlanCard({ plan, onSaveBudget }) {
                 <div style={{display: 'flex', gap: 8, alignItems: 'center'}}>
                   {stay.source_url && (
                     <a href={stay.source_url} target="_blank" rel="noopener noreferrer" className="stay-book-link">
-                      View / Book
+                      View on trip.com
                     </a>
                   )}
                   {stay.coordinates && (
@@ -365,6 +384,15 @@ export function TripPlanCard({ plan, onSaveBudget }) {
       </DialogActions>
     </Dialog>
 
+    {reconsiderEnabled && reconsiderPrompt && (
+      <div className="reconsider-banner" role="status">
+        <span className="reconsider-text"><strong>Plan adjusted</strong> — ask the AI to reconsider?</span>
+        <div className="reconsider-actions">
+          <button type="button" className="plan-tool primary" disabled={busy} onClick={askReconsider}>Ask AI to reconsider</button>
+          <button type="button" className="plan-tool" disabled={busy} onClick={() => setReconsiderPrompt(null)}>Dismiss</button>
+        </div>
+      </div>
+    )}
     <div className="trip-budget-block">
       <div className="trip-budget-head">
         <span>ESTIMATED BUDGET</span>

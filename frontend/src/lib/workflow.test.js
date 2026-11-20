@@ -3,9 +3,30 @@ import { describe, expect, it } from "vitest";
 import {
   agentForEvent,
   currentAgent,
+  isToolCallEvent,
+  isToolResultEvent,
+  mergeToolEvents,
   nextStepSuggestions,
+  toolDisplayName,
+  toolOfEvent,
   workflowState,
 } from "./workflow.js";
+
+const callEvent = (tool, args = {}, overrides = {}) => ({
+  type: "tool",
+  label: `Calling ${tool}`,
+  status: "running",
+  data: { tool, arguments: args },
+  ...overrides,
+});
+
+const resultEvent = (tool, result, overrides = {}) => ({
+  type: "tool",
+  label: `${tool} result received`,
+  status: "completed",
+  data: { tool, result },
+  ...overrides,
+});
 
 describe("agentForEvent", () => {
   it("maps tool events to their owning agent", () => {
@@ -63,5 +84,146 @@ describe("workflowState", () => {
     );
     expect(workflowState([], null, "").label).toBe("Ready");
     expect(workflowState([], null, "Stopped.").label).toBe("Stopped");
+  });
+});
+
+describe("toolDisplayName / toolOfEvent", () => {
+  it("maps known tools to display names and prettifies unknown ones", () => {
+    expect(toolDisplayName("search_stays")).toBe("Search accommodation");
+    expect(toolDisplayName("custom_tool")).toBe("Custom tool");
+    expect(toolDisplayName(null)).toBe("");
+  });
+
+  it("prefers data.tool and falls back to parsing the label", () => {
+    expect(toolOfEvent(callEvent("weather"))).toBe("weather");
+    expect(
+      toolOfEvent({ type: "tool", label: "search_stays result received" }),
+    ).toBe("search_stays");
+    expect(toolOfEvent({ type: "agent", label: "Coordinator started" })).toBeNull();
+  });
+
+  it("classifies call and result events", () => {
+    expect(isToolCallEvent(callEvent("weather"))).toBe(true);
+    expect(isToolCallEvent(resultEvent("weather", {}))).toBe(false);
+    expect(isToolResultEvent(resultEvent("weather", {}))).toBe(true);
+    expect(
+      isToolResultEvent({
+        type: "tool",
+        label: "Trip plan updated (set_trip_day)",
+        data: { tool: "display_trip_plan" },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("mergeToolEvents", () => {
+  it("merges a call with its matching result into one completed card", () => {
+    const cards = mergeToolEvents([
+      callEvent("search_stays", { destination: "Tokyo" }),
+      resultEvent("search_stays", { stays: [{ name: "Hotel A" }] }),
+    ]);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].toolName).toBe("search_stays");
+    expect(cards[0].toolLabel).toBe("Search accommodation");
+    expect(cards[0].status).toBe("completed");
+    expect(cards[0].merged).toBe(true);
+    expect(cards[0].index).toBe(0);
+    expect(cards[0].data.arguments).toEqual({ destination: "Tokyo" });
+    expect(cards[0].data.result).toEqual({ stays: [{ name: "Hotel A" }] });
+  });
+
+  it("keeps a call without a result as a running card", () => {
+    const cards = mergeToolEvents([callEvent("weather", { destination: "Paris" })]);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].status).toBe("running");
+    expect(cards[0].merged).toBeUndefined();
+    expect(cards[0].data.arguments).toEqual({ destination: "Paris" });
+  });
+
+  it("keeps an unmatched result as its own card", () => {
+    const cards = mergeToolEvents([resultEvent("weather", { condition: "sunny" })]);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].label).toBe("weather result received");
+    expect(cards[0].status).toBe("completed");
+    expect(cards[0].data.result).toEqual({ condition: "sunny" });
+  });
+
+  it("pairs sequential calls to the same tool in order without cross-pairing", () => {
+    const cards = mergeToolEvents([
+      callEvent("set_trip_day", { day: 1 }),
+      callEvent("set_trip_day", { day: 2 }),
+      resultEvent("set_trip_day", { ok: 1 }),
+      resultEvent("set_trip_day", { ok: 2 }),
+    ]);
+    expect(cards).toHaveLength(2);
+    expect(cards[0].index).toBe(0);
+    expect(cards[0].data.result).toEqual({ ok: 1 });
+    expect(cards[1].index).toBe(1);
+    expect(cards[1].data.result).toEqual({ ok: 2 });
+  });
+
+  it("pairs interleaved call/result rounds for the same tool", () => {
+    const cards = mergeToolEvents([
+      callEvent("set_trip_day", { day: 1 }),
+      resultEvent("set_trip_day", { ok: 1 }),
+      callEvent("set_trip_day", { day: 2 }),
+      resultEvent("set_trip_day", { ok: 2 }),
+    ]);
+    expect(cards).toHaveLength(2);
+    expect(cards[0].data.arguments).toEqual({ day: 1 });
+    expect(cards[0].data.result).toEqual({ ok: 1 });
+    expect(cards[1].data.arguments).toEqual({ day: 2 });
+    expect(cards[1].data.result).toEqual({ ok: 2 });
+  });
+
+  it("keeps ask_user_question events as their own cards", () => {
+    const cards = mergeToolEvents([
+      callEvent("ask_user_question", { question: "Go when?" }),
+      resultEvent("ask_user_question", { question: "Go when?", status: "awaiting_user" }),
+      { type: "agent", label: "Waiting for your answer", status: "running" },
+    ]);
+    expect(cards).toHaveLength(3);
+    expect(cards[0].label).toBe("Calling ask_user_question");
+    expect(cards[1].label).toBe("ask_user_question result received");
+    expect(cards[2].label).toBe("Waiting for your answer");
+    expect(cards.every((card) => card.merged === undefined)).toBe(true);
+  });
+
+  it("keeps agent, handover, and trip-plan events intact", () => {
+    const events = [
+      { type: "agent", label: "Coordinator agent started", status: "completed" },
+      callEvent("set_trip_day"),
+      resultEvent("set_trip_day", { ok: true }),
+      { type: "tool", label: "Trip plan updated (set_trip_day)", status: "completed", data: { tool: "display_trip_plan", result: {} } },
+      { type: "model", label: "Model response received", status: "completed" },
+    ];
+    const cards = mergeToolEvents(events);
+    expect(cards).toHaveLength(4);
+    expect(cards[0].label).toBe("Coordinator agent started");
+    expect(cards[1].toolLabel).toBe("Set trip day");
+    expect(cards[2].label).toBe("Trip plan updated (set_trip_day)");
+    expect(cards[3].label).toBe("Model response received");
+  });
+
+  it("propagates an error status and detail from the result event", () => {
+    const cards = mergeToolEvents([
+      callEvent("web_search", { query: "trains" }),
+      resultEvent("web_search", { ok: false }, { status: "error", detail: "Provider failed." }),
+    ]);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].status).toBe("error");
+    expect(cards[0].detail).toBe("Provider failed.");
+  });
+
+  it("keeps the running status when only the call exists, then completes", () => {
+    const running = mergeToolEvents([callEvent("weather")])[0];
+    expect(running.status).toBe("running");
+    const done = mergeToolEvents([callEvent("weather"), resultEvent("weather", { condition: "rain" })])[0];
+    expect(done.status).toBe("completed");
+  });
+
+  it("handles empty and missing input", () => {
+    expect(mergeToolEvents([])).toEqual([]);
+    expect(mergeToolEvents(undefined)).toEqual([]);
   });
 });

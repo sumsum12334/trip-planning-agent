@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { Box, Button, Chip, Dialog, DialogTitle, DialogContent, Paper, IconButton, Typography } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
-import { eventIcon } from "../lib/planUtils.js";
-import { agentForEvent, currentAgent } from "../lib/workflow.js";
+import { eventIcon, formatBudget } from "../lib/planUtils.js";
+import { agentForEvent, currentAgent, mergeToolEvents } from "../lib/workflow.js";
 
 const AGENT_COLORS = {
   "Agent 1 · search_stays": { light: "#e8f5e9", dark: "#1b5e20", border: "#81c784", text: "#2e7d32" },
@@ -39,11 +39,40 @@ function formatToolResult(result) {
   return String(result).slice(0, 500);
 }
 
+function StaysSummary({ result, color }) {
+  const stays = Array.isArray(result?.stays) ? result.stays : null;
+  if (!stays || !stays.length) return null;
+  const shown = stays.slice(0, 5);
+  const hidden = stays.length - shown.length;
+  return (
+    <Box sx={{ mb: 3 }}>
+      <Typography variant="subtitle2" color={color.text} gutterBottom fontWeight={700}>Found stays</Typography>
+      <Typography variant="caption" color="textSecondary" sx={{ display: "block", mb: 1 }}>
+        Nightly costs are estimates from the stay search.
+      </Typography>
+      <ul className="event-stays-list">
+        {shown.map((stay, index) => (
+          <li key={`${stay?.name || "stay"}-${index}`}>
+            <span className="event-stay-name">{stay?.name || "Unnamed stay"}</span>
+            {stay?.nightly_cost != null && (
+              <span className="event-stay-price">
+                {formatBudget(stay.nightly_cost, stay.currency || "")}/night (est.)
+              </span>
+            )}
+          </li>
+        ))}
+        {hidden > 0 && <li className="event-stays-more">+{hidden} more</li>}
+      </ul>
+    </Box>
+  );
+}
+
 function EventDetailDialog({ event, agent, open, onClose }) {
   if (!open || !event) return null;
   const color = agentColor(agent);
   const hasArgs = event.data?.arguments;
   const hasResult = event.data?.result;
+  const isStaysResult = event.data?.tool === "search_stays" && Array.isArray(event.data?.result?.stays);
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth PaperProps={{ elevation: 8 }}>
@@ -77,6 +106,7 @@ function EventDetailDialog({ event, agent, open, onClose }) {
             </Paper>
           </Box>
         )}
+        {isStaysResult && <StaysSummary result={event.data.result} color={color} />}
         {hasResult && (
           <Box>
             <Typography variant="subtitle2" color={color.text} gutterBottom fontWeight={700}>Result</Typography>
@@ -115,19 +145,23 @@ export function Activity({ events }) {
 
   const working = currentAgent(events);
 
+  // One card per tool call: "Calling X" is merged with its matching
+  // "X result received" event; everything else passes through as-is.
+  const cards = useMemo(() => mergeToolEvents(events), [events]);
+
   // Compute agent handovers for the timeline
   const rows = useMemo(() => {
     const rows = [];
     let lastAgent = null;
-    events.forEach((event, index) => {
+    cards.forEach((event) => {
       const agent = agentForEvent(event);
       const handover = Boolean(agent) && agent !== lastAgent;
-      const key = `${event.label}-${index}`;
-      rows.push({ key, event, agent, handover, index });
+      const key = `${event.label}-${event.index}`;
+      rows.push({ key, event, agent, handover });
       lastAgent = agent || lastAgent;
     });
     return rows;
-  }, [events]);
+  }, [cards]);
 
   if (!events.length) return null;
 
@@ -159,7 +193,7 @@ export function Activity({ events }) {
         <div className="event-main">
           <span className="event-icon">{eventIcon(event)}</span>
           <span className="event-label">
-            <strong>{event.label}</strong>
+            <strong>{event.toolLabel || event.label}</strong>
             {event.detail && <small className="event-detail">{event.detail}</small>}
             {handover && <small className="event-agent" style={{ color: color.text }}>{agent}</small>}
           </span>
@@ -181,7 +215,7 @@ export function Activity({ events }) {
           <span className="activity-icon">◈</span>
           <strong>Live workflow</strong>
           <span className={`agent-chip ${working ? "working" : "idle"}`}>{working ? `▶ ${working}` : "Idle"}</span>
-          <small>{events.length} events</small>
+          <small>{cards.length} events</small>
         </div>
         <div className="activity-items" ref={itemsRef}>
           {rows.map(renderEvent)}

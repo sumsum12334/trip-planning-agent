@@ -5,10 +5,12 @@ import {
   buildPlanMarkdown,
   escapeHtml,
   formatBudget,
+  formatPlanDate,
   markerNumbersForDay,
   planFromEvents,
   routePoints,
   splitLines,
+  summarizePlanEdit,
 } from "./planUtils.js";
 
 const samplePlan = {
@@ -129,5 +131,51 @@ describe("buildPlanHtml", () => {
     expect(html).toContain("Hong Kong Airport");
     expect(html).toContain("Victoria Peak");
     expect(html).toContain("Items total");
+  });
+});
+
+describe("formatPlanDate", () => {
+  it("formats an ISO date for display", () => {
+    expect(formatPlanDate("2026-11-20")).toBe("20 Nov 2026");
+    expect(formatPlanDate("2027-01-05")).toBe("05 Jan 2027");
+  });
+
+  it("renders nothing for missing or invalid dates", () => {
+    expect(formatPlanDate(undefined)).toBe("");
+    expect(formatPlanDate(null)).toBe("");
+    expect(formatPlanDate("")).toBe("");
+    expect(formatPlanDate("not-a-date")).toBe("");
+    expect(formatPlanDate("2026-13-01")).toBe("");
+    expect(formatPlanDate("2026-02-30")).toBe("");
+  });
+});
+
+describe("summarizePlanEdit", () => {
+  it("summarizes category budget edits", () => {
+    expect(
+      summarizePlanEdit(samplePlan, {
+        mode: "category",
+        budget: 800,
+        budget_items: [{ category: "food", amount: 200, currency: "HKD" }],
+      }),
+    ).toBe("estimated total, category items");
+  });
+
+  it("summarizes per-day edits field by field", () => {
+    const editedDay = { ...samplePlan.days[1], budget: 250, title: "Victoria Peak walk" };
+    expect(summarizePlanEdit(samplePlan, { mode: "day", days: [editedDay] })).toBe(
+      "day 2 title, budget",
+    );
+  });
+
+  it("returns an empty summary when nothing changed", () => {
+    expect(summarizePlanEdit(samplePlan, { mode: "category", budget: 600, budget_items: [{ category: "food", amount: 120, currency: "HKD" }] })).toBe("");
+    expect(summarizePlanEdit(samplePlan, { mode: "day", days: [samplePlan.days[0]] })).toBe("");
+  });
+
+  it("notes an added day and ignores unrelated modes", () => {
+    expect(summarizePlanEdit(samplePlan, { mode: "day", days: [{ day: 3, title: "New" }] })).toBe("day 3 added");
+    expect(summarizePlanEdit(samplePlan, { mode: "other" })).toBe("");
+    expect(summarizePlanEdit(samplePlan, null)).toBe("");
   });
 });

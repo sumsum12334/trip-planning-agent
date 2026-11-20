@@ -55,6 +55,99 @@ export function nextStepSuggestions(plan, messages, hasPendingQuestion, busy) {
   ];
 }
 
+const TOOL_RESULT_SUFFIX = " result received";
+const TOOL_CALL_PREFIX = "Calling ";
+const TOOL_DISPLAY_NAMES = {
+  search_stays: "Search accommodation",
+  estimate_transport: "Estimate transport",
+  web_search: "Web search",
+  weather: "Weather lookup",
+  display_trip_plan: "Show trip plan",
+  start_trip_plan: "Start trip plan",
+  set_trip_day: "Set trip day",
+  set_trip_budget: "Set trip budget",
+  set_trip_references: "Set trip references",
+  remove_trip_day: "Remove trip day",
+  get_trip_plan: "Get trip plan",
+};
+
+export function toolDisplayName(tool) {
+  if (!tool) return "";
+  if (TOOL_DISPLAY_NAMES[tool]) return TOOL_DISPLAY_NAMES[tool];
+  const pretty = String(tool).replace(/_/g, " ").trim();
+  return pretty ? pretty.charAt(0).toUpperCase() + pretty.slice(1) : "";
+}
+
+export function toolOfEvent(event) {
+  const tool = event?.data?.tool;
+  if (typeof tool === "string" && tool) return tool;
+  const label = typeof event?.label === "string" ? event.label : "";
+  if (label.startsWith(TOOL_CALL_PREFIX)) return label.slice(TOOL_CALL_PREFIX.length) || null;
+  if (label.endsWith(TOOL_RESULT_SUFFIX)) {
+    return label.slice(0, label.length - TOOL_RESULT_SUFFIX.length) || null;
+  }
+  return null;
+}
+
+export function isToolCallEvent(event) {
+  return (
+    event?.type === "tool" &&
+    typeof event?.label === "string" &&
+    event.label.startsWith(TOOL_CALL_PREFIX) &&
+    toolOfEvent(event) != null
+  );
+}
+
+export function isToolResultEvent(event) {
+  return (
+    event?.type === "tool" &&
+    typeof event?.label === "string" &&
+    event.label.endsWith(TOOL_RESULT_SUFFIX) &&
+    toolOfEvent(event) != null
+  );
+}
+
+// Groups each "Calling <tool>" event with the following result event for the
+// same tool so one tool call renders as ONE card. Pure: returns new card
+// objects and never mutates the input events. Cards carry `index` (original
+// index of the card's primary event) plus `toolName`/`toolLabel` on merged
+// call cards. ask_user_question events keep their own cards, unmatched calls
+// stay "running", and sequential calls to the same tool pair in order.
+export function mergeToolEvents(events) {
+  const list = Array.isArray(events) ? events : [];
+  const cards = [];
+  const openCalls = new Map();
+  list.forEach((event, index) => {
+    const tool = toolOfEvent(event);
+    if (tool === "ask_user_question") {
+      cards.push({ ...event, index });
+      return;
+    }
+    if (isToolCallEvent(event)) {
+      const card = { ...event, toolName: tool, toolLabel: toolDisplayName(tool), index };
+      cards.push(card);
+      const queue = openCalls.get(tool) || [];
+      queue.push(card);
+      openCalls.set(tool, queue);
+      return;
+    }
+    if (isToolResultEvent(event)) {
+      const queue = openCalls.get(tool);
+      const open = queue && queue.length ? queue.shift() : null;
+      if (open) {
+        open.data = { ...(open.data || {}), result: event.data?.result };
+        open.status = event.status || open.status;
+        if (event.detail) open.detail = event.detail;
+        if (event.timestamp) open.timestamp = event.timestamp;
+        open.merged = true;
+        return;
+      }
+    }
+    cards.push({ ...event, index });
+  });
+  return cards;
+}
+
 export function workflowState(events, pendingQuestion, status) {
   if (pendingQuestion) return { label: "Waiting for your response", className: "waiting", icon: "?" };
   if (status.includes("Sending your choice")) return { label: "Sending your choice to the assistant...", className: "working", icon: "➜" };
