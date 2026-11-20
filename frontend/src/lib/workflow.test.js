@@ -227,3 +227,109 @@ describe("mergeToolEvents", () => {
     expect(mergeToolEvents(undefined)).toEqual([]);
   });
 });
+
+describe("mergeToolEvents: model request/response pairs", () => {
+  it("merges the request, thinking, and response into one completed card", () => {
+    const cards = mergeToolEvents([
+      { type: "model", label: "Model request queued", status: "running" },
+      { type: "model", label: "Model is thinking", detail: "qwen", status: "running" },
+      { type: "model", label: "Model response received", status: "completed" },
+    ]);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].label).toBe("Model request → response");
+    expect(cards[0].status).toBe("completed");
+    expect(cards[0].merged).toBe(true);
+    expect(cards[0].index).toBe(0);
+  });
+
+  it("keeps a request without a response as a running card", () => {
+    const cards = mergeToolEvents([{ type: "model", label: "Model is thinking", status: "running" }]);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].status).toBe("running");
+    expect(cards[0].merged).toBeUndefined();
+  });
+
+  it("merges the local stub outcome into the queued request", () => {
+    const cards = mergeToolEvents([
+      { type: "model", label: "Model request queued", status: "running" },
+      { type: "model", label: "Using local model stub", status: "completed" },
+    ]);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].label).toBe("Using local model stub");
+    expect(cards[0].status).toBe("completed");
+  });
+
+  it("marks a failed request with the failure status and label", () => {
+    const cards = mergeToolEvents([
+      { type: "model", label: "Model is thinking", status: "running" },
+      { type: "model", label: "Model request failed", detail: "boom", status: "error" },
+    ]);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].label).toBe("Model request failed");
+    expect(cards[0].status).toBe("error");
+    expect(cards[0].detail).toBe("boom");
+  });
+
+  it("absorbs retry attempts so no card stays running forever", () => {
+    const cards = mergeToolEvents([
+      { type: "model", label: "Model is thinking", status: "running" },
+      { type: "model", label: "Retrying continuation (1/3)", status: "running" },
+      { type: "model", label: "Retrying continuation (2/3)", status: "running" },
+      { type: "model", label: "Model response received", status: "completed" },
+    ]);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].label).toBe("Model request → response");
+    expect(cards[0].status).toBe("completed");
+  });
+
+  it("keeps a response without an open request as its own card", () => {
+    const cards = mergeToolEvents([{ type: "model", label: "Model response received", status: "completed" }]);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].label).toBe("Model response received");
+    expect(cards[0].merged).toBeUndefined();
+  });
+});
+
+describe("mergeToolEvents: agent run pairs", () => {
+  it("merges the coordinator start and completion into one card", () => {
+    const cards = mergeToolEvents([
+      { type: "agent", label: "Coordinator agent started", status: "running" },
+      callEvent("search_stays", { destination: "Tokyo" }),
+      resultEvent("search_stays", { stays: [] }),
+      { type: "agent", label: "Coordinator agent completed", status: "completed" },
+    ]);
+    expect(cards).toHaveLength(2);
+    expect(cards[0].label).toBe("Coordinator agent");
+    expect(cards[0].status).toBe("completed");
+    expect(cards[0].merged).toBe(true);
+  });
+
+  it("keeps the failure label when the run fails", () => {
+    const cards = mergeToolEvents([
+      { type: "agent", label: "Coordinator agent started", status: "running" },
+      { type: "agent", label: "Coordinator agent failed", status: "error" },
+    ]);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].label).toBe("Coordinator agent failed");
+    expect(cards[0].status).toBe("error");
+  });
+
+  it("merges a user stop into the run card", () => {
+    const cards = mergeToolEvents([
+      { type: "agent", label: "Coordinator agent started", status: "running" },
+      { type: "agent", label: "Stopped by user", status: "completed" },
+    ]);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].label).toBe("Stopped by user");
+    expect(cards[0].status).toBe("completed");
+  });
+
+  it("leaves a completed start event without a running status untouched", () => {
+    const cards = mergeToolEvents([
+      { type: "agent", label: "Coordinator agent started", status: "completed" },
+    ]);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].label).toBe("Coordinator agent started");
+    expect(cards[0].merged).toBeUndefined();
+  });
+});

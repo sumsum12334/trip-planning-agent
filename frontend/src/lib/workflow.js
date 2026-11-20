@@ -107,28 +107,115 @@ export function isToolResultEvent(event) {
   );
 }
 
-// Groups each "Calling <tool>" event with the following result event for the
-// same tool so one tool call renders as ONE card. Pure: returns new card
-// objects and never mutates the input events. Cards carry `index` (original
-// index of the card's primary event) plus `toolName`/`toolLabel` on merged
-// call cards. ask_user_question events keep their own cards, unmatched calls
-// stay "running", and sequential calls to the same tool pair in order.
+// Request/response pairs that render as ONE card in the Live workflow:
+// - model: "Model request queued" / "Model is thinking" / "Retrying
+//   continuation" attempts + the matching turn outcome ("Model response
+//   received", local stub, failure, empty, continuation failure).
+// - agent: "Coordinator agent started" + "Coordinator agent completed" /
+//   failure / "Stopped by user".
+const MODEL_REQUEST_PATTERN = /^(Model request queued|Preparing model request|Model is thinking|Retrying continuation \(\d\/3\))$/;
+const MODEL_RESPONSE_LABELS = new Set([
+  "Model response received",
+  "Using local model stub",
+  "Model request failed",
+  "Model returned an empty response",
+  "Continuation failed; answer can be retried",
+]);
+const isModelRequestOpen = (event) =>
+  event?.type === "model" && event.status === "running" && MODEL_REQUEST_PATTERN.test(event.label || "");
+const isModelResponseClose = (event) =>
+  event?.type === "model" && event.status !== "running" && MODEL_RESPONSE_LABELS.has(event.label);
+const isAgentRunOpen = (event) =>
+  event?.type === "agent" && event.status === "running" && / started$/i.test(event.label || "");
+const isAgentRunClose = (event) =>
+  event?.type === "agent" &&
+  event.status !== "running" &&
+  (/ (completed|failed)$/i.test(event.label || "") || event.label === "Stopped by user");
+
+// Groups request/response pairs so one logical step renders as ONE card:
+// each "Calling <tool>" with its result, each model call with its response,
+// and each agent run with its completion. Pure: returns new card objects and
+// never mutates the input events. Cards carry `index` (original index of the
+// card's primary event) plus `toolName`/`toolLabel` on merged call cards.
+// ask_user_question events keep their own cards, unmatched opens stay
+// "running", and sequential calls to the same tool pair in order.
 export function mergeToolEvents(events) {
   const list = Array.isArray(events) ? events : [];
   const cards = [];
   const openCalls = new Map();
+  const openPair = (kind, card) => {
+    const queue = openCalls.get(kind) || [];
+    queue.push(card);
+    openCalls.set(kind, queue);
+  };
+  const closePair = (kind, event) => {
+    const queue = openCalls.get(kind);
+    const open = queue && queue.length ? queue.shift() : null;
+    if (!open) return null;
+    open.status = event.status || open.status;
+    if (event.detail) open.detail = event.detail;
+    if (event.timestamp) open.timestamp = event.timestamp;
+    open.merged = true;
+    return open;
+  };
   list.forEach((event, index) => {
     const tool = toolOfEvent(event);
     if (tool === "ask_user_question") {
       cards.push({ ...event, index });
       return;
     }
+    if (isModelRequestOpen(event)) {
+      // Consolidate repeat attempts (queued → thinking → retries) into the
+      // single open card for this model call.
+      const queue = openCalls.get("model");
+      const open = queue && queue.length ? queue[queue.length - 1] : null;
+      if (open) {
+        if (event.label !== "Model request queued") open.label = event.label;
+        if (event.detail) open.detail = event.detail;
+        open.merged = true;
+        return;
+      }
+      const card = { ...event, index };
+      cards.push(card);
+      openPair("model", card);
+      return;
+    }
+    if (isModelResponseClose(event)) {
+      // The most recent attempt produced the outcome; earlier attempt cards
+      // belong to the same turn and must not stay "running".
+      const queue = openCalls.get("model");
+      if (queue && queue.length) {
+        const open = queue.pop();
+        open.status = event.status || open.status;
+        open.label = event.label === "Model response received" ? "Model request → response" : event.label;
+        if (event.detail) open.detail = event.detail;
+        if (event.timestamp) open.timestamp = event.timestamp;
+        open.merged = true;
+        while (queue.length) queue.pop().status = open.status;
+        return;
+      }
+    }
+    if (isAgentRunOpen(event)) {
+      const card = { ...event, index };
+      cards.push(card);
+      openPair("agent", card);
+      return;
+    }
+    if (isAgentRunClose(event)) {
+      const open = closePair("agent", event);
+      if (open) {
+        if (event.label === "Stopped by user") open.label = event.label;
+        else {
+          const base = open.label.replace(/\s+started$/i, "");
+          open.label = / failed$/i.test(event.label || "") ? `${base} failed` : base;
+        }
+        return;
+      }
+    }
     if (isToolCallEvent(event)) {
       const card = { ...event, toolName: tool, toolLabel: toolDisplayName(tool), index };
       cards.push(card);
-      const queue = openCalls.get(tool) || [];
-      queue.push(card);
-      openCalls.set(tool, queue);
+      openPair(tool, card);
       return;
     }
     if (isToolResultEvent(event)) {

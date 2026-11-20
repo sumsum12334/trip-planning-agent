@@ -119,8 +119,6 @@ class TACCClient:
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        if on_event:
-            on_event({"type": "model", "label": "Preparing model request", "status": "completed"})
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -220,13 +218,6 @@ class TACCClient:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         if on_event:
-            on_event(
-                {
-                    "type": "model",
-                    "label": "Preparing model request",
-                    "status": "completed",
-                }
-            )
             on_event({"type": "model", "label": "Model is thinking", "detail": self.model, "status": "running"})
 
         cancelled = False
