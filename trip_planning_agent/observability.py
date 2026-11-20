@@ -9,6 +9,7 @@ from threading import Lock
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Iterator, Optional
+import uuid
 
 from config.settings import Settings, get_settings
 
@@ -131,7 +132,7 @@ def start_trace(
         return None
 
     observation: Any = None
-    ls_run: Any = None
+    ls_run_id: str | None = None
     try:
         if lf_client is not None:
             from langfuse import propagate_attributes
@@ -149,24 +150,32 @@ def start_trace(
                 )
 
         if ls_client is not None:
+            # Generate our own UUID so we can reference this run later with
+            # update_run(). LangSmith's create_run() returns None by design.
+            ls_run_id = str(uuid.uuid4())
             ls_inputs: dict[str, Any] = input if isinstance(input, dict) else {}
-            ls_run = ls_client.create_run(
-                name=name,
-                run_type="chain",
-                inputs=ls_inputs,
-                project_name=s.langsmith_project,
-                tags=["trip-planning-agent", "chat-turn"],
-                metadata=metadata or {},
-            )
+            try:
+                ls_client.create_run(
+                    id=ls_run_id,
+                    name=name,
+                    run_type="chain",
+                    inputs=ls_inputs,
+                    project_name=s.langsmith_project,
+                    tags=["trip-planning-agent", "chat-turn"],
+                    metadata=metadata or {},
+                )
+            except Exception as e:
+                logger.exception("LangSmith create_run failed for %s.", name)
+                ls_run_id = None
     except Exception:
         logger.exception("Could not start trace %s.", name)
 
     return TraceHandle(
-        trace_id=getattr(observation, "trace_id", "") or str(getattr(ls_run, "id", "")),
+        trace_id=getattr(observation, "trace_id", "") or ls_run_id or "",
         span_id=getattr(observation, "id", ""),
         observation=observation,
         client=lf_client,
-        langsmith_run_id=str(getattr(ls_run, "id", "")) if ls_run else None,
+        langsmith_run_id=ls_run_id,
         langsmith_client=ls_client,
     )
 
@@ -202,7 +211,7 @@ def end_trace(
         if trace.langsmith_client is not None and trace.langsmith_run_id:
             trace.langsmith_client.update_run(
                 run_id=trace.langsmith_run_id,
-                outputs=output or {},
+                outputs={"output": output} if output is not None else {},
                 error=str(error) if error else None,
                 end_time=_now_utc(),
             )
@@ -245,7 +254,7 @@ def model_generation(
         return
 
     observation: Any | None = None
-    ls_run: Any | None = None
+    ls_run_id: str | None = None
     attributes = None
     try:
         if lf_client is not None:
@@ -270,6 +279,9 @@ def model_generation(
             )
 
         if ls_client is not None:
+            # Generate our own UUID so we can reference this run later with
+            # update_run(). LangSmith's create_run() returns None by design.
+            ls_run_id = str(uuid.uuid4())
             parent_run_id = None
             if trace_context and trace_context.get("run_id"):
                 parent_run_id = trace_context["run_id"]
@@ -290,7 +302,8 @@ def model_generation(
             elif prompt:
                 ls_inputs["prompt"] = prompt
             try:
-                ls_run = ls_client.create_run(
+                ls_client.create_run(
+                    id=ls_run_id,
                     name=name,
                     run_type="llm",
                     inputs=ls_inputs,
@@ -301,26 +314,25 @@ def model_generation(
                 )
             except Exception as e:
                 logger.exception("LangSmith create_run failed for %s.", name)
-                ls_run = None
+                ls_run_id = None
 
         # Expose LangSmith run id + client on the observation so that
         # finish_generation() / update_generation() can complete the trace.
-        # (Run is a Pydantic model: .id works on instances, but there is no
-        # .client attribute, so we store the client separately.)
-        if observation is not None and ls_run is not None:
-            observation._langsmith_run_id = str(ls_run.id)  # type: ignore[attr-defined]
+        if observation is not None and ls_run_id is not None:
+            observation._langsmith_run_id = ls_run_id  # type: ignore[attr-defined]
             observation._langsmith_client = ls_client  # type: ignore[attr-defined]
 
     except Exception:
         logger.exception("Tracking failed for model request %s.", name)
         observation = None
-        ls_run = None
+        ls_run_id = None
 
     # When Langfuse is disabled but LangSmith is enabled, observation is None.
-    # Wrap the run in a minimal object so finish_generation() can find it.
-    if observation is None and ls_run is not None:
+    # Wrap the run id + client in a minimal object so finish_generation()
+    # can find them.
+    if observation is None and ls_run_id is not None:
         observation = SimpleNamespace(
-            _langsmith_run_id=str(ls_run.id),
+            _langsmith_run_id=ls_run_id,
             _langsmith_client=ls_client,
         )
 
@@ -332,8 +344,8 @@ def model_generation(
             # finish_generation; close the generation so telemetry sees it end.
             if observation is not None and not getattr(observation, _ENDED_MARKER, False):
                 finish_generation(observation)
-            elif ls_run is not None and not getattr(ls_run, "_trip_planner_langsmith_ended", False):
-                ls_finish_generation(ls_run)
+            elif ls_run_id is not None and not getattr(observation, "_trip_planner_langsmith_ended", False):
+                ls_finish_generation(observation)
         finally:
             try:
                 if lf_client is not None:
@@ -368,14 +380,13 @@ def ls_finish_generation(
         if ls_client is not None and run_id:
             ls_client.update_run(
                 run_id=run_id,
-                outputs=output or {},
+                outputs={"output": output} if output is not None else {},
                 error=str(error) if error else None,
                 end_time=datetime.now(timezone.utc),
                 first_token_time=first_token_time,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
             )
-            print(f"DEBUG LangSmith: update_run completed for run_id={run_id}")
         try:
             setattr(run, "_trip_planner_langsmith_ended", True)
         except Exception:
@@ -400,24 +411,14 @@ def ls_update_generation(
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
 ) -> None:
-    """Update a LangSmith LLM run output."""
+    """Update a LangSmith LLM run output.
+
+    Note: LangSmith's update_run() can only set outputs once, so we only
+    call it from ls_finish_generation(). This function is kept for API
+    compatibility but does not make an API call.
+    """
     if run is None:
         return
-    try:
-        ls_client = getattr(run, "_langsmith_client", None)
-        run_id = str(getattr(run, "_langsmith_run_id", ""))
-        if ls_client is not None and run_id:
-            ls_client.update_run(
-                run_id=run_id,
-                outputs=output or {},
-                error=str(error) if error else None,
-                first_token_time=first_token_time,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-            )
-            print(f"DEBUG LangSmith update: update_run completed for run_id={run_id}")
-    except Exception:
-        logger.exception("Could not update LangSmith model tracking.")
 
 
 def finish_generation(
@@ -434,11 +435,11 @@ def finish_generation(
         return
     try:
         update_generation(observation, output=output, error=error)
-        observation.end()
         try:
-            setattr(observation, _ENDED_MARKER, True)
+            observation.end()
         except Exception:
             pass
+        setattr(observation, _ENDED_MARKER, True)
     except Exception:
         logger.exception("Could not finish Langfuse model tracking.")
     # Also finish the LangSmith run attached to this observation.
