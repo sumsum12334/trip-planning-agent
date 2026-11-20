@@ -45,7 +45,7 @@ Frontend  ──HTTP──►  Backend (FastAPI)
 | Piece | Role |
 |-------|------|
 | **Frontend** | Collect constraints; show itinerary |
-| **Backend** | Session, orchestration, `/plan` + `/health` |
+| **Backend** | Session, orchestration, `/plan` + `/plan/revise` + `/health` |
 | **Agent 1 `search_stays`** | Accommodation under budget / location |
 | **Agent 2 `estimate_transport`** | Travel time & cost between points |
 | **Agent 3 `coordinator`** | Distribute work, cost check, render, revise; POI for MVP |
@@ -67,7 +67,10 @@ Agent 1 uses the curated stub catalog in `agents/search_stays/tools.py`
 (city match + generic fallback, ordered by nightly cost under budget/nights).
 `run(..., excluded_locations=...)` filters out name/location overlaps from
 Agent 4 when `avoid_visited=true`. Direct probe: `POST /agents/search_stays`.
-`TOOL_STAYS_MODE=api` fails explicitly until a real provider is configured.
+`TOOL_STAYS_MODE=web` sources live stay results from the DuckDuckGo
+web-search tool (requires `WEB_SEARCH_MODE=duckduckgo`; falls back to the
+labeled stub catalog when web search is unavailable).
+`TOOL_STAYS_MODE=api` is the legacy OBO Travel provider, kept for rollback.
 
 Agent 4 uses `DATABASE_URL` and stores visits in the `travel_history`
 table, keyed by `TripRequest.user_id`. It returns distinct places in
@@ -75,6 +78,35 @@ most-recent-first order and is disabled for Baseline A when
 `ENABLE_TRAVEL_HISTORY=0`. Evaluation fixtures or application code can add a
 visit through `TravelHistoryStore.record_visit`. Chat conversations remain on
 local SQLite even when travel history points at Postgres.
+
+#### Plan currency (`/plan` workflow)
+
+The coordinator enforces the budget in a single currency: it derives one plan
+currency from the costed stay and transport components and sets
+`Itinerary.currency`. When costed components carry different currencies the
+request fails closed with `NoFeasiblePlanError` instead of silently summing
+them, and when a positive cost has no currency label the plan notes that the
+budget was not enforced. The stub catalogs are consistent per city
+(Hong Kong in HKD; Tokyo, Amsterdam, and the generic catalog in USD).
+
+#### Revise loop (`POST /plan/revise`)
+
+When the user changes budget, dates, or interests on an existing `/plan`
+result, `POST /plan/revise` re-enters the agent pipeline (Agent 4 travel
+history, Agent 1 stay search, coordinator cost check, render) with the updated
+`TripRequest` instead of appending ad-hoc chat text. The request carries the
+previous `Itinerary` plus the new constraints; the response notes what changed
+(`Revised for new budget: 350.0 (was 600.0)`, `Revised for new trip length: ...
+`) and re-applies the stay step-down and fail-closed cost check to the new
+figures. Revisions keep the same destination (a destination change returns 422;
+start a new plan instead). On the chat side, constraint changes already flow
+back through `plan_context` on the next turn.
+
+The coordinator also uses the model for its proposal role: after the plan is
+feasible it asks the configured endpoint for 1-3 short user-facing summary
+notes (returned as labeled `Model summary:` notes in `Itinerary.notes`). Stub
+mode, network errors, and malformed output leave the deterministic notes
+unchanged, and the summary is never hidden chain-of-thought.
 
 #### Travel history database (`DATABASE_URL`)
 
@@ -117,7 +149,11 @@ a question list. Tool arguments and results are persisted in the
 conversation events. The Live workflow is collapsed by default to keep the
 chat compact; expand it to inspect the ordered tool calls and saved results.
 Selecting an option resumes the same model tool session through
-`POST /api/chat/question`; it is not sent as an ordinary chat message.
+`POST /api/chat/question/stream`; it is not sent as an ordinary chat message.
+The continuation streams the same `event` / `reasoning` / `content` / `done`
+frames as `/api/chat/stream`, so the UI keeps showing agent activity, partial
+text, and the **Stop** button instead of waiting on a silent request.
+`POST /api/chat/question` remains available as the non-streaming equivalent.
 The question is shown above the chat while waiting, and a failed continuation
 keeps the pending choice available for retry instead of marking it answered.
 The trip plan is built with several small tools instead of one large payload, so
@@ -202,15 +238,18 @@ as reservations or verified live availability.
 ### Stay search (Agent 1)
 
 `search_stays` returns accommodation candidates under budget near the
-destination. Three modes are controlled by `TOOL_STAYS_MODE`:
+destination. Four modes are controlled by `TOOL_STAYS_MODE`:
 
 | Mode | Source | Returns |
 |------|--------|---------|
 | `stub` | Curated local catalog | Name, location, nightly cost, phone, website, rating, amenities |
 | `overpass` | OpenStreetMap Overpass API | Real names, coordinates, addresses, star ratings (no cost/availability) |
-| `api` | OBO Travel MCP | Live nightly rates, booking URLs, star ratings, cancellation policy |
+| `web` | DuckDuckGo web search (via `agents/web_search`) | Real stay pages with provenance (`web search: <host>`); nightly prices parsed from snippets when confidently listed (normalized to approximate USD), labeled estimates otherwise |
+| `api` | OBO Travel MCP (legacy, kept for rollback) | Live nightly rates, booking URLs, star ratings, cancellation policy |
 
-Set `TOOL_STAYS_MODE` in `.env` (default: `stub`). For `api` mode, also set
+Set `TOOL_STAYS_MODE` in `.env` (default: `stub`). `web` mode also needs
+`WEB_SEARCH_MODE=duckduckgo`; when web search is unavailable it falls back to
+the labeled stub catalog. For legacy `api` mode, also set
 `STAYS_API_BASE_URL=https://onebookingonline.com/mcp`. The OBO Travel API is
 free for anonymous use (30 req/min, 500 req/day); no signup or credit card
 required.
@@ -243,8 +282,9 @@ The chat endpoints are:
 - `GET /api/conversations`
 - `GET /api/conversations/{conversation_id}`
 - `DELETE /api/conversations/{conversation_id}`
-- `POST /api/chat` (accepts an optional `conversation_id`)
 - `POST /api/chat/stream` (accepts an optional `request_id` used for cancellation and `plan_context`)
+- `POST /api/chat/question/stream` (resumes a paused question; same frames and `request_id` cancellation as the chat stream)
+- `POST /api/chat/question` (non-streaming equivalent)
 - `POST /api/chat/stop` (body `{"request_id": "..."}`; sets the turn's cancel event)
 - `PUT /api/conversations/{conversation_id}/trip-plan` (persist edited `budget`, `currency`, and `budget_items` onto the latest plan)
 
@@ -253,7 +293,10 @@ The chat endpoints are:
 From PowerShell:
 
 ```powershell
-cd C:\dev\trip-planning-agent
+# From the repository root (PowerShell on Windows; the equivalent bash
+# commands work on macOS/Linux, e.g. `copy` -> `cp`, `.\.venv\Scripts\Activate.ps1`
+# -> `source .venv/bin/activate`).
+cd trip-planning-agent
 
 # 1. Env file (fill QWEN_* when you have course credentials; stubs work with blanks)
 copy .env.example .env
@@ -283,6 +326,20 @@ The Settings tab can change the model endpoint, model name, and API key for
 the running process. The key is write-only and is not returned by the API.
 These changes are not persisted across restarts; use `.env` for persistent
 deployment defaults.
+
+### Security notes (local development scope)
+
+- The UI is served same-origin; CORS is limited to `localhost`/`127.0.0.1`
+  origins, and `PUT /api/settings/model` is only accepted from the local
+  machine because it repoints the shared model endpoint.
+- Cancellation (`/api/chat/stop`), the in-process model-configuration
+  overrides, and the conversation store locks are **per-process**: run the
+  backend with a single uvicorn worker (the default) for these to behave.
+- There is no authentication: `user_id` is client-supplied, so travel history
+  and conversations are only as isolated as the host allows. Treat a deployed
+  instance as single-user/group-internal (course scope).
+- Chat conversations and travel history live in local SQLite files under
+  `data/`; Docker is local-debug only and is not the TACC deployment path.
 
 Stop the server with `Ctrl+C` in that terminal.
 
@@ -339,11 +396,15 @@ errors.
 | Variable | Notes |
 |----------|--------|
 | `QWEN_BASE_URL` / `QWEN_MODEL` / `QWEN_API_KEY` | OpenAI-compatible model endpoint and model identifier. Set the base URL including `/v1`; set the key when required by the provider. |
+| `MODEL_MAX_TOKENS` / `MODEL_TEMPERATURE` / `MODEL_TOP_P` / `MODEL_REASONING_BUDGET` | Sampling defaults sent in the chat-completions payload (defaults: `16384` / `1.0` / `0.95` / `16384`). |
+| `MODEL_ENABLE_THINKING` | Optional override for Qwen thinking mode. Unset keeps the default: enabled while streaming, disabled for one-shot completions. |
 | `ENABLE_TRAVEL_HISTORY` | `1` = proposed (Agent1–4); `0` = Baseline A (Agent1–3) |
-| `TOOL_STAYS_MODE` | `stub` (default, offline-safe), `overpass` (OpenStreetMap, no auth), `api` (OBO Travel, live prices) |
+| `TOOL_STAYS_MODE` | `stub` (default, offline-safe), `overpass` (OpenStreetMap, no auth), `web` (live web-search results; needs `WEB_SEARCH_MODE=duckduckgo`, falls back to stub), `api` (OBO Travel — legacy, kept for rollback) |
 | `TOOL_MAPS_MODE` | `stub` or `api` |
+| `WEB_SEARCH_MODE` | `stub` (default, offline-safe) or `duckduckgo` (live DuckDuckGo HTML search; powers the web-search tool and `TOOL_STAYS_MODE=web`) |
+| `WEATHER_MODE` | `stub` (default, offline-safe) or `open-meteo` (live Open-Meteo forecasts, no auth; falls back to stub on failure) |
 | `GEOCODING_ENABLED` | Set to `1` to resolve Overpass destinations with rate-limited Nominatim geocoding |
-| `STAYS_API_BASE_URL` | OBO Travel MCP base URL, e.g. `https://onebookingonline.com/mcp` (used when `TOOL_STAYS_MODE=api`) |
+| `STAYS_API_BASE_URL` | OBO Travel MCP base URL, e.g. `https://onebookingonline.com/mcp` (legacy; used when `TOOL_STAYS_MODE=api`) |
 | `STAYS_API_KEY` | Optional OBO Travel API key for higher rate limits |
 | `STAYS_API_TIMEOUT` | Request timeout seconds (default 30) |
 | `OVERPASS_API_URL` | Comma-separated Overpass mirror URLs (used when `TOOL_STAYS_MODE=overpass`) |

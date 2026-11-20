@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +21,7 @@ from agents.chat_tools import (
     AGENT_TOOL_SCHEMAS,
     execute_agent_tool,
 )
+from agents.coordinator import revise as revise_plan
 from agents.coordinator import run as coordinate
 from agents.coordinator.agent import NoFeasiblePlanError, health as coordinator_health
 from agents.estimate_transport.agent import health as transport_health
@@ -30,6 +31,8 @@ from agents.travel_history.agent import remember_from_message
 from agents.travel_history.agent import TravelHistoryStore
 from agents.web_search.agent import health as web_search_health
 from agents.web_search import run as web_search
+from agents.weather.agent import health as weather_health
+from agents.weather.agent import run as weather_run
 from config.settings import get_model_config, get_settings, update_model_config
 from shared.schemas import (
     ChatEvent,
@@ -44,6 +47,7 @@ from shared.schemas import (
     Itinerary,
     ModelSettingsResponse,
     ModelSettingsUpdate,
+    PlanReviseRequest,
     TripRequest,
     TravelHistoryCreate,
     TravelHistoryEntry,
@@ -71,12 +75,19 @@ from trip_planning_agent.observability import (
 )
 
 app = FastAPI(title="trip-planning-agent", version="0.1.0")
+# The shipped UI is served same-origin from this app, so cross-origin access
+# is only needed for the Vite dev server and local tooling. Note "testclient"
+# is the client address FastAPI's TestClient reports; it is localhost-equivalent.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|testclient)(:\d+)?$",
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Model-settings changes repoint the shared model endpoint, so they are only
+# accepted from the local machine (see update_model_settings).
+_LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 
 # Cooperative cancellation for in-flight streaming turns lives in
 # trip_planning_agent.cancellation. The client sends a `request_id` with the
@@ -124,12 +135,14 @@ def health() -> dict:
         "tacc_configured": TACCClient(s).configured,
         "tool_stays_mode": s.tool_stays_mode,
         "tool_maps_mode": s.tool_maps_mode,
+        "weather_mode": s.weather_mode,
         "agents": {
             "search_stays": stays_health(),
             "estimate_transport": transport_health(),
             "coordinator": coordinator_health(),
             "travel_history": history_health(),
             "web_search": web_search_health(),
+            "weather": weather_health(),
         },
     }
 
@@ -139,6 +152,25 @@ def plan(request: TripRequest) -> Itinerary:
     try:
         return coordinate(request, session_id=f"plan-{uuid.uuid4()}")
     except NoFeasiblePlanError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/plan/revise", response_model=Itinerary)
+def plan_revise(body: PlanReviseRequest) -> Itinerary:
+    """Revise loop: re-run the agent pipeline for changed budget/dates/interests.
+
+    The agents execute again (travel history, stay search, cost check, render)
+    instead of appending ad-hoc chat text; the response notes what changed.
+    """
+    try:
+        return revise_plan(
+            body.request,
+            body.itinerary,
+            session_id=f"plan-revise-{uuid.uuid4()}",
+        )
+    except NoFeasiblePlanError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
 
@@ -163,7 +195,19 @@ def agent_estimate_transport(body: EstimateTransportRequest) -> TransportLeg:
         budget=body.budget,
         interests=body.interests,
     )
-    return estimate_transport_run(request, body.from_place, body.to_place)
+    try:
+        return estimate_transport_run(request, body.from_place, body.to_place)
+    except NotImplementedError as error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"estimate_transport is unavailable in api mode: {error}",
+        ) from error
+
+
+@app.post("/agents/weather")
+def agent_weather(request: TripRequest) -> dict:
+    """Direct weather tool for a destination."""
+    return weather_run(request.destination, request.start_date.isoformat() if request.start_date else None, request.end_date.isoformat() if request.end_date else None)
 
 
 
@@ -201,6 +245,27 @@ def delete_travel_history(
         raise HTTPException(status_code=404, detail="Travel-history entry not found.")
 
 
+@app.put("/api/travel-history/{entry_id}", response_model=TravelHistoryEntry)
+def update_travel_history(
+    entry_id: int,
+    request: TravelHistoryCreate,
+    user_id: str = Query(default="local-user", min_length=1, max_length=200),
+) -> TravelHistoryEntry:
+    """Update a travel history entry (e.g., country, city, location)."""
+    store = TravelHistoryStore(get_settings().database_url)
+    # First check if entry exists and belongs to user
+    existing = store.get(user_id, entry_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Travel-history entry not found.")
+    # Update the entry
+    store.update(entry_id, user_id, request.country, request.city, request.location)
+    # Return updated entry
+    updated = store.get(user_id, entry_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Travel-history entry not found after update.")
+    return TravelHistoryEntry(**updated)
+
+
 @app.get("/api/settings")
 def public_settings() -> dict:
     s = get_settings()
@@ -212,6 +277,7 @@ def public_settings() -> dict:
         "endpoint_url": model_config["base_url"],
         "api_key_configured": bool(model_config["api_key"]),
         "enable_travel_history": s.enable_travel_history,
+        "reconsider_prompt_enabled": s.reconsider_prompt_enabled,
         "tool_stays_mode": s.tool_stays_mode,
         "tool_maps_mode": s.tool_maps_mode,
         "web_search_mode": s.web_search_mode,
@@ -234,7 +300,15 @@ def search_web(request: WebSearchRequest) -> dict:
 
 
 @app.put("/api/settings/model", response_model=ModelSettingsResponse)
-def update_model_settings(request: ModelSettingsUpdate) -> ModelSettingsResponse:
+def update_model_settings(
+    request: ModelSettingsUpdate, http_request: Request
+) -> ModelSettingsResponse:
+    client_host = (http_request.client.host if http_request.client else "") or ""
+    if client_host not in _LOCAL_HOSTS:
+        raise HTTPException(
+            status_code=403,
+            detail="Model settings can only be changed from the local machine.",
+        )
     endpoint = request.endpoint_url.strip()
     if endpoint:
         parsed = urlparse(endpoint)
@@ -253,97 +327,6 @@ def update_model_settings(request: ModelSettingsUpdate) -> ModelSettingsResponse
         endpoint_url=model_config["base_url"],
         model=model_config["model"],
         api_key_configured=bool(model_config["api_key"]),
-    )
-
-
-@app.post("/api/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> ChatResponse:
-    store = ConversationStore(get_settings().database_url)
-    conversation = list(request.conversation[-20:])
-    events: list[ChatEvent] = [
-        ChatEvent(type="agent", label="Agent request queued", status="completed"),
-    ]
-    plan_context = format_plan_context(request.plan_context)
-    prompt = request.message
-    if conversation:
-        prompt = "\n".join(
-            f"{item.get('role', 'user')}: {item.get('content', '')}" for item in conversation
-        ) + f"\nuser: {request.message}"
-    if plan_context:
-        prompt = f"{plan_context}\n\n{prompt}"
-    conversation.append({"role": "user", "content": request.message})
-    conversation_id = store.save(
-        request.conversation_id,
-        conversation,
-        [event.model_dump() for event in events],
-    )
-    memory_user_id = request.user_id or conversation_id
-    remembered_places = remember_from_message(memory_user_id, request.message)
-    if remembered_places:
-        events.append(
-            ChatEvent(
-                type="agent",
-                label="Travel history updated",
-                detail=", ".join(remembered_places),
-                status="completed",
-            )
-        )
-    client = TACCClient()
-    trace = start_trace(
-        name="chat.turn",
-        input={
-            "message": request.message,
-            "history_turns": max(len(conversation) - 1, 0),
-        },
-        session_id=conversation_id,
-        metadata={"stream": False, "model": client.model},
-    )
-    try:
-        result = client.complete(
-            prompt,
-            system=TRIP_PLANNING_SYSTEM_PROMPT,
-            on_event=lambda event: events.append(ChatEvent(**event)),
-            session_id=conversation_id,
-            trace_context=trace_context_for(trace),
-        )
-        if not result.get("ok") and not result.get("stub"):
-            raise ValueError("The model service returned an invalid response.")
-    except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
-        end_trace(trace, output={"error": str(error)}, error=error)
-        failure_event = ChatEvent(
-            type="model",
-            label="Model request failed",
-            detail=str(error),
-            status="error",
-        )
-        store.save(
-            conversation_id,
-            conversation,
-            [event.model_dump() for event in events[1:]]
-            + [failure_event.model_dump()],
-        )
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "message": "The model request failed. The user message was saved and can be retried.",
-                "conversation_id": conversation_id,
-            },
-        ) from error
-    end_trace(trace, output=str(result["text"]))
-    conversation.extend(
-        [{"role": "assistant", "content": str(result["text"])}]
-    )
-    conversation_id = store.save(
-        conversation_id,
-        conversation,
-        [event.model_dump() for event in events[1:]],
-    )
-    return ChatResponse(
-        text=str(result["text"]),
-        stub=bool(result.get("stub")),
-        model=client.model,
-        conversation_id=conversation_id,
-        events=events,
     )
 
 
@@ -373,6 +356,22 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
     memory_user_id = request.user_id or conversation_id
     remembered_places = remember_from_message(memory_user_id, request.message)
     history_store = TravelHistoryStore(get_settings().database_url)
+    # Make the coordinator's mandatory travel-history check verifiable even if
+    # the model skips the tool call: surface the known places up front (labeled,
+    # capped) and require the search in the system prompt.
+    known_places = (
+        history_store.list_places(memory_user_id)[:20]
+        if get_settings().enable_travel_history
+        else []
+    )
+    if known_places:
+        prompt = (
+            "Known travel history for this user (always verify with the "
+            "search_travel_history tool before planning): "
+            + ", ".join(known_places)
+            + "\n\n"
+            + prompt
+        )
     history_tools = [{
         "type": "function",
         "function": {
@@ -650,9 +649,14 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
     return StreamingResponse(events(), media_type="text/event-stream")
 
 
-@app.post("/api/chat/question", response_model=ChatResponse)
-def answer_chat_question(request: ChatRequest) -> ChatResponse:
-    """Resume a paused model tool call with a selected option."""
+def _prepare_question_continuation(request: ChatRequest) -> dict[str, Any]:
+    """Validate a paused-question answer and build the continuation context.
+
+    Shared by the non-streaming and streaming continuation endpoints so both
+    enforce the same conversation/user/option checks and expose the same tool
+    set. The returned dict carries the store, pending record, messages, tool
+    executor, activity events, model client, and Langfuse trace.
+    """
     if not request.conversation_id:
         raise HTTPException(status_code=400, detail="A conversation_id is required.")
     store = ConversationStore(get_settings().database_url)
@@ -692,6 +696,10 @@ def answer_chat_question(request: ChatRequest) -> ChatResponse:
         },
     }, *TRIP_PLAN_TOOLS, *AGENT_TOOL_SCHEMAS]
 
+    events: list[ChatEvent] = [
+        ChatEvent(type="user", label="Answer recorded", detail=request.message, status="completed")
+    ]
+
     def execute_tool(name: str, arguments: dict[str, Any]) -> Any:
         if name in TRIP_PLAN_TOOL_NAMES:
             model_result, ui_plan = _apply_trip_plan_tool(
@@ -717,12 +725,6 @@ def answer_chat_question(request: ChatRequest) -> ChatResponse:
 
     messages = list(pending["messages"])
     messages.append({"role": "user", "content": request.message})
-    events: list[ChatEvent] = [
-        ChatEvent(type="user", label="Answer recorded", detail=request.message, status="completed")
-    ]
-    text_parts: list[str] = []
-    reasoning_parts: list[str] = []
-    next_pending: dict[str, Any] | None = None
     client = TACCClient()
     trace = start_trace(
         name="chat.question",
@@ -734,6 +736,33 @@ def answer_chat_question(request: ChatRequest) -> ChatResponse:
         session_id=request.conversation_id,
         metadata={"stream": True, "model": client.model, "continuation": True},
     )
+    return {
+        "store": store,
+        "pending": pending,
+        "messages": messages,
+        "tools": tools,
+        "execute_tool": execute_tool,
+        "events": events,
+        "client": client,
+        "trace": trace,
+    }
+
+
+@app.post("/api/chat/question", response_model=ChatResponse)
+def answer_chat_question(request: ChatRequest) -> ChatResponse:
+    """Resume a paused model tool call with a selected option."""
+    context = _prepare_question_continuation(request)
+    store = context["store"]
+    pending = context["pending"]
+    messages = context["messages"]
+    tools = context["tools"]
+    execute_tool = context["execute_tool"]
+    events = context["events"]
+    client = context["client"]
+    trace = context["trace"]
+    text_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    next_pending: dict[str, Any] | None = None
 
     def save_pause(next_messages: list[dict[str, Any]], result: dict[str, Any]) -> None:
         nonlocal next_pending
@@ -848,6 +877,246 @@ def answer_chat_question(request: ChatRequest) -> ChatResponse:
     )
 
 
+@app.post("/api/chat/question/stream")
+def answer_chat_question_stream(request: ChatRequest) -> StreamingResponse:
+    """Stream the continuation of a paused question.
+
+    Emits the same frame kinds as /api/chat/stream (event, reasoning, content,
+    done, error) so the browser can show the agents working, render partial
+    text, and stop the turn instead of waiting on a silent request.
+    """
+    context = _prepare_question_continuation(request)
+    store = context["store"]
+    pending = context["pending"]
+    messages = context["messages"]
+    tools = context["tools"]
+    execute_tool = context["execute_tool"]
+    events = context["events"]
+    client = context["client"]
+    trace = context["trace"]
+    conversation_id = request.conversation_id or ""
+
+    def frames():
+        text_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        next_pending: dict[str, Any] | None = None
+        emitted = 0
+        cancelled = False
+        trace_finished = False
+        cancel_event = register_cancel(request.request_id)
+
+        def save_pause(next_messages: list[dict[str, Any]], result: dict[str, Any]) -> None:
+            nonlocal next_pending
+            next_pending = result
+            store.save_pending_question(
+                conversation_id,
+                request.user_id,
+                next_messages,
+                result["question"],
+                result["options"],
+            )
+
+        def new_events() -> list[ChatEvent]:
+            nonlocal emitted
+            pending_events = events[emitted:]
+            emitted = len(events)
+            return pending_events
+
+        def frame(payload: dict[str, Any]) -> str:
+            return f"data: {json.dumps(payload)}\n\n"
+
+        def event_frame(event: ChatEvent) -> str:
+            return frame({"kind": "event", **event.model_dump()})
+
+        try:
+            for event in new_events():
+                yield event_frame(event)
+            for delta in client.stream(
+                "",
+                tools=tools,
+                tool_executor=execute_tool,
+                initial_messages=messages,
+                on_event=lambda event: events.append(ChatEvent(**event)),
+                on_pause=save_pause,
+                session_id=conversation_id,
+                trace_context=trace_context_for(trace),
+                cancel_event=cancel_event,
+            ):
+                if cancel_event.is_set():
+                    cancelled = True
+                    break
+                for event in new_events():
+                    yield event_frame(event)
+                if delta["kind"] == "reasoning":
+                    reasoning_parts.append(delta["text"])
+                else:
+                    text_parts.append(delta["text"])
+                yield frame({"kind": delta["kind"], "text": delta["text"]})
+            for event in new_events():
+                yield event_frame(event)
+
+            if cancelled:
+                stopped = ChatEvent(
+                    type="agent",
+                    label="Stopped by user",
+                    detail="The response was stopped before it completed.",
+                    status="completed",
+                )
+                events.append(stopped)
+                yield event_frame(stopped)
+                stopped_message = {
+                    "role": "assistant",
+                    "content": "".join(text_parts) or "[Stopped] The response was stopped.",
+                    "reasoning": "".join(reasoning_parts),
+                }
+                conversation = store.get(conversation_id)
+                if conversation is not None:
+                    stored_messages = (
+                        conversation["messages"]
+                        if next_pending is not None
+                        else conversation["messages"] + [stopped_message]
+                    )
+                    store.save(
+                        conversation_id,
+                        stored_messages,
+                        [event.model_dump() for event in events],
+                    )
+                end_trace(trace, output="".join(text_parts) or {"status": "stopped"})
+                trace_finished = True
+                yield frame(
+                    {
+                        "kind": "done",
+                        "stopped": True,
+                        "text": "".join(text_parts),
+                        "reasoning": "".join(reasoning_parts),
+                        "model": client.model,
+                        "stub": not client.configured,
+                        "conversation_id": conversation_id,
+                        "pending_question": next_pending,
+                        "events": [event.model_dump() for event in events],
+                    }
+                )
+                return
+
+            if not "".join(text_parts).strip() and next_pending is None:
+                empty = ChatEvent(
+                    type="model",
+                    label="Model returned an empty response",
+                    detail="The model finished without content. Please retry or rephrase.",
+                    status="error",
+                )
+                events.append(empty)
+                yield event_frame(empty)
+                text_parts = [
+                    "[The model returned an empty response. Please retry or rephrase "
+                    "your request.]"
+                ]
+            completed = ChatEvent(
+                type="agent",
+                label="Coordinator agent completed",
+                status="completed",
+            )
+            events.append(completed)
+            yield event_frame(completed)
+
+            if next_pending is None:
+                store.clear_pending_question(conversation_id)
+            store.mark_question_answered(
+                conversation_id,
+                request.message,
+                pending["question"],
+            )
+            conversation = store.get(conversation_id)
+            if conversation is None:
+                yield frame(
+                    {
+                        "kind": "error",
+                        "message": "The conversation was deleted before the answer was saved.",
+                        "conversation_id": conversation_id,
+                        "events": [],
+                    }
+                )
+                return
+            answer_message = {
+                "role": "assistant",
+                "content": "".join(text_parts),
+                "reasoning": "".join(reasoning_parts),
+            }
+            conversation["messages"].append({"role": "user", "content": request.message})
+            conversation["messages"].append(answer_message)
+            store.save(
+                conversation_id,
+                conversation["messages"],
+                [event.model_dump() for event in events],
+            )
+            final_text = "".join(text_parts)
+            if final_text:
+                trace_output: Any = final_text
+            elif next_pending is not None:
+                trace_output = {
+                    "status": "awaiting_user",
+                    "question": next_pending.get("question", ""),
+                }
+            else:
+                trace_output = {"text": ""}
+            end_trace(trace, output=trace_output)
+            trace_finished = True
+            yield frame(
+                {
+                    "kind": "done",
+                    "text": final_text,
+                    "reasoning": "".join(reasoning_parts),
+                    "model": client.model,
+                    "stub": not client.configured,
+                    "conversation_id": conversation_id,
+                    "pending_question": next_pending,
+                    "events": [event.model_dump() for event in events],
+                }
+            )
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
+            end_trace(
+                trace,
+                output="".join(text_parts) or {"error": str(error)},
+                error=error,
+            )
+            trace_finished = True
+            failure = ChatEvent(
+                type="model",
+                label="Continuation failed; answer can be retried",
+                detail=str(error) or error.__class__.__name__,
+                status="error",
+                data={"tool": "ask_user_question", "selected": request.message},
+            )
+            events.append(failure)
+            conversation = store.get(conversation_id)
+            if conversation is not None:
+                store.save(
+                    conversation_id,
+                    conversation["messages"],
+                    [event.model_dump() for event in events],
+                )
+            yield frame(
+                {
+                    "kind": "error",
+                    "message": (
+                        "The assistant could not continue yet. "
+                        "Your choice is still saved for retry."
+                    ),
+                    "conversation_id": conversation_id,
+                    "events": [failure.model_dump()],
+                }
+            )
+        finally:
+            clear_cancel(request.request_id, cancel_event)
+            if not trace_finished:
+                end_trace(
+                    trace,
+                    output="".join(text_parts) or {"text": ""},
+                )
+
+    return StreamingResponse(frames(), media_type="text/event-stream")
+
+
 @app.put("/api/conversations/{conversation_id}/trip-plan")
 def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
     """Persist user-edited budget fields onto the conversation's latest plan."""
@@ -871,35 +1140,6 @@ def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
         budget_items.append(
             {"category": category, "amount": float(amount), "currency": currency or ""}
         )
-    day_budgets: list[dict[str, Any]] = []
-    for item in request.day_budgets[:30]:
-        if not isinstance(item, dict):
-            raise HTTPException(status_code=422, detail="Each day budget must be an object.")
-        day = item.get("day")
-        amount = item.get("amount")
-        if isinstance(day, bool) or not isinstance(day, (int, float)) or day < 1:
-            raise HTTPException(status_code=422, detail="Each day budget needs a day number.")
-        if isinstance(amount, bool) or not isinstance(amount, (int, float)) or amount < 0:
-            raise HTTPException(
-                status_code=422, detail="Each day budget needs a non-negative amount."
-            )
-        day_budgets.append({"day": int(day), "amount": float(amount)})
-    day_items: list[dict[str, Any]] = []
-    for item in request.day_items[:120]:
-        if not isinstance(item, dict):
-            raise HTTPException(status_code=422, detail="Each day item must be an object.")
-        day = item.get("day")
-        category = str(item.get("category", "")).strip()
-        amount = item.get("amount")
-        if isinstance(day, bool) or not isinstance(day, (int, float)) or day < 1:
-            raise HTTPException(status_code=422, detail="Each day item needs a day number.")
-        if not category:
-            raise HTTPException(status_code=422, detail="Each day item needs a category.")
-        if isinstance(amount, bool) or not isinstance(amount, (int, float)) or amount < 0:
-            raise HTTPException(
-                status_code=422, detail="Each day item needs a non-negative amount."
-            )
-        day_items.append({"day": int(day), "category": category, "amount": float(amount)})
     store = ConversationStore(get_settings().database_url)
     plan = store.get_trip_plan(conversation_id)
     if plan is None:
@@ -908,7 +1148,8 @@ def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
         )
 
     updated_plan = dict(plan)
-    updated_plan["budget"] = request.budget
+    if request.budget is not None:
+        updated_plan["budget"] = request.budget
     if currency is not None:
         updated_plan["currency"] = currency
     if request.mode != "day":
@@ -916,7 +1157,7 @@ def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
 
     # Full day edits (itinerary + budget together) from the merged day editor.
     if request.mode != "category":
-        for entry in request.days[:30]:
+        for entry in request.days:
             if not isinstance(entry, dict):
                 raise HTTPException(status_code=422, detail="Each day must be an object.")
             try:
@@ -937,38 +1178,6 @@ def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
             except ValueError as error:
                 raise HTTPException(status_code=422, detail=str(error)) from error
 
-    # Legacy per-day budget fields (still accepted for compatibility).
-    days = [dict(day) for day in updated_plan.get("days", []) if isinstance(day, dict)]
-    day_map = {day.get("day"): day for day in days}
-
-    def ensure_day(number: int) -> dict[str, Any]:
-        day = day_map.get(number)
-        if day is None:
-            day = {
-                "day": number,
-                "title": f"Day {number}",
-                "activities": [],
-                "notes": [],
-                "coordinates": None,
-                "places": [],
-                "budget": None,
-                "budget_items": [],
-            }
-            days.append(day)
-            day_map[number] = day
-        return day
-
-    for entry in day_budgets:
-        ensure_day(entry["day"])["budget"] = entry["amount"]
-    items_by_day: dict[int, list[dict[str, Any]]] = {}
-    for item in day_items:
-        items_by_day.setdefault(item["day"], []).append(
-            {"category": item["category"], "amount": item["amount"], "currency": currency or ""}
-        )
-    for number, items in items_by_day.items():
-        ensure_day(number)["budget_items"] = items
-    updated_plan["days"] = sorted(days, key=lambda day: day.get("day", 0))
-
     assembled = assemble_trip_plan(updated_plan)
     store.save_trip_plan(conversation_id, updated_plan)
     store.set_latest_trip_plan_event(conversation_id, assembled)
@@ -977,8 +1186,6 @@ def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
         "budget": request.budget,
         "currency": currency,
         "budget_items": budget_items,
-        "day_budgets": day_budgets,
-        "day_items": day_items,
     }
 
 

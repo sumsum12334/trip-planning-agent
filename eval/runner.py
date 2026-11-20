@@ -29,10 +29,11 @@ from agents.chat_tools import execute_agent_tool
 from agents.coordinator.agent import run as coordinate_run
 from agents.estimate_transport.agent import run as estimate_transport_run
 from agents.search_stays.agent import run as search_stays_run
+from agents.coordinator.agent import revise as revise_run
 from agents.travel_history.agent import TravelHistoryStore
 from config import settings as settings_mod
 from config.settings import get_settings
-from eval.cases import CASES, EvalCase
+from eval.cases import CASES, REVISE_CASES, EvalCase, ReviseCase
 from eval.metrics import score_itinerary, score_stays, score_transport
 from eval.tool_cases import TOOL_CASES
 from eval.tool_metrics import score_tool_calls
@@ -55,6 +56,8 @@ def _set_runtime(
     os.environ["TOOL_STAYS_MODE"] = "stub"
     os.environ["TOOL_MAPS_MODE"] = "stub"
     os.environ["WEB_SEARCH_MODE"] = "stub"
+    # Keep eval silent: no Langfuse export attempts from local .env credentials.
+    os.environ["LANGFUSE_ENABLED"] = "0"
     if mode == "api":
         if model_url:
             os.environ["QWEN_BASE_URL"] = model_url.rstrip("/")
@@ -709,6 +712,95 @@ def run_tool_case(case: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def run_revise_case(
+    case: ReviseCase,
+    database_url: str,
+    mode: str = "stub",
+    model_url: str = "",
+) -> dict[str, Any]:
+    """Run a plan, then re-enter the pipeline with changed constraints."""
+    expect = case.get("expect") or {}
+    note_contains = [n.casefold() for n in (case.get("note_contains") or [])]
+    variants: dict[str, Any] = {}
+    for variant_name in VARIANTS:
+        enable_history = variant_name == "proposed"
+        _set_runtime(
+            enable_travel_history=enable_history,
+            database_url=database_url,
+            mode=mode,
+            model_url=model_url,
+        )
+        request = TripRequest.model_validate(case["request"])
+        revised_request = TripRequest.model_validate(case["revised_request"])
+        history_places = _seed_history(
+            database_url, request.user_id or "eval-user", case.get("history") or []
+        )
+        started = time.perf_counter()
+        error = None
+        revised = None
+        try:
+            initial = coordinate_run(
+                request, session_id=f"eval-{case['id']}-{variant_name}-initial"
+            )
+            revised = revise_run(
+                revised_request,
+                initial,
+                session_id=f"eval-{case['id']}-{variant_name}-revised",
+            )
+        except Exception as exc:  # pragma: no cover - surfaced in the report
+            error = f"{type(exc).__name__}: {exc}"
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+
+        apply_filter = (
+            bool(expect.get("history_avoidance"))
+            and enable_history
+            and revised_request.avoid_visited
+        )
+        plan = None
+        revision_note_ok = True
+        if revised is not None:
+            plan = score_itinerary(
+                revised,
+                revised_request,
+                expect,
+                history_places,
+                apply_history_filter=apply_filter,
+            )
+            missing = [
+                needle
+                for needle in note_contains
+                if not any(needle in note.casefold() for note in revised.notes or [])
+            ]
+            revision_note_ok = not missing
+            plan["checks"]["revision_note"] = revision_note_ok
+        passed = (
+            error is None
+            and plan is not None
+            and bool(plan.get("pass"))
+            and revision_note_ok
+        )
+        variants[variant_name] = {
+            "variant": variant_name,
+            "enable_travel_history": enable_history,
+            "elapsed_ms": elapsed_ms,
+            "error": error,
+            "history_places": history_places,
+            "plan": plan,
+            "revision_note_ok": revision_note_ok,
+            "notes": list(revised.notes or []) if revised is not None else [],
+            "pass": passed,
+        }
+    return {
+        "kind": "revise",
+        "id": case["id"],
+        "description": case.get("description"),
+        "request": case["request"],
+        "revised_request": case["revised_request"],
+        "variants": variants,
+        "pass": all(variants[name]["pass"] for name in VARIANTS),
+    }
+
+
 def run_suite(
     case_ids: list[str] | None = None,
     *,
@@ -717,13 +809,22 @@ def run_suite(
     mode: str = "stub",
     model_url: str = "",
 ) -> dict[str, Any]:
-    known_ids = {c["id"] for c in CASES} | {c["id"] for c in TOOL_CASES}
+    known_ids = (
+        {c["id"] for c in CASES}
+        | {c["id"] for c in TOOL_CASES}
+        | {c["id"] for c in REVISE_CASES}
+    )
     missing = [cid for cid in (case_ids or []) if cid not in known_ids]
     if missing:
         raise SystemExit(f"Unknown case id(s): {', '.join(missing)}")
 
     plan_selected = [case for case in CASES if include_plan and (not case_ids or case["id"] in case_ids)]
     tool_selected = [case for case in TOOL_CASES if include_tools and (not case_ids or case["id"] in case_ids)]
+    revise_selected = [
+        case
+        for case in REVISE_CASES
+        if include_plan and (not case_ids or case["id"] in case_ids)
+    ]
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
@@ -737,6 +838,10 @@ def run_suite(
             model_url=model_url,
         )
         cases.extend(run_case(case, database_url, mode=mode, model_url=model_url) for case in plan_selected)
+        cases.extend(
+            run_revise_case(case, database_url, mode=mode, model_url=model_url)
+            for case in revise_selected
+        )
         cases.extend(run_tool_case(case) for case in tool_selected)
     elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
 
@@ -813,7 +918,7 @@ def _write_outputs(report: dict[str, Any], cases: list[dict[str, Any]], out_dir:
             rows.append(
                 {
                     "case_id": case["id"],
-                    "kind": "plan",
+                    "kind": case.get("kind", "plan"),
                     "variant": name,
                     "pass": variant["pass"],
                     "elapsed_ms": variant["elapsed_ms"],
@@ -920,14 +1025,17 @@ def print_summary(report: dict[str, Any], json_path: Path, csv_path: Path) -> No
         expected = plan.get("expected_days")
         contrast = case.get("history_contrast")
         poi_contrast = case.get("poi_contrast")
-        if contrast is not None:
+        kind = case.get("kind", "plan")
+        if kind == "revise":
+            extra = (plan.get("checks") or {}).get("revision_note")
+        elif contrast is not None:
             extra = contrast["pass"]
         elif poi_contrast is not None:
             extra = poi_contrast["pass"]
         else:
             extra = (plan.get("checks") or {}).get("budget_revise")
         print(
-            f"{case['id']:<36} {'plan':<8} "
+            f"{case['id']:<36} {kind:<8} "
             f"{_fmt_bool(baseline['pass']):<10} "
             f"{_fmt_bool(proposed['pass']):<10} "
             f"{str(days) + '/' + str(expected):<12} "
@@ -968,6 +1076,8 @@ def print_summary(report: dict[str, Any], json_path: Path, csv_path: Path) -> No
                 reasons.append("coordinator did not revise an over-budget plan")
             if info_flags.get("revise_noted") is False:
                 reasons.append("revise succeeded but was not noted")
+            if info_flags.get("revision_note") is False:
+                reasons.append("revised plan did not note the constraint change")
             if info_flags.get("cost_scale_ok") is False and warnings:
                 reasons.append("cost-scale warning: " + ", ".join(warnings))
             poi_contrast = case.get("poi_contrast")

@@ -135,6 +135,9 @@ def end_trace(
         logger.exception("Could not flush Langfuse trace %s.", trace.trace_id)
 
 
+_ENDED_MARKER = "_trip_planner_ended"
+
+
 @contextmanager
 def model_generation(
     *,
@@ -183,12 +186,18 @@ def model_generation(
         yield observation
     finally:
         try:
-            client.flush()
-        except Exception:
-            logger.exception("Could not flush Langfuse model tracking.")
+            # Callers that exit early (retry paths, cancellation) may never call
+            # finish_generation; close the generation so Langfuse sees it end.
+            if observation is not None and not getattr(observation, _ENDED_MARKER, False):
+                finish_generation(observation)
         finally:
-            if attributes is not None:
-                attributes.__exit__(None, None, None)
+            try:
+                client.flush()
+            except Exception:
+                logger.exception("Could not flush Langfuse model tracking.")
+            finally:
+                if attributes is not None:
+                    attributes.__exit__(None, None, None)
 
 
 def finish_generation(
@@ -203,6 +212,10 @@ def finish_generation(
     try:
         update_generation(observation, output=output, error=error)
         observation.end()
+        try:
+            setattr(observation, _ENDED_MARKER, True)
+        except Exception:
+            pass
     except Exception:
         logger.exception("Could not finish Langfuse model tracking.")
 

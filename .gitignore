@@ -68,3 +68,11 @@ coverage/
 # Eval reports
 eval/results/*
 !eval/results/.gitkeep
+!eval/results/eval-reference.json
+!eval/results/eval-reference.csv
+
+# Local screen recordings (scripts/record-screen.ps1)
+recordings/
+
+# Local helper scripts (per review: scripts folder stays uncommitted)
+scripts/

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,53 +24,77 @@ def _database_path(database_url: str) -> Path:
 
 
 class ConversationStore:
+    """SQLite-backed store, safe for concurrent use within one process.
+
+    Store instances are created per request, so read-modify-write operations
+    (event appends, event rewrites) are serialized by a per-database-file
+    lock shared across instances. WAL mode keeps readers and writers from
+    blocking each other across threads.
+    """
+
+    _path_locks: dict[str, threading.RLock] = {}
+    _path_locks_guard = threading.Lock()
+
     def __init__(self, database_url: str) -> None:
         self.path = _database_path(database_url)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connection() as connection:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS conversations (
-                    id TEXT PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    messages TEXT NOT NULL,
-                    events TEXT NOT NULL DEFAULT '[]',
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
-            columns = {
-                row[1]
-                for row in connection.execute("PRAGMA table_info(conversations)")
-            }
-            if "events" not in columns:
+        self._lock = self._lock_for(self.path)
+        with self._lock:
+            with self._connection() as connection:
                 connection.execute(
-                    "ALTER TABLE conversations ADD COLUMN events TEXT NOT NULL DEFAULT '[]'"
+                    """
+                    CREATE TABLE IF NOT EXISTS conversations (
+                        id TEXT PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        messages TEXT NOT NULL,
+                        events TEXT NOT NULL DEFAULT '[]',
+                        updated_at TEXT NOT NULL
+                    )
+                    """
                 )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS pending_questions (
-                    conversation_id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    messages TEXT NOT NULL,
-                    question TEXT NOT NULL,
-                    options TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                columns = {
+                    row[1]
+                    for row in connection.execute("PRAGMA table_info(conversations)")
+                }
+                if "events" not in columns:
+                    connection.execute(
+                        "ALTER TABLE conversations ADD COLUMN events TEXT NOT NULL DEFAULT '[]'"
+                    )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS pending_questions (
+                        conversation_id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        messages TEXT NOT NULL,
+                        question TEXT NOT NULL,
+                        options TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
                 )
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS trip_plans (
-                    conversation_id TEXT PRIMARY KEY,
-                    plan TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS trip_plans (
+                        conversation_id TEXT PRIMARY KEY,
+                        plan TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
                 )
-                """
-            )
+
+    @classmethod
+    def _lock_for(cls, path: Path) -> threading.RLock:
+        key = str(path.resolve())
+        with cls._path_locks_guard:
+            if key not in cls._path_locks:
+                cls._path_locks[key] = threading.RLock()
+            return cls._path_locks[key]
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.path)
+        connection = sqlite3.connect(self.path, timeout=5.0)
+        connection.execute("PRAGMA busy_timeout = 5000")
+        connection.execute("PRAGMA journal_mode = WAL")
+        return connection
 
     @contextmanager
     def _connection(self):
@@ -92,30 +117,33 @@ class ConversationStore:
             "New conversation",
         )[:80]
         updated_at = datetime.now(timezone.utc).isoformat()
-        with self._connection() as connection:
-            existing = connection.execute(
-                "SELECT events FROM conversations WHERE id = ?",
-                (conversation_id,),
-            ).fetchone()
-            stored_events = json.loads(existing[0]) if existing else []
-            connection.execute(
-                """
-                INSERT INTO conversations (id, title, messages, events, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    title=excluded.title,
-                    messages=excluded.messages,
-                    events=excluded.events,
-                    updated_at=excluded.updated_at
-                """,
-                (
-                    conversation_id,
-                    title,
-                    json.dumps(messages),
-                    json.dumps(stored_events + (events or [])),
-                    updated_at,
-                ),
-            )
+        # The event append is a read-modify-write; hold the per-path lock so
+        # concurrent turns on the same conversation cannot drop events.
+        with self._lock:
+            with self._connection() as connection:
+                existing = connection.execute(
+                    "SELECT events FROM conversations WHERE id = ?",
+                    (conversation_id,),
+                ).fetchone()
+                stored_events = json.loads(existing[0]) if existing else []
+                connection.execute(
+                    """
+                    INSERT INTO conversations (id, title, messages, events, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        title=excluded.title,
+                        messages=excluded.messages,
+                        events=excluded.events,
+                        updated_at=excluded.updated_at
+                    """,
+                    (
+                        conversation_id,
+                        title,
+                        json.dumps(messages),
+                        json.dumps(stored_events + (events or [])),
+                        updated_at,
+                    ),
+                )
         return conversation_id
 
     def list(self) -> list[dict[str, str]]:
@@ -145,19 +173,20 @@ class ConversationStore:
         }
 
     def delete(self, conversation_id: str) -> bool:
-        with self._connection() as connection:
-            cursor = connection.execute(
-                "DELETE FROM conversations WHERE id = ?",
-                (conversation_id,),
-            )
-            connection.execute(
-                "DELETE FROM pending_questions WHERE conversation_id = ?",
-                (conversation_id,),
-            )
-            connection.execute(
-                "DELETE FROM trip_plans WHERE conversation_id = ?",
-                (conversation_id,),
-            )
+        with self._lock:
+            with self._connection() as connection:
+                cursor = connection.execute(
+                    "DELETE FROM conversations WHERE id = ?",
+                    (conversation_id,),
+                )
+                connection.execute(
+                    "DELETE FROM pending_questions WHERE conversation_id = ?",
+                    (conversation_id,),
+                )
+                connection.execute(
+                    "DELETE FROM trip_plans WHERE conversation_id = ?",
+                    (conversation_id,),
+                )
         return cursor.rowcount > 0
 
     def save_pending_question(
@@ -260,7 +289,7 @@ class ConversationStore:
         Used after the user edits the budget so the browser re-renders the
         current plan; the plan itself lives in the ``trip_plans`` table.
         """
-        with self._connection() as connection:
+        with self._lock, self._connection() as connection:
             row = connection.execute(
                 "SELECT events FROM conversations WHERE id = ?",
                 (conversation_id,),
@@ -287,7 +316,7 @@ class ConversationStore:
     def mark_question_answered(
         self, conversation_id: str, selected: str, question: str | None = None
     ) -> bool:
-        with self._connection() as connection:
+        with self._lock, self._connection() as connection:
             row = connection.execute(
                 "SELECT events FROM conversations WHERE id = ?",
                 (conversation_id,),

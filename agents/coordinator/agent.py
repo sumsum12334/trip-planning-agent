@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Optional, TypedDict
+
+import httpx
 
 from langgraph.graph import END, START, StateGraph
 
@@ -57,8 +60,47 @@ def _arrival_transport(request: TripRequest, stay: Optional[StayCandidate]) -> T
 
 
 def _day_cost(stay: Optional[StayCandidate], transports: list[TransportLeg]) -> float:
+    # Charging model: each itinerary day carries one night of the chosen stay
+    # (nights == days, i.e. the checkout day still counts a night), plus the
+    # arrival transport on day 1 only. Costs share one plan currency
+    # (see _components_currency).
     stay_cost = (stay.nightly_cost or 0) if stay else 0
     return stay_cost + sum((leg.cost or 0) for leg in transports)
+
+
+def _components_currency(
+    stays: list[StayCandidate], transports: list[TransportLeg]
+) -> Optional[str]:
+    """Single currency across all costed components, or None when unknown.
+
+    Raises NoFeasiblePlanError when costed components carry different
+    currencies: summing them would make the budget check meaningless. Returns
+    None when nothing is costed, or when a positive cost has no currency label
+    (the caller notes that the budget was not enforced).
+    """
+    known: set[str] = set()
+    has_unlabeled_cost = False
+    for stay in stays:
+        if (stay.nightly_cost or 0) > 0:
+            if stay.currency:
+                known.add(stay.currency)
+            else:
+                has_unlabeled_cost = True
+    for leg in transports:
+        if (leg.cost or 0) > 0:
+            if leg.currency:
+                known.add(leg.currency)
+            else:
+                has_unlabeled_cost = True
+    if len(known) > 1:
+        raise NoFeasiblePlanError(
+            "no feasible stay: plan components mix currencies ("
+            + ", ".join(sorted(known))
+            + "); the budget cannot be checked honestly"
+        )
+    if has_unlabeled_cost:
+        return None
+    return next(iter(known)) if known else None
 
 
 def render_days(
@@ -103,10 +145,12 @@ def render_itinerary(
         excluded=excluded,
     )
     days = render_days(request, [stay] if stay else [], transport, packed)
+    currency = _components_currency([stay] if stay else [], [transport])
     return Itinerary(
         request=request,
         days=days,
         total_estimated_cost=sum((day.estimated_cost or 0) for day in days),
+        currency=currency,
         used_travel_history=used_history,
         notes=list(notes),
     )
@@ -114,7 +158,10 @@ def render_itinerary(
 
 def _over_budget(itinerary: Itinerary) -> bool:
     budget = itinerary.request.budget
-    return budget is not None and (itinerary.total_estimated_cost or 0) > budget
+    if budget is None or itinerary.currency is None:
+        # Without a known plan currency the total cannot be compared honestly.
+        return False
+    return (itinerary.total_estimated_cost or 0) > budget
 
 
 def revise_itinerary(
@@ -135,7 +182,11 @@ def revise_itinerary(
     ]
     alternatives.sort(key=lambda stay: (-(stay.rating or 0), stay.nightly_cost or 0))
     for stay in alternatives:
-        trial = render_itinerary(request, stay, visited, used_history, itinerary.notes)
+        try:
+            trial = render_itinerary(request, stay, visited, used_history, itinerary.notes)
+        except NoFeasiblePlanError:
+            # The alternative mixes currencies; it cannot be cost-checked.
+            continue
         if not _over_budget(trial):
             started = current.name if current else "no stay"
             trial.notes = list(itinerary.notes) + [
@@ -172,16 +223,6 @@ def _coordinate_node(state: CoordinatorState) -> CoordinatorState:
     if used_history:
         notes.append(f"Travel history entries considered: {len(visited)}")
 
-    # Optional LLM nudge via TACC (stub-safe)
-    _ = tacc.complete(
-        f"Outline a {trip_length(request)}-day plan for {request.destination} "
-        f"budget={request.budget} interests={request.interests} "
-        f"avoid={visited if request.avoid_visited else []}",
-        system=TRIP_PLANNING_SYSTEM_PROMPT,
-        session_id=state.get("session_id"),
-        trace_context=state.get("trace_context"),
-    )
-
     if not stays:
         raise NoFeasiblePlanError(
             "no feasible stay: all candidates over budget or none matched"
@@ -193,6 +234,19 @@ def _coordinate_node(state: CoordinatorState) -> CoordinatorState:
         raise NoFeasiblePlanError(
             "no feasible stay: plan still exceeds budget after revise"
         )
+    if request.budget is not None and itinerary.currency is None:
+        itinerary.notes.append(
+            "Budget not enforced: some cost components have no currency label"
+        )
+    itinerary.notes.extend(
+        _summary_notes(
+            tacc,
+            request,
+            itinerary,
+            session_id=state.get("session_id"),
+            trace_context=state.get("trace_context"),
+        )
+    )
     return {"itinerary": itinerary}
 
 
@@ -205,6 +259,176 @@ _graph.add_edge("travel_history", "search_stays")
 _graph.add_edge("search_stays", "coordinate")
 _graph.add_edge("coordinate", END)
 _coordinator_graph = _graph.compile()
+
+
+def _parse_summary_notes(text: str) -> list[str]:
+    """Parse the model's JSON summary; tolerate code fences and junk."""
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`").lstrip()
+        if cleaned[:4].casefold() == "json":
+            cleaned = cleaned[4:]
+        cleaned = cleaned.strip()
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return []
+    raw_notes = parsed.get("notes") if isinstance(parsed, dict) else None
+    if not isinstance(raw_notes, list):
+        return []
+    notes: list[str] = []
+    for item in raw_notes:
+        if not isinstance(item, str):
+            continue
+        note = item.strip()
+        if note:
+            notes.append(f"Model summary: {note[:160]}")
+        if len(notes) == 3:
+            break
+    return notes
+
+
+def _summary_notes(
+    tacc: TACCClient,
+    request: TripRequest,
+    itinerary: Itinerary,
+    *,
+    session_id: str | None = None,
+    trace_context: dict[str, str] | None = None,
+) -> list[str]:
+    """Agent 3 summarize role: model-authored notes on the finalized plan.
+
+    The notes are used only when the model endpoint is configured and returns
+    parseable JSON; stub mode, network errors, and malformed output leave the
+    deterministic notes unchanged. The response is a summary, never hidden
+    chain-of-thought.
+    """
+    if not tacc.configured:
+        return []
+    stay = (
+        itinerary.days[0].stays[0]
+        if itinerary.days and itinerary.days[0].stays
+        else None
+    )
+    day_lines = "; ".join(
+        f"Day {day.day_index}: " + (", ".join(day.pois) if day.pois else "no stops listed")
+        for day in itinerary.days
+    )
+    stay_text = "none"
+    if stay is not None:
+        stay_text = stay.name
+        if stay.nightly_cost is not None:
+            stay_text += f" at {stay.nightly_cost} {stay.currency or ''} per night"
+    arrival = (
+        itinerary.days[0].transports[0].mode
+        if itinerary.days and itinerary.days[0].transports
+        else "none"
+    )
+    prompt = (
+        "Summarize this finalized trip plan for the traveler in 1-3 short notes "
+        "(each under 120 characters): what the plan covers, the stay and arrival "
+        "transport choice, and the main budget trade-off.\n"
+        f"Destination: {request.destination}. "
+        f"Trip length: {len(itinerary.days)} day(s). "
+        f"Stay: {stay_text}. "
+        f"Arrival transport: {arrival}. "
+        f"Total estimated cost: {itinerary.total_estimated_cost} "
+        f"{itinerary.currency or ''} against budget {request.budget}.\n"
+        f"Plan outline: {day_lines}.\n"
+        'Respond with JSON only: {"notes": ["..."]}'
+    )
+    try:
+        result = tacc.complete(
+            prompt,
+            system=TRIP_PLANNING_SYSTEM_PROMPT,
+            session_id=session_id,
+            trace_context=trace_context,
+        )
+    except (httpx.HTTPError, KeyError, TypeError, ValueError):
+        return []
+    if not result.get("ok") or result.get("stub"):
+        return []
+    return _parse_summary_notes(str(result.get("text") or ""))
+
+
+def _constraint_changes(previous: TripRequest, current: TripRequest) -> list[str]:
+    """Human-readable diff between the previous and revised trip constraints."""
+    notes: list[str] = []
+    if previous.budget != current.budget:
+        old = "none" if previous.budget is None else str(previous.budget)
+        new = "none" if current.budget is None else str(current.budget)
+        notes.append(f"Revised for new budget: {new} (was {old})")
+    previous_days = trip_length(previous)
+    current_days = trip_length(current)
+    if previous_days != current_days:
+        notes.append(
+            f"Revised for new trip length: {current_days} day(s) (was {previous_days})"
+        )
+    elif (previous.start_date, previous.end_date) != (
+        current.start_date,
+        current.end_date,
+    ):
+        notes.append("Revised for new dates")
+    if sorted(item.casefold() for item in previous.interests) != sorted(
+        item.casefold() for item in current.interests
+    ):
+        notes.append(
+            "Revised interests: "
+            + (", ".join(current.interests) or "none")
+            + " (was "
+            + (", ".join(previous.interests) or "none")
+            + ")"
+        )
+    if previous.avoid_visited != current.avoid_visited:
+        notes.append(
+            "Repeat avoidance enabled" if current.avoid_visited else "Repeat avoidance disabled"
+        )
+    if not notes:
+        notes.append("Constraints unchanged; plan re-validated")
+    return notes
+
+
+def revise(
+    request: TripRequest, previous: Itinerary, *, session_id: str | None = None
+) -> Itinerary:
+    """Revise loop: re-enter the agent pipeline with updated constraints.
+
+    Re-runs Agent 4 (travel history), Agent 1 (stays), and the coordinator node
+    so the cost check and rendering apply to the new budget/dates/interests
+    instead of appending ad-hoc chat text. The returned plan notes what changed.
+    """
+    if (
+        request.destination.strip().casefold()
+        != previous.request.destination.strip().casefold()
+    ):
+        raise ValueError(
+            "Revisions keep the same destination; run a new plan to change it."
+        )
+    trace = start_trace(
+        name="plan.revise",
+        input={
+            "previous": previous.request.model_dump(mode="json"),
+            "request": request.model_dump(mode="json"),
+        },
+        session_id=session_id,
+        metadata={"workflow": "revise"},
+    )
+    try:
+        itinerary = _coordinator_graph.invoke(
+            {
+                "request": request,
+                "session_id": session_id,
+                "trace_context": trace_context_for(trace),
+            }
+        )["itinerary"]
+    except Exception as error:
+        end_trace(trace, output={"error": str(error)}, error=error)
+        raise
+    itinerary.notes = _constraint_changes(previous.request, request) + list(
+        itinerary.notes or []
+    )
+    end_trace(trace, output=itinerary.model_dump(mode="json"))
+    return itinerary
 
 
 def run(request: TripRequest, *, session_id: str | None = None) -> Itinerary:

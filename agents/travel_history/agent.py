@@ -279,6 +279,66 @@ class TravelHistoryStore:
                 )
                 return cursor.rowcount > 0
 
+    def update(self, entry_id: int, user_id: str, country: str | None, city: str | None, location: str) -> bool:
+        """Update a travel history entry."""
+        cleaned_user_id = user_id.strip()
+        cleaned_country = country.strip() if country else None
+        cleaned_city = city.strip() if city else None
+        cleaned_location = location.strip()
+        if not cleaned_user_id or not cleaned_location:
+            raise ValueError("Travel history records require a user_id and location.")
+        if self.kind == "sqlite":
+            with self._connection() as connection:
+                cursor = connection.execute(
+                    """
+                    UPDATE travel_history
+                    SET country = ?, city = ?, location = ?
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (cleaned_country, cleaned_city, cleaned_location, entry_id, cleaned_user_id),
+                )
+                return cursor.rowcount > 0
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE travel_history
+                    SET country = %s, city = %s, location = %s
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (cleaned_country, cleaned_city, cleaned_location, entry_id, cleaned_user_id),
+                )
+                return cursor.rowcount > 0
+
+    def get(self, user_id: str, entry_id: int) -> dict[str, Any] | None:
+        """Get a single travel history entry by ID."""
+        sql = """
+            SELECT id, user_id, country, city, COALESCE(location, place), visited_at
+            FROM travel_history
+            WHERE user_id = {ph} AND id = {ph}
+        """
+        if self.kind == "sqlite":
+            with self._connection() as connection:
+                row = connection.execute(
+                    sql.format(ph="?"),
+                    (user_id.strip(), entry_id),
+                ).fetchone()
+        else:
+            with self._connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(sql.format(ph="%s"), (user_id.strip(), entry_id))
+                    row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "user_id": row[1],
+            "country": row[2],
+            "city": row[3],
+            "location": row[4],
+            "visited_at": row[5],
+        }
+
     def add_entry(
         self,
         *,

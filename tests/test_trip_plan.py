@@ -125,3 +125,52 @@ def test_format_plan_context_includes_items_days_and_airport():
     assert "Budget item Food: EUR 120" in context
     assert format_plan_context(None) == ""
     assert format_plan_context({}) == ""
+
+
+def test_start_trip_plan_accepts_iso_start_date():
+    plan, _ = apply_trip_plan_tool(
+        "start_trip_plan",
+        {"destination": "Tokyo", "start_date": "2026-12-01"},
+        None,
+    )
+    assert plan["start_date"] == "2026-12-01"
+    assembled = assemble_trip_plan(plan)
+    assert assembled["start_date"] == "2026-12-01"
+
+
+def test_start_trip_plan_rejects_non_iso_date():
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        apply_trip_plan_tool(
+            "start_trip_plan",
+            {"destination": "Tokyo", "start_date": "December 1"},
+            None,
+        )
+
+
+def test_start_trip_plan_empty_date_clears_it():
+    plan, _ = apply_trip_plan_tool(
+        "start_trip_plan", {"destination": "Tokyo", "start_date": "2026-12-01"}, None
+    )
+    plan, _ = apply_trip_plan_tool(
+        "start_trip_plan", {"destination": "Tokyo", "start_date": ""}, plan
+    )
+    assert plan["start_date"] is None
+
+
+def test_assemble_lenient_with_invalid_stored_date():
+    assembled = assemble_trip_plan({"destination": "Tokyo", "start_date": "not-a-date"})
+    assert assembled["start_date"] is None
+
+
+def test_start_date_tool_schema_is_advertised():
+    schema = next(
+        tool for tool in TRIP_PLAN_TOOLS if tool["function"]["name"] == "start_trip_plan"
+    )
+    assert "start_date" in schema["function"]["parameters"]["properties"]
+
+
+def test_plan_context_includes_start_date():
+    context = format_plan_context(
+        {"destination": "Rome", "start_date": "2026-03-02", "budget": 420}
+    )
+    assert "Start date: 2026-03-02" in context

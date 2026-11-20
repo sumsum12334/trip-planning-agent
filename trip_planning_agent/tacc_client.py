@@ -36,6 +36,24 @@ class TACCClient:
         return bool(self.base_url)
 
 
+    def _sampling_params(self, *, stream: bool) -> dict[str, Any]:
+        """Build sampling payload fields from settings, keeping legacy defaults."""
+        settings = self.settings
+        enable_thinking = getattr(settings, "model_enable_thinking", None)
+        if enable_thinking is None:
+            # Historical behavior: thinking while streaming, disabled otherwise.
+            enable_thinking = stream
+        params: dict[str, Any] = {
+            "max_tokens": int(getattr(settings, "model_max_tokens", 16384) or 16384),
+            "temperature": float(getattr(settings, "model_temperature", 1.0)),
+            "top_p": float(getattr(settings, "model_top_p", 0.95)),
+            "chat_template_kwargs": {"enable_thinking": bool(enable_thinking)},
+        }
+        reasoning_budget = getattr(settings, "model_reasoning_budget", 16384)
+        if reasoning_budget:
+            params["reasoning_budget"] = int(reasoning_budget)
+        return params
+
     @staticmethod
     def _response_body(response: httpx.Response) -> str:
         """Read an HTTP error body without assuming the stream is complete."""
@@ -101,16 +119,10 @@ class TACCClient:
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        if on_event:
-            on_event({"type": "model", "label": "Preparing model request", "status": "completed"})
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
-            "max_tokens": 16384,
-            "temperature": 1.0,
-            "top_p": 0.95,
-            "reasoning_budget": 16384,
-            "chat_template_kwargs": {"enable_thinking": False},
+            **self._sampling_params(stream=False),
             **(extra or {}),
         }
         headers = {"Content-Type": "application/json"}
@@ -206,13 +218,6 @@ class TACCClient:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         if on_event:
-            on_event(
-                {
-                    "type": "model",
-                    "label": "Preparing model request",
-                    "status": "completed",
-                }
-            )
             on_event({"type": "model", "label": "Model is thinking", "detail": self.model, "status": "running"})
 
         cancelled = False
@@ -223,12 +228,8 @@ class TACCClient:
                 payload = {
                     "model": self.model,
                     "messages": messages,
-                    "max_tokens": 16384,
-                    "temperature": 1.0,
-                    "top_p": 0.95,
-                    "reasoning_budget": 16384,
                     "stream": True,
-                    "chat_template_kwargs": {"enable_thinking": True},
+                    **self._sampling_params(stream=True),
                 }
                 if tools:
                     payload["tools"] = tools

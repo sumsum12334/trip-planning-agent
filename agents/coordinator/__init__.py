@@ -1,5 +1,5 @@
 """Agent package: coordinator."""
 
-from .agent import run
+from .agent import revise, run
 
-__all__ = ["run"]
+__all__ = ["revise", "run"]

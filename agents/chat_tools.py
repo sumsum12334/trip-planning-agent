@@ -4,6 +4,10 @@ These wrap the existing agent modules (Agent 1 `search_stays`, Agent 2
 `estimate_transport`, and the optional `web_search`) so the chat model can call
 them during a turn. Provider failures are returned as labeled error results so a
 single failed tool does not abort the whole turn.
+
+Weather is intentionally NOT a chat tool: the trip-plan UI integrates it
+directly (per-day forecasts via POST /agents/weather), so the model neither
+calls nor fabricates forecasts.
 """
 
 from __future__ import annotations
@@ -41,7 +45,9 @@ AGENT_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "properties": {
                     "destination": {"type": "string"},
                     "budget": {"type": "number", "description": "Optional total trip budget."},
-                    "days": {"type": "integer", "minimum": 1, "maximum": 30},
+                    # No fixed day limit (proposal scope); requests of any
+                    # length are accepted and rendered one day per day.
+                    "days": {"type": "integer", "minimum": 1},
                     "interests": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": ["destination"],
@@ -117,10 +123,13 @@ AGENT_TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 
-def _optional_int(value: Any, *, minimum: int, maximum: int) -> int | None:
+def _optional_int(value: Any, *, minimum: int, maximum: int | None = None) -> int | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return max(minimum, min(maximum, int(value)))
+    result = max(minimum, int(value))
+    if maximum is not None:
+        result = min(maximum, result)
+    return result
 
 
 def _clean_strings(value: Any) -> list[str]:
@@ -141,7 +150,7 @@ def execute_agent_tool(name: str, arguments: dict[str, Any]) -> Any:
         request = TripRequest(
             destination=destination,
             budget=arguments.get("budget"),
-            days=_optional_int(arguments.get("days"), minimum=1, maximum=30),
+            days=_optional_int(arguments.get("days"), minimum=1),
             interests=_clean_strings(arguments.get("interests")),
             start_date=arguments.get("check_in"),
             end_date=arguments.get("check_out"),
@@ -157,9 +166,17 @@ def execute_agent_tool(name: str, arguments: dict[str, Any]) -> Any:
         to_place = str(arguments.get("to_place", "")).strip()
         if not from_place or not to_place:
             raise ValueError("estimate_transport requires from_place and to_place.")
-        leg = estimate_transport_run(
-            TripRequest(destination=from_place), from_place, to_place
-        )
+        try:
+            leg = estimate_transport_run(
+                TripRequest(destination=from_place), from_place, to_place
+            )
+        except NotImplementedError as error:
+            return {
+                "mode": "unavailable",
+                "error": f"Transport provider unavailable: {error}",
+                "from_place": from_place,
+                "to_place": to_place,
+            }
         result = leg.model_dump()
         if arguments.get("mode"):
             result["mode_hint"] = str(arguments["mode"])
