@@ -5,8 +5,8 @@ import {
   formatPlanDate,
   markerNumbersForDay,
   planBudgetItems,
+  planEditChanges,
   routePoints,
-  summarizePlanEdit,
 } from "../lib/planUtils.js";
 import { downloadPlanMarkdown, printPlanReport } from "../lib/planExport.js";
 import { CategoryBudgetEditor, DayEditor } from "./BudgetEditors.jsx";
@@ -163,23 +163,23 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
     setReconsiderPrompt(null);
   }
   function saveCategory(payload) {
-    const summary = summarizePlanEdit(plan, payload);
+    const changes = planEditChanges(plan, payload);
     onSaveBudget?.(payload);
     setEditingCategory(false);
     setNotice("Saved. The assistant will use this on your next message.");
-    setReconsiderPrompt(reconsiderEnabled && summary ? summary : null);
+    setReconsiderPrompt(reconsiderEnabled && changes.length ? changes : null);
   }
   function saveDay(dayObject) {
-    const summary = summarizePlanEdit(plan, { mode: "day", days: [dayObject] });
+    const changes = planEditChanges(plan, { mode: "day", days: [dayObject] });
     onSaveBudget?.({ mode: "day", budget: estimate, currency, days: [dayObject] });
     setEditingDay(null);
     setNotice("Day saved. The assistant will use this on your next message.");
-    setReconsiderPrompt(reconsiderEnabled && summary ? summary : null);
+    setReconsiderPrompt(reconsiderEnabled && changes.length ? changes : null);
   }
   function askReconsider() {
-    const summary = reconsiderPrompt;
+    const changes = reconsiderPrompt;
     setReconsiderPrompt(null);
-    if (summary) onReconsider?.(summary);
+    if (changes?.length) onReconsider?.(changes);
   }
 
   return <div className="trip-plan-card">
@@ -358,7 +358,7 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
                 <div style={{display: 'flex', gap: 8, alignItems: 'center'}}>
                   {stay.source_url && (
                     <a href={stay.source_url} target="_blank" rel="noopener noreferrer" className="stay-book-link">
-                      View on trip.com
+                      Open listing
                     </a>
                   )}
                   {stay.coordinates && (
@@ -384,15 +384,31 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
       </DialogActions>
     </Dialog>
 
-    {reconsiderEnabled && reconsiderPrompt && (
-      <div className="reconsider-banner" role="status">
-        <span className="reconsider-text"><strong>Plan adjusted</strong> — ask the AI to reconsider?</span>
-        <div className="reconsider-actions">
-          <button type="button" className="plan-tool primary" disabled={busy} onClick={askReconsider}>Ask AI to reconsider</button>
-          <button type="button" className="plan-tool" disabled={busy} onClick={() => setReconsiderPrompt(null)}>Dismiss</button>
-        </div>
-      </div>
-    )}
+    {/* Reconsider confirmation: a modal listing the concrete edits, asking
+        whether the assistant should reconsider the plan (yes / no). */}
+    <Dialog
+      open={reconsiderEnabled && Array.isArray(reconsiderPrompt)}
+      onClose={() => setReconsiderPrompt(null)}
+      maxWidth="sm"
+      fullWidth
+      aria-label="Reconsider plan changes"
+    >
+      <DialogTitle>Plan changed — ask the AI to reconsider?</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          Your edits are saved. Confirm to send them to the assistant so it can review and update the rest of the plan.
+        </Typography>
+        {(reconsiderPrompt || []).length > 0 && (
+          <ul className="reconsider-changes">
+            {reconsiderPrompt.map((change, index) => <li key={index}>{change}</li>)}
+          </ul>
+        )}
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2 }}>
+        <Button onClick={() => setReconsiderPrompt(null)} disabled={busy}>No, thanks</Button>
+        <Button variant="contained" disabled={busy} onClick={askReconsider}>Yes, ask the AI</Button>
+      </DialogActions>
+    </Dialog>
     <div className="trip-budget-block">
       <div className="trip-budget-head">
         <span>ESTIMATED BUDGET</span>

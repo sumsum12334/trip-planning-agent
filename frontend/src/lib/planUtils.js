@@ -53,6 +53,96 @@ const placeSignature = (values) =>
 const budgetItemSignature = (values) =>
   (Array.isArray(values) ? values : []).map((item) => `${item?.category ?? ""}|${item?.amount ?? ""}`).join("␟");
 
+const MAX_LISTED_ITEMS = 4;
+
+const normalizeMoney = (value) => {
+  if (value == null || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+};
+
+const describeListChange = (label, previous, next) => {
+  const prevList = (Array.isArray(previous) ? previous : []).map((item) => String(item ?? ""));
+  const nextList = (Array.isArray(next) ? next : []).map((item) => String(item ?? ""));
+  const added = nextList.filter((item) => !prevList.includes(item));
+  const removed = prevList.filter((item) => !nextList.includes(item));
+  const formatSide = (items) => {
+    const shown = items.slice(0, MAX_LISTED_ITEMS).map((item) => `"${item}"`).join(", ");
+    const extra = items.length > MAX_LISTED_ITEMS ? ` (+${items.length - MAX_LISTED_ITEMS} more)` : "";
+    return `${shown}${extra}`;
+  };
+  const bits = [];
+  if (added.length) bits.push(`added: ${formatSide(added)}`);
+  if (removed.length) bits.push(`removed: ${formatSide(removed)}`);
+  return bits.length ? `${label} ${bits.join("; ")}` : null;
+};
+
+const describeBudgetItemChanges = (previousItems, nextItems, money) => {
+  const previous = new Map(
+    (Array.isArray(previousItems) ? previousItems : []).map((item) => [String(item?.category ?? ""), normalizeMoney(item?.amount)]),
+  );
+  const next = new Map(
+    (Array.isArray(nextItems) ? nextItems : []).map((item) => [String(item?.category ?? ""), normalizeMoney(item?.amount)]),
+  );
+  const changes = [];
+  for (const [category, amount] of next) {
+    if (!previous.has(category)) changes.push(`${category}: added ${money(amount)}`);
+    else if (previous.get(category) !== amount) changes.push(`${category}: ${money(previous.get(category))} → ${money(amount)}`);
+  }
+  for (const [category, amount] of previous) {
+    if (!next.has(category)) changes.push(`${category}: removed (was ${money(amount)})`);
+  }
+  return changes;
+};
+
+// Detailed, human-readable list of what a plan edit changed (with the actual
+// values), used by the reconsider confirmation modal and the message sent to
+// the assistant. Returns [] when nothing changed.
+export function planEditChanges(previousPlan, payload) {
+  if (!payload || typeof payload !== "object") return [];
+  const currency = payload.currency || previousPlan?.currency || "";
+  const money = (value) => formatBudget(value, currency) ?? "not set";
+  const changes = [];
+  if (payload.mode === "day" && Array.isArray(payload.days) && payload.days.length) {
+    const previousDays = Array.isArray(previousPlan?.days) ? previousPlan.days : [];
+    payload.days.forEach((day) => {
+      if (!day || typeof day !== "object") return;
+      const label = `Day ${day.day ?? "?"}`;
+      const previous = previousDays.find((entry) => entry?.day === day.day);
+      if (!previous) {
+        changes.push(`${label} added${day.title ? `: "${day.title}"` : ""}`);
+        return;
+      }
+      if ((day.title ?? "") !== (previous.title ?? "")) {
+        changes.push(`${label} title: "${previous.title || ""}" → "${day.title || ""}"`);
+      }
+      const activities = describeListChange(`${label} activities:`, previous.activities, day.activities);
+      if (activities) changes.push(activities);
+      const notes = describeListChange(`${label} notes:`, previous.notes, day.notes);
+      if (notes) changes.push(notes);
+      const places = (values) => (Array.isArray(values) ? values : []).map((place) => place?.name ?? "");
+      const route = describeListChange(`${label} route:`, places(previous.places), places(day.places));
+      if (route) changes.push(route);
+      if ((day.budget ?? null) !== (previous.budget ?? null)) {
+        changes.push(`${label} budget: ${money(previous.budget)} → ${money(day.budget)}`);
+      }
+      describeBudgetItemChanges(previous.budget_items, day.budget_items, money).forEach((itemChange) => {
+        changes.push(`${label} budget item ${itemChange}`);
+      });
+    });
+    return changes;
+  }
+  if ((payload.budget ?? null) !== (previousPlan?.budget ?? null)) {
+    changes.push(`Estimated total: ${money(previousPlan?.budget)} → ${money(payload.budget)}`);
+  }
+  if ("budget_items" in payload) {
+    describeBudgetItemChanges(planBudgetItems(previousPlan), payload.budget_items, money).forEach((itemChange) => {
+      changes.push(`Category item ${itemChange}`);
+    });
+  }
+  return changes;
+}
+
 // Short human summary of what a plan edit changed, used for the
 // "ask the AI to reconsider" message. Returns "" when nothing changed.
 export function summarizePlanEdit(previousPlan, payload) {

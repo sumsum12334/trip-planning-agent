@@ -37,8 +37,8 @@ export function TripAssistanceSettings() {
         label="Suggest AI reconsideration after plan edits"
       />
       <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
-        When on, saving a trip-plan edit offers a one-click "Ask AI to reconsider" prompt.
-        Stored in this browser; the default comes from the server.{status ? ` ${status}` : ""}
+        When on, saving a trip-plan edit opens a dialog listing your changes and asking
+        whether the assistant should reconsider. Stored in this browser; the default comes from the server.{status ? ` ${status}` : ""}
       </Typography>
     </Paper>
   );

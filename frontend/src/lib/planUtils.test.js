@@ -7,6 +7,7 @@ import {
   formatBudget,
   formatPlanDate,
   markerNumbersForDay,
+  planEditChanges,
   planFromEvents,
   routePoints,
   splitLines,
@@ -177,5 +178,66 @@ describe("summarizePlanEdit", () => {
     expect(summarizePlanEdit(samplePlan, { mode: "day", days: [{ day: 3, title: "New" }] })).toBe("day 3 added");
     expect(summarizePlanEdit(samplePlan, { mode: "other" })).toBe("");
     expect(summarizePlanEdit(samplePlan, null)).toBe("");
+  });
+});
+
+describe("planEditChanges", () => {
+  it("lists day edits with the actual before → after values", () => {
+    const editedDay = { ...samplePlan.days[1], budget: 250, title: "Victoria Peak walk" };
+    const changes = planEditChanges(samplePlan, { mode: "day", days: [editedDay] });
+    expect(changes).toContain('Day 2 title: "The Peak" → "Victoria Peak walk"');
+    expect(changes).toContain("Day 2 budget: not set → HKD 250");
+    expect(changes).toHaveLength(2);
+  });
+
+  it("lists added and removed activities, notes, and route stops", () => {
+    const editedDay = {
+      ...samplePlan.days[1],
+      activities: ["Victoria Peak", "Peak Tram ride"],
+      notes: ["Bring water"],
+      places: [{ name: "Peak Tower" }],
+    };
+    const changes = planEditChanges(samplePlan, { mode: "day", days: [editedDay] });
+    expect(changes).toContain('Day 2 activities: added: "Peak Tram ride"');
+    expect(changes).toContain('Day 2 notes: added: "Bring water"');
+    expect(changes).toContain('Day 2 route: added: "Peak Tower"; removed: "Victoria Peak"');
+  });
+
+  it("describes budget-item diffs and added days", () => {
+    const editedDay = {
+      ...samplePlan.days[1],
+      budget_items: [
+        { category: "transport", amount: 80, currency: "HKD" },
+        { category: "food", amount: 60, currency: "HKD" },
+      ],
+    };
+    const changes = planEditChanges(samplePlan, { mode: "day", days: [editedDay] });
+    expect(changes).toContain("Day 2 budget item transport: HKD 100 → HKD 80");
+    expect(changes).toContain("Day 2 budget item food: added HKD 60");
+
+    expect(planEditChanges(samplePlan, { mode: "day", days: [{ day: 3, title: "New" }] })).toEqual([
+      'Day 3 added: "New"',
+    ]);
+  });
+
+  it("describes category edits with the estimated total and item diffs", () => {
+    const changes = planEditChanges(samplePlan, {
+      mode: "category",
+      budget: 800,
+      budget_items: [
+        { category: "food", amount: 200, currency: "HKD" },
+        { category: "transport", amount: 100, currency: "HKD" },
+      ],
+    });
+    expect(changes).toContain("Estimated total: HKD 600 → HKD 800");
+    expect(changes).toContain("Category item food: HKD 120 → HKD 200");
+    expect(changes).toContain("Category item transport: added HKD 100");
+  });
+
+  it("returns an empty list when nothing changed", () => {
+    expect(planEditChanges(samplePlan, { mode: "day", days: [samplePlan.days[0]] })).toEqual([]);
+    expect(planEditChanges(samplePlan, { mode: "category", budget: 600, budget_items: [{ category: "food", amount: 120, currency: "HKD" }] })).toEqual([]);
+    expect(planEditChanges(samplePlan, null)).toEqual([]);
+    expect(planEditChanges(null, { mode: "day", days: [] })).toEqual([]);
   });
 });

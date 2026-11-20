@@ -226,13 +226,18 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
   const busy = streaming || answering;
   const reconsiderEnabled = effectiveReconsiderEnabled(reconsiderServerDefault, reconsiderOverride);
 
-  // Sends the reconsideration request through the normal chat flow.
-  function handleReconsider(summary) {
-    if (!summary) return;
+  // Sends the reconsideration request through the normal chat flow, including
+  // the concrete plan changes (actual values) so the agent knows what to review.
+  function handleReconsider(changes) {
+    const details = (Array.isArray(changes) ? changes : [])
+      .filter(Boolean)
+      .map((change) => `- ${change}`)
+      .join("\n");
+    if (!details) return;
     sendMessage(
       null,
       false,
-      `I adjusted the trip plan (changed: ${summary}). Please reconsider the plan and update it if needed.`,
+      `I adjusted the trip plan directly. The changes were:\n${details}\nPlease reconsider the plan and update it if needed.`,
     );
   }
 
