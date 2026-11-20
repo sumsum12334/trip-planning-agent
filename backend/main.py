@@ -567,6 +567,37 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
 
             use_multi_agent = _looks_like_trip_request(request.message)
 
+            # Build role-separated conversation messages for the model so that
+            # LangSmith traces show clean user input (not mixed with prior model
+            # outputs). The full history is passed via initial_messages; prompt
+            # carries only the current user turn for clean tracing.
+            initial_messages: list[dict[str, str]] = []
+            if TRIP_PLANNING_SYSTEM_PROMPT:
+                initial_messages.append(
+                    {"role": "system", "content": TRIP_PLANNING_SYSTEM_PROMPT}
+                )
+            if known_places:
+                initial_messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Known travel history for this user (always verify with "
+                            "the search_travel_history tool before planning): "
+                            + ", ".join(known_places)
+                        ),
+                    }
+                )
+            if plan_context:
+                initial_messages.append(
+                    {"role": "system", "content": plan_context}
+                )
+            for item in conversation:
+                role = item.get("role", "user")
+                content = item.get("content", "")
+                if role in ("user", "assistant", "system"):
+                    initial_messages.append({"role": role, "content": content})
+            initial_messages.append({"role": "user", "content": request.message})
+
             try:
                 if use_multi_agent:
                     result = _run_multi_agent_plan(
@@ -579,8 +610,9 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                     stream_queue.put(("done", result))
                 else:
                     for delta in client.stream(
-                        prompt,
+                        request.message,
                         system=TRIP_PLANNING_SYSTEM_PROMPT,
+                        initial_messages=initial_messages,
                         on_event=lambda event: stream_queue.put(("event", event)),
                         tools=history_tools,
                         tool_executor=tool_executor,

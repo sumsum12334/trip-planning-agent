@@ -271,11 +271,22 @@ def model_generation(
             parent_run_id = None
             if trace_context and trace_context.get("run_id"):
                 parent_run_id = trace_context["run_id"]
-            ls_inputs: dict[str, Any] = {"prompt": prompt, "system": system or ""}
-            if isinstance(input, dict):
+            # Separate the current user input from full conversation history
+            # so LangSmith does not mix user input with previous model outputs.
+            ls_inputs: dict[str, Any] = {"system": system or ""}
+            if isinstance(input, list):
+                user_messages = [
+                    m.get("content", "")
+                    for m in input
+                    if isinstance(m, dict) and m.get("role") == "user"
+                ]
+                if user_messages:
+                    ls_inputs["prompt"] = user_messages[-1]
+                ls_inputs["messages"] = input
+            elif isinstance(input, dict):
                 ls_inputs.update(input)
-            elif input is not None:
-                ls_inputs["input"] = input
+            elif prompt:
+                ls_inputs["prompt"] = prompt
             ls_run = ls_client.create_run(
                 name=name,
                 run_type="llm",
