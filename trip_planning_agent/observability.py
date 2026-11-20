@@ -6,6 +6,7 @@ import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
 from threading import Lock
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Iterator, Optional
 
@@ -203,7 +204,7 @@ def end_trace(
                 run_id=trace.langsmith_run_id,
                 outputs=output or {},
                 error=str(error) if error else None,
-                end_time=_now_iso(),
+                end_time=_now_utc(),
             )
     except Exception:
         logger.exception("Could not finish LangSmith trace %s.", trace.langsmith_run_id)
@@ -288,15 +289,19 @@ def model_generation(
                 ls_inputs.update(input)
             elif prompt:
                 ls_inputs["prompt"] = prompt
-            ls_run = ls_client.create_run(
-                name=name,
-                run_type="llm",
-                inputs=ls_inputs,
-                project_name=s.langsmith_project,
-                parent_run_id=parent_run_id,
-                tags=["trip-planning-agent", "llm-call", model],
-                metadata={"model": model, **(metadata or {})},
-            )
+            try:
+                ls_run = ls_client.create_run(
+                    name=name,
+                    run_type="llm",
+                    inputs=ls_inputs,
+                    project_name=s.langsmith_project,
+                    parent_run_id=parent_run_id,
+                    tags=["trip-planning-agent", "llm-call", model],
+                    metadata={"model": model, **(metadata or {})},
+                )
+            except Exception as e:
+                logger.exception("LangSmith create_run failed for %s.", name)
+                ls_run = None
 
         # Expose LangSmith run id + client on the observation so that
         # finish_generation() / update_generation() can complete the trace.
@@ -350,8 +355,7 @@ def ls_finish_generation(
     *,
     output: Any | None = None,
     error: Exception | None = None,
-    first_token_time: float | None = None,
-    latency: float | None = None,
+    first_token_time: datetime | None = None,
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
 ) -> None:
@@ -366,12 +370,12 @@ def ls_finish_generation(
                 run_id=run_id,
                 outputs=output or {},
                 error=str(error) if error else None,
-                end_time=_now_iso(),
+                end_time=datetime.now(timezone.utc),
                 first_token_time=first_token_time,
-                latency=latency,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
             )
+            print(f"DEBUG LangSmith: update_run completed for run_id={run_id}")
         try:
             setattr(run, "_trip_planner_langsmith_ended", True)
         except Exception:
@@ -380,11 +384,11 @@ def ls_finish_generation(
         logger.exception("Could not finish LangSmith model tracking.")
 
 
-def _now_iso() -> str:
-    """Return current UTC time in ISO 8601 format for LangSmith end_time."""
+def _now_utc() -> datetime:
+    """Return current UTC time as a datetime object for LangSmith timestamps."""
     from datetime import datetime, timezone
 
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(timezone.utc)
 
 
 def ls_update_generation(
@@ -392,8 +396,7 @@ def ls_update_generation(
     *,
     output: Any | None = None,
     error: Exception | None = None,
-    first_token_time: float | None = None,
-    latency: float | None = None,
+    first_token_time: datetime | None = None,
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
 ) -> None:
@@ -409,10 +412,10 @@ def ls_update_generation(
                 outputs=output or {},
                 error=str(error) if error else None,
                 first_token_time=first_token_time,
-                latency=latency,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
             )
+            print(f"DEBUG LangSmith update: update_run completed for run_id={run_id}")
     except Exception:
         logger.exception("Could not update LangSmith model tracking.")
 
@@ -422,8 +425,7 @@ def finish_generation(
     *,
     output: Any | None = None,
     error: Exception | None = None,
-    first_token_time: float | None = None,
-    latency: float | None = None,
+    first_token_time: datetime | None = None,
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
 ) -> None:
@@ -448,7 +450,6 @@ def finish_generation(
             output=output,
             error=error,
             first_token_time=first_token_time,
-            latency=latency,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
@@ -459,8 +460,7 @@ def update_generation(
     *,
     output: Any | None = None,
     error: Exception | None = None,
-    first_token_time: float | None = None,
-    latency: float | None = None,
+    first_token_time: datetime | None = None,
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
 ) -> None:
@@ -484,7 +484,6 @@ def update_generation(
             output=output,
             error=error,
             first_token_time=first_token_time,
-            latency=latency,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )

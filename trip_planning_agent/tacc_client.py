@@ -6,6 +6,7 @@ import json
 import threading
 import time
 from collections.abc import Callable, Iterator
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import httpx
@@ -151,7 +152,7 @@ class TACCClient:
             settings=self.settings,
         ) as generation:
             try:
-                request_start_time = time.perf_counter()
+                request_start_time = datetime.now(timezone.utc)
                 with httpx.Client(timeout=300.0) as client:
                     response = client.post(
                         self.base_url.rstrip("/") + "/chat/completions",
@@ -178,7 +179,6 @@ class TACCClient:
                     generation,
                     output=text,
                     first_token_time=request_start_time,
-                    latency=time.perf_counter() - request_start_time,
                     completion_tokens=completion_tokens,
                 )
             except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
@@ -188,7 +188,6 @@ class TACCClient:
                     output={"error": str(error)},
                     error=error,
                     first_token_time=None,
-                    latency=time.perf_counter() - request_start_time,
                     completion_tokens=completion_tokens,
                 )
                 raise
@@ -321,7 +320,7 @@ class TACCClient:
                                     text = self._chunk_text(content)
                                     streamed_text.append(text)
                                     if first_chunk_time is None:
-                                        first_chunk_time = time.perf_counter()
+                                        first_chunk_time = datetime.now(timezone.utc)
                                     update_generation(
                                         generation,
                                         output="".join(streamed_text),
@@ -355,7 +354,6 @@ class TACCClient:
                             generation,
                             output=generation_output,
                             first_token_time=first_chunk_time,
-                            latency=time.perf_counter() - request_start_time,
                             completion_tokens=completion_tokens,
                         )
                     except (httpx.HTTPError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
@@ -365,7 +363,6 @@ class TACCClient:
                             output="".join(streamed_text) or {"error": str(error)},
                             error=error,
                             first_token_time=first_chunk_time,
-                            latency=time.perf_counter() - request_start_time,
                             completion_tokens=completion_tokens,
                         )
                         raise
