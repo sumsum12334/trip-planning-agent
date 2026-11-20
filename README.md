@@ -192,9 +192,13 @@ reflects the user's corrected figures without a separate notification message.
 
 The chat model can also call the sub-agent tools `search_stays` (Agent 1),
 `estimate_transport` (Agent 2), and `web_search` during a turn, defined in
-`agents/chat_tools.py`. Tool results carry their mode (`stub`/`api`) and
-provider failures are returned as labeled errors so one failing tool does not
-abort the turn.
+`agents/chat_tools.py`. It can also call `get_weather_forecast` with a location
+and an optional 1–7 day range. Weather uses an offline-safe, clearly labeled
+sample by default; set `WEATHER_FORECAST_MODE=open_meteo` to geocode with
+Nominatim and fetch daily data from Open-Meteo. The forecast tool is registered
+with the existing chat/coordinator dispatcher and does not add a separate
+weather-agent route. Tool results carry their mode and provider failures are
+returned as labeled errors so one failing tool does not abort the turn.
 
 The chat composer shows a **Stop** button while a model turn is streaming. The
 button calls `POST /api/chat/stop` with the turn's `request_id`, then aborts the

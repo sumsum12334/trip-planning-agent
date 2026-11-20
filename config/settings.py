@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     weather_mode: Literal["stub", "api", "open-meteo"] = Field(
         default="stub", alias="WEATHER_MODE"
     )
+    weather_forecast_mode: Literal["stub", "open_meteo"] = Field(
+        default="stub", alias="WEATHER_FORECAST_MODE"
+    )
 
     # Travel History DB
     database_url: str = Field(
