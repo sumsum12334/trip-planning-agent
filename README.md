@@ -386,9 +386,12 @@ errors.
 | Variable | Notes |
 |----------|--------|
 | `QWEN_BASE_URL` / `QWEN_MODEL` / `QWEN_API_KEY` | OpenAI-compatible model endpoint and model identifier. Set the base URL including `/v1`; set the key when required by the provider. |
+| `MODEL_MAX_TOKENS` / `MODEL_TEMPERATURE` / `MODEL_TOP_P` / `MODEL_REASONING_BUDGET` | Sampling defaults sent in the chat-completions payload (defaults: `16384` / `1.0` / `0.95` / `16384`). |
+| `MODEL_ENABLE_THINKING` | Optional override for Qwen thinking mode. Unset keeps the default: enabled while streaming, disabled for one-shot completions. |
 | `ENABLE_TRAVEL_HISTORY` | `1` = proposed (Agent1–4); `0` = Baseline A (Agent1–3) |
 | `TOOL_STAYS_MODE` | `stub` (default, offline-safe), `overpass` (OpenStreetMap, no auth), `api` (OBO Travel, live prices) |
 | `TOOL_MAPS_MODE` | `stub` or `api` |
+| `WEATHER_MODE` | `stub` (default, offline-safe) or `open-meteo` (live Open-Meteo forecasts, no auth; falls back to stub on failure) |
 | `GEOCODING_ENABLED` | Set to `1` to resolve Overpass destinations with rate-limited Nominatim geocoding |
 | `STAYS_API_BASE_URL` | OBO Travel MCP base URL, e.g. `https://onebookingonline.com/mcp` (used when `TOOL_STAYS_MODE=api`) |
 | `STAYS_API_KEY` | Optional OBO Travel API key for higher rate limits |

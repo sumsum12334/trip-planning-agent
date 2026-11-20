@@ -26,6 +26,16 @@ class Settings(BaseSettings):
     qwen_model: str = Field(default="qwen3.8-27b", alias="QWEN_MODEL")
     qwen_api_key: str = Field(default="", alias="QWEN_API_KEY")
 
+    # Model sampling defaults for chat completions. MODEL_ENABLE_THINKING=None
+    # keeps the historical behavior: enabled while streaming, disabled otherwise.
+    model_max_tokens: int = Field(default=16384, alias="MODEL_MAX_TOKENS")
+    model_temperature: float = Field(default=1.0, alias="MODEL_TEMPERATURE")
+    model_top_p: float = Field(default=0.95, alias="MODEL_TOP_P")
+    model_reasoning_budget: int = Field(default=16384, alias="MODEL_REASONING_BUDGET")
+    model_enable_thinking: bool | None = Field(
+        default=None, alias="MODEL_ENABLE_THINKING"
+    )
+
     # Baseline A = 0 (Agents 1–3); Proposed = 1 (include Agent 4 Travel_History)
     enable_travel_history: bool = Field(default=True, alias="ENABLE_TRAVEL_HISTORY")
 
@@ -35,7 +45,9 @@ class Settings(BaseSettings):
     web_search_mode: Literal["stub", "duckduckgo"] = Field(
         default="stub", alias="WEB_SEARCH_MODE"
     )
-    weather_mode: Literal["stub", "api"] = Field(default="stub", alias="WEATHER_MODE")
+    weather_mode: Literal["stub", "api", "open-meteo"] = Field(
+        default="stub", alias="WEATHER_MODE"
+    )
 
     # Travel History DB
     database_url: str = Field(

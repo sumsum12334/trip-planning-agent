@@ -142,8 +142,8 @@ async def _fetch_weather_open_meteo(lat: float, lon: float, start_date: str, end
 def run(destination: str, start_date: Optional[str] = None, end_date: Optional[str] = None) -> dict[str, Any]:
     """Return weather info for a destination using Open-Meteo API."""
     settings = get_settings()
-    mode = getattr(settings, "weather_mode", "open-meteo")
-    
+    configured_mode = getattr(settings, "weather_mode", "stub")
+
     # Default to tomorrow if no date provided
     if not start_date:
         from datetime import date, timedelta
@@ -151,9 +151,10 @@ def run(destination: str, start_date: Optional[str] = None, end_date: Optional[s
     if not end_date:
         end_date = start_date
 
-    # Try to get live data from Open-Meteo
+    # Try to get live data from Open-Meteo unless the stub mode is forced.
     live_data = None
-    if mode == "open-meteo":
+    mode = configured_mode
+    if configured_mode != "stub":
         import asyncio
         try:
             # Run async geocoding and weather fetch
@@ -182,6 +183,9 @@ def run(destination: str, start_date: Optional[str] = None, end_date: Optional[s
             "humidity": None,
             "notes": f"No weather data for {destination} (stub)",
         }
+    else:
+        # Copy so the module-level stub table is never mutated per request.
+        data = dict(data)
 
     # Use live data if available
     if live_data:
@@ -209,4 +213,4 @@ def run(destination: str, start_date: Optional[str] = None, end_date: Optional[s
 
 
 def health() -> dict[str, str]:
-    return {"tool": "weather", "mode": getattr(get_settings(), "weather_mode", "open-meteo")}
+    return {"tool": "weather", "mode": getattr(get_settings(), "weather_mode", "stub")}

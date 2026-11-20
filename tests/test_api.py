@@ -58,7 +58,10 @@ def test_health_reports_agents(client: TestClient) -> None:
         "coordinator",
         "travel_history",
         "web_search",
+        "weather",
     }
+    assert payload["weather_mode"] == "stub"
+    assert payload["agents"]["weather"]["mode"] == "stub"
 
 
 def test_plan_returns_itinerary_offline(client: TestClient) -> None:
@@ -135,6 +138,33 @@ def test_direct_agent_endpoints(client: TestClient) -> None:
     payload = leg.json()
     assert payload["mode"] == "airport_express"
     assert payload["notes"] and "stub" in payload["notes"].casefold()
+
+
+def test_estimate_transport_unavailable_returns_503(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _unavailable(request, from_place, to_place):
+        raise NotImplementedError("api mode is not implemented")
+
+    monkeypatch.setattr(
+        "agents.estimate_transport.agent.run", _unavailable
+    )
+    response = client.post(
+        "/agents/estimate_transport",
+        json={"from_place": "Hong Kong Airport", "to_place": "Central"},
+    )
+    assert response.status_code == 503
+    assert "estimate_transport is unavailable" in response.json()["detail"]
+
+
+def test_weather_endpoint_stub_mode(client: TestClient) -> None:
+    response = client.post("/agents/weather", json={"destination": "Tokyo"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["destination"] == "Tokyo"
+    assert payload["mode"] == "stub"
+    assert payload["stub"] is True
+    assert payload["temperature_c"] is not None
 
 
 def test_travel_history_crud(client: TestClient) -> None:

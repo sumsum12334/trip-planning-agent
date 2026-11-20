@@ -31,6 +31,7 @@ from agents.travel_history.agent import remember_from_message
 from agents.travel_history.agent import TravelHistoryStore
 from agents.web_search.agent import health as web_search_health
 from agents.web_search import run as web_search
+from agents.weather.agent import health as weather_health
 from agents.weather.agent import run as weather_run
 from config.settings import get_model_config, get_settings, update_model_config
 from shared.schemas import (
@@ -134,12 +135,14 @@ def health() -> dict:
         "tacc_configured": TACCClient(s).configured,
         "tool_stays_mode": s.tool_stays_mode,
         "tool_maps_mode": s.tool_maps_mode,
+        "weather_mode": s.weather_mode,
         "agents": {
             "search_stays": stays_health(),
             "estimate_transport": transport_health(),
             "coordinator": coordinator_health(),
             "travel_history": history_health(),
             "web_search": web_search_health(),
+            "weather": weather_health(),
         },
     }
 
@@ -192,7 +195,13 @@ def agent_estimate_transport(body: EstimateTransportRequest) -> TransportLeg:
         budget=body.budget,
         interests=body.interests,
     )
-    return estimate_transport_run(request, body.from_place, body.to_place)
+    try:
+        return estimate_transport_run(request, body.from_place, body.to_place)
+    except NotImplementedError as error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"estimate_transport is unavailable in api mode: {error}",
+        ) from error
 
 
 @app.post("/agents/weather")
@@ -1114,36 +1123,6 @@ def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
         budget_items.append(
             {"category": category, "amount": float(amount), "currency": currency or ""}
         )
-    day_budgets: list[dict[str, Any]] = []
-    # No fixed day limit on trip length; only per-item payload guards below.
-    for item in request.day_budgets:
-        if not isinstance(item, dict):
-            raise HTTPException(status_code=422, detail="Each day budget must be an object.")
-        day = item.get("day")
-        amount = item.get("amount")
-        if isinstance(day, bool) or not isinstance(day, (int, float)) or day < 1:
-            raise HTTPException(status_code=422, detail="Each day budget needs a day number.")
-        if isinstance(amount, bool) or not isinstance(amount, (int, float)) or amount < 0:
-            raise HTTPException(
-                status_code=422, detail="Each day budget needs a non-negative amount."
-            )
-        day_budgets.append({"day": int(day), "amount": float(amount)})
-    day_items: list[dict[str, Any]] = []
-    for item in request.day_items[:120]:
-        if not isinstance(item, dict):
-            raise HTTPException(status_code=422, detail="Each day item must be an object.")
-        day = item.get("day")
-        category = str(item.get("category", "")).strip()
-        amount = item.get("amount")
-        if isinstance(day, bool) or not isinstance(day, (int, float)) or day < 1:
-            raise HTTPException(status_code=422, detail="Each day item needs a day number.")
-        if not category:
-            raise HTTPException(status_code=422, detail="Each day item needs a category.")
-        if isinstance(amount, bool) or not isinstance(amount, (int, float)) or amount < 0:
-            raise HTTPException(
-                status_code=422, detail="Each day item needs a non-negative amount."
-            )
-        day_items.append({"day": int(day), "category": category, "amount": float(amount)})
     store = ConversationStore(get_settings().database_url)
     plan = store.get_trip_plan(conversation_id)
     if plan is None:
@@ -1182,38 +1161,6 @@ def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
             except ValueError as error:
                 raise HTTPException(status_code=422, detail=str(error)) from error
 
-    # Legacy per-day budget fields (still accepted for compatibility).
-    days = [dict(day) for day in updated_plan.get("days", []) if isinstance(day, dict)]
-    day_map = {day.get("day"): day for day in days}
-
-    def ensure_day(number: int) -> dict[str, Any]:
-        day = day_map.get(number)
-        if day is None:
-            day = {
-                "day": number,
-                "title": f"Day {number}",
-                "activities": [],
-                "notes": [],
-                "coordinates": None,
-                "places": [],
-                "budget": None,
-                "budget_items": [],
-            }
-            days.append(day)
-            day_map[number] = day
-        return day
-
-    for entry in day_budgets:
-        ensure_day(entry["day"])["budget"] = entry["amount"]
-    items_by_day: dict[int, list[dict[str, Any]]] = {}
-    for item in day_items:
-        items_by_day.setdefault(item["day"], []).append(
-            {"category": item["category"], "amount": item["amount"], "currency": currency or ""}
-        )
-    for number, items in items_by_day.items():
-        ensure_day(number)["budget_items"] = items
-    updated_plan["days"] = sorted(days, key=lambda day: day.get("day", 0))
-
     assembled = assemble_trip_plan(updated_plan)
     store.save_trip_plan(conversation_id, updated_plan)
     store.set_latest_trip_plan_event(conversation_id, assembled)
@@ -1222,8 +1169,6 @@ def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
         "budget": request.budget,
         "currency": currency,
         "budget_items": budget_items,
-        "day_budgets": day_budgets,
-        "day_items": day_items,
     }
 
 

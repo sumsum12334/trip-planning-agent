@@ -120,6 +120,60 @@ def test_complete_posts_configured_payload(monkeypatch):
     ]
 
 
+def test_complete_uses_legacy_sampling_defaults(monkeypatch):
+    ok_response = FakeResponse(
+        json_data={"choices": [{"message": {"content": "ok"}}]}
+    )
+    fake = FakeHttpClient([ok_response])
+    monkeypatch.setattr(
+        "trip_planning_agent.tacc_client.httpx.Client", lambda timeout=None: fake
+    )
+    TACCClient(_fake_settings()).complete("hello")
+    body = fake.request_bodies[0]
+    assert body["max_tokens"] == 16384
+    assert body["temperature"] == 1.0
+    assert body["top_p"] == 0.95
+    assert body["reasoning_budget"] == 16384
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_stream_sampling_defaults_enable_thinking(monkeypatch):
+    fake = FakeHttpClient([_sse({"choices": [{"delta": {"content": "hi"}}]}, None)])
+    monkeypatch.setattr(
+        "trip_planning_agent.tacc_client.httpx.Client", lambda timeout=None: fake
+    )
+    list(TACCClient(_fake_settings()).stream("hello"))
+    body = fake.request_bodies[0]
+    assert body["stream"] is True
+    assert body["max_tokens"] == 16384
+    assert body["temperature"] == 1.0
+    assert body["top_p"] == 0.95
+    assert body["reasoning_budget"] == 16384
+    assert body["chat_template_kwargs"] == {"enable_thinking": True}
+
+
+def test_sampling_settings_override_payload(monkeypatch):
+    fake = FakeHttpClient([_sse({"choices": [{"delta": {"content": "hi"}}]}, None)])
+    monkeypatch.setattr(
+        "trip_planning_agent.tacc_client.httpx.Client", lambda timeout=None: fake
+    )
+    settings = _fake_settings(
+        model_max_tokens=512,
+        model_temperature=0.3,
+        model_top_p=0.9,
+        model_reasoning_budget=0,
+        model_enable_thinking=False,
+    )
+    list(TACCClient(settings).stream("hello"))
+    body = fake.request_bodies[0]
+    assert body["max_tokens"] == 512
+    assert body["temperature"] == 0.3
+    assert body["top_p"] == 0.9
+    # A reasoning budget of 0 drops the field instead of sending a disabled value.
+    assert "reasoning_budget" not in body
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
+
+
 def test_chunk_text_handles_providers_shapes():
     assert TACCClient._chunk_text("plain") == "plain"
     assert TACCClient._chunk_text([{"text": "a"}, {"text": "b"}]) == "ab"
@@ -252,3 +306,62 @@ def test_stream_without_executor_raises(monkeypatch):
     client = TACCClient(_fake_settings())
     with pytest.raises(ValueError, match="no executor"):
         list(client.stream("hello", tool_executor=None))
+
+
+def test_stream_retry_without_tools_ends_generation(monkeypatch):
+    """The 400-without-tools retry must close the first Langfuse generation."""
+    from trip_planning_agent import observability
+
+    class FakeObservation:
+        def __init__(self):
+            self.end_count = 0
+
+        def update(self, **kwargs):
+            pass
+
+        def end(self):
+            self.end_count += 1
+
+    class FakeLangfuse:
+        def __init__(self):
+            self.observations = []
+
+        def start_observation(self, **kwargs):
+            observation = FakeObservation()
+            self.observations.append(observation)
+            return observation
+
+        def flush(self):
+            pass
+
+    langfuse = FakeLangfuse()
+    monkeypatch.setattr(observability, "_client", lambda settings=None: langfuse)
+
+    no_tools = FakeResponse(status_code=400, body="tool-call-parser is not enabled")
+    ok = _sse({"choices": [{"delta": {"content": "final answer"}}]}, None)
+    fake = FakeHttpClient([no_tools, ok])
+    monkeypatch.setattr(
+        "trip_planning_agent.tacc_client.httpx.Client", lambda timeout=None: fake
+    )
+
+    settings = _fake_settings(
+        langfuse_enabled=True,
+        langfuse_public_key="pk",
+        langfuse_secret_key="sk",
+        langfuse_host="http://localhost",
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "search_stays", "parameters": {"type": "object"}},
+        }
+    ]
+    deltas = list(TACCClient(settings).stream("hello", system="sys", tools=tools))
+
+    assert deltas[-1]["text"] == "final answer"
+    assert len(fake.request_bodies) == 2
+    assert fake.request_bodies[0].get("tools")
+    assert "tools" not in fake.request_bodies[1]
+    # Both generations (the rejected request and the retry) were closed.
+    assert len(langfuse.observations) == 2
+    assert all(obs.end_count == 1 for obs in langfuse.observations)

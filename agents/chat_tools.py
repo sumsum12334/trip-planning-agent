@@ -147,9 +147,17 @@ def execute_agent_tool(name: str, arguments: dict[str, Any]) -> Any:
         to_place = str(arguments.get("to_place", "")).strip()
         if not from_place or not to_place:
             raise ValueError("estimate_transport requires from_place and to_place.")
-        leg = estimate_transport_run(
-            TripRequest(destination=from_place), from_place, to_place
-        )
+        try:
+            leg = estimate_transport_run(
+                TripRequest(destination=from_place), from_place, to_place
+            )
+        except NotImplementedError as error:
+            return {
+                "mode": "unavailable",
+                "error": f"Transport provider unavailable: {error}",
+                "from_place": from_place,
+                "to_place": to_place,
+            }
         result = leg.model_dump()
         if arguments.get("mode"):
             result["mode_hint"] = str(arguments["mode"])
