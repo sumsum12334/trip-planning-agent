@@ -1,22 +1,10 @@
 import { useState } from "react";
-import { formatBudget, planBudgetItems, splitLines } from "../lib/planUtils.js";
+import { splitLines } from "../lib/planUtils.js";
 
-export function CategoryBudgetEditor({ plan, currency, onCancel, onSave }) {
-  const items = planBudgetItems(plan);
-  const estimate = plan.budget ?? null;
+// Edits only the estimated total; the itemized budget lives on each day.
+export function TotalBudgetEditor({ estimate, currency, onCancel, onSave }) {
   const [estimateInput, setEstimateInput] = useState(estimate != null ? String(estimate) : "");
-  const [rows, setRows] = useState(items.map((item) => ({ category: item.category, amount: String(item.amount) })));
   const [error, setError] = useState("");
-  const itemsTotal = Math.round(rows.reduce((sum, row) => {
-    const amount = Number(row.amount);
-    return sum + (Number.isFinite(amount) && amount >= 0 ? amount : 0);
-  }, 0) * 100) / 100;
-
-  function updateRow(index, field, value) {
-    setRows((previous) => previous.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
-  }
-  function addRow() { setRows((previous) => [...previous, { category: "", amount: "" }]); }
-  function removeRow(index) { setRows((previous) => previous.filter((_, i) => i !== index)); }
 
   function save() {
     const estimateValue = estimateInput.trim() === "" ? null : Number(estimateInput);
@@ -24,34 +12,15 @@ export function CategoryBudgetEditor({ plan, currency, onCancel, onSave }) {
       setError("Enter a non-negative estimated total.");
       return;
     }
-    const cleanedItems = rows
-      .map((row) => ({ category: row.category.trim(), amount: Number(row.amount) }))
-      .filter((row) => row.category && Number.isFinite(row.amount) && row.amount >= 0);
-    onSave({
-      mode: "category",
-      budget: estimateValue,
-      currency,
-      budget_items: cleanedItems.map((row) => ({ category: row.category, amount: row.amount, currency })),
-    });
+    onSave({ mode: "category", budget: estimateValue, currency });
   }
 
   return <div className="budget-editor">
-    <div className="budget-editor-label">Editing: category items</div>
+    <div className="budget-editor-label">Editing: estimated total</div>
     <div className="budget-row">
       <label>Estimated total
         <input className="budget-amount" type="number" min="0" step="any" value={estimateInput} onChange={(event) => setEstimateInput(event.target.value)} />
       </label>
-    </div>
-    <ul className="budget-editor-rows">
-      {rows.map((row, index) => <li key={index}>
-        <input className="budget-category" placeholder="Category" value={row.category} onChange={(event) => updateRow(index, "category", event.target.value)} />
-        <input className="budget-amount" type="number" min="0" step="any" placeholder="0" value={row.amount} onChange={(event) => updateRow(index, "amount", event.target.value)} />
-        <button type="button" className="icon-button danger" title="Remove item" onClick={() => removeRow(index)}>×</button>
-      </li>)}
-    </ul>
-    <div className="budget-editor-actions">
-      <button type="button" className="plan-tool" onClick={addRow}>＋ Item</button>
-      <span className="budget-editor-total">Items total: {formatBudget(itemsTotal, currency)}</span>
     </div>
     {error && <small className="budget-notice warn">{error}</small>}
     <div className="budget-editor-actions">

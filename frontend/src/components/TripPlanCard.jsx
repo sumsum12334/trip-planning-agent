@@ -4,22 +4,17 @@ import {
   formatBudget,
   formatPlanDate,
   markerNumbersForDay,
-  planBudgetItems,
   planEditChanges,
   routePoints,
 } from "../lib/planUtils.js";
 import { downloadPlanMarkdown, printPlanReport } from "../lib/planExport.js";
-import { CategoryBudgetEditor, DayEditor } from "./BudgetEditors.jsx";
+import { DayEditor, TotalBudgetEditor } from "./BudgetEditors.jsx";
 import { TripMap } from "./TripMap.jsx";
 
 export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabled = false, busy = false }) {
   const points = useMemo(() => routePoints(plan), [plan]);
   const currency = plan.currency || "";
-  const items = planBudgetItems(plan);
   const estimate = plan.budget ?? null;
-  const itemsTotal = items.length
-    ? Math.round(items.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) * 100) / 100
-    : null;
   const days = useMemo(() => plan.days || [], [plan.days]);
   const derivedDay = estimate != null && days.length ? Math.round((estimate / days.length) * 100) / 100 : null;
   const dayBudgets = days.map((day) => {
@@ -34,19 +29,17 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
       items: dayItems,
     };
   });
-  const [editingCategory, setEditingCategory] = useState(false);
+  const [editingBudget, setEditingBudget] = useState(false);
   const [editingDay, setEditingDay] = useState(null);
   const [notice, setNotice] = useState("");
   const [reconsiderPrompt, setReconsiderPrompt] = useState(null);
   const [mapOpen, setMapOpen] = useState(points.length > 0);
   const [showReferences, setShowReferences] = useState(true);
-  const [planView, setPlanView] = useState("overview");
   const [expandedDays, setExpandedDays] = useState({});
   const allDaysOpen = days.length > 0 && days.every((day) => expandedDays[day.day]);
 
   // Weather date state - read-only display
   const [weatherFromDate, setWeatherFromDate] = useState(() => plan.start_date ? String(plan.start_date) : "");
-  const [weatherToDate, setWeatherToDate] = useState("");
   const [weatherData, setWeatherData] = useState({});
   const [weatherLoading, setWeatherLoading] = useState({});
   const [weatherError, setWeatherError] = useState({});
@@ -56,18 +49,6 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
   const [staysLoading, setStaysLoading] = useState(false);
   const [staysError, setStaysError] = useState("");
   const [staysDialogOpen, setStaysDialogOpen] = useState(false);
-
-  // Calculate to-date from from-date + days count
-  useEffect(() => {
-    if (weatherFromDate && days.length > 0) {
-      const from = new Date(weatherFromDate + "T00:00:00");
-      const to = new Date(from);
-      to.setDate(from.getDate() + days.length - 1);
-      setWeatherToDate(to.toISOString().split("T")[0]);
-    } else {
-      setWeatherToDate("");
-    }
-  }, [weatherFromDate, days.length]);
 
   // Sync weather from date with plan (also picks up a changed start_date)
   useEffect(() => {
@@ -156,16 +137,16 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
     }
   }, [plan.destination, plan.budget, days.length, plan.interests]);
 
-  function startCategoryEdit() {
+  function startBudgetEdit() {
     setEditingDay(null);
-    setEditingCategory(true);
+    setEditingBudget(true);
     setNotice("");
     setReconsiderPrompt(null);
   }
-  function saveCategory(payload) {
+  function saveBudget(payload) {
     const changes = planEditChanges(plan, payload);
     onSaveBudget?.(payload);
-    setEditingCategory(false);
+    setEditingBudget(false);
     setNotice("Saved. The assistant will use this on your next message.");
     setReconsiderPrompt(reconsiderEnabled && changes.length ? changes : null);
   }
@@ -197,27 +178,10 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
     </div>
     <div className="trip-plan-toolbar">
       <button type="button" className="plan-tool" aria-pressed={mapOpen} onClick={() => setMapOpen((value) => !value)}>🗺 {mapOpen ? "Hide map" : "Map route"}</button>
-      {days.length > 0 && (
-        <div className="plan-view-toggle" role="tablist" aria-label="Plan view">
-          <button type="button" role="tab" aria-selected={planView === "overview"} className={planView === "overview" ? "active" : ""} onClick={() => setPlanView("overview")}>Overview</button>
-          <button type="button" role="tab" aria-selected={planView === "days"} className={planView === "days" ? "active" : ""} onClick={() => setPlanView("days")}>Day by day</button>
-        </div>
-      )}
-      {planView === "days" && days.length > 0 && (
-        <button type="button" className="plan-tool" onClick={() => setExpandedDays(allDaysOpen ? {} : Object.fromEntries(days.map((day) => [day.day, true])))}> 
-          {allDaysOpen ? "Collapse all" : "Expand all"} 
+      {days.length > 1 && (
+        <button type="button" className="plan-tool" onClick={() => setExpandedDays(allDaysOpen ? {} : Object.fromEntries(days.map((day) => [day.day, true])))}>
+          {allDaysOpen ? "Collapse all" : "Expand all"}
         </button>
-      )}
-      {/* Weather date selector aligned right */}
-      {days.length > 0 && weatherFromDate && (
-        <div className="weather-date-selector">
-          <span className="weather-date-label">🌤 Weather (est.): {weatherFromDate} → {weatherToDate}</span>
-          {weatherData && Object.keys(weatherData).length > 0 && (
-            <span className="weather-data-chip">
-              {days.map(d => weatherData[d.day]?.condition && `${d.day}: ${weatherData[d.day].temperature_c != null ? weatherData[d.day].temperature_c + "°C" : "?"}`).join(" · ")}
-            </span>
-          )}
-        </div>
       )}
       {weatherLoading?.global && <span className="weather-loading-chip">Loading weather…</span>}
       <button type="button" className="plan-tool" onClick={() => downloadPlanMarkdown(plan)}>⬇ Markdown</button>
@@ -225,27 +189,8 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
     </div>
     <div className="trip-plan-content">
       {mapOpen && <TripMap plan={plan} />}
-      {planView === "overview" && days.length > 0 ? (
-        <div className="trip-overview">
-          {days.map((day) => {
-            const budget = dayBudgets.find((entry) => entry.day === day.day);
-            const dayMarkers = markerNumbersForDay(points, day.day);
-            const weather = weatherData[day.day];
-            return <button type="button" className="trip-overview-row" key={`overview-${day.day}`} onClick={() => { setPlanView("days"); setExpandedDays((previous) => ({ ...previous, [day.day]: true })); }}>
-              <span className="overview-day">Day {day.day}</span>
-              <span className="overview-title">{day.title}</span>
-              <span className="overview-meta">{day.activities.length} activities{dayMarkers.length ? ` · 🗺 ${dayMarkers.join("·")}` : ""}</span>
-              <b className="overview-budget">{budget && budget.amount != null ? formatBudget(budget.amount, currency) : "—"}</b>
-              {weather && (
-                <span className="overview-weather">
-                  {weather.temperature_c != null ? `${weather.temperature_c}°C (est.)` : "?"}
-                </span>
-              )}
-            </button>;
-          })}
-        </div>
-      ) : (
-        <div className="trip-days">
+      {/* Single merged view: overview-style rows that expand/collapse in place. */}
+      <div className="trip-overview">
         {days.map((day) => {
           const budget = dayBudgets.find((entry) => entry.day === day.day);
           const dayMarkers = markerNumbersForDay(points, day.day);
@@ -258,16 +203,20 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
           const weather = weatherData[day.day];
           const weatherLoadingDay = weatherLoading[day.day];
           const weatherErrorDay = weatherError[day.day];
-          
+
           return <article className="trip-day" key={`${day.day}-${day.title}`}>
             <div className="trip-day-head">
-              <button type="button" className="day-collapse" aria-expanded={isOpen} onClick={() => setExpandedDays((previous) => ({ ...previous, [day.day]: !isOpen }))}>
+              <button type="button" className="day-collapse day-summary" aria-expanded={isOpen} onClick={() => setExpandedDays((previous) => ({ ...previous, [day.day]: !isOpen }))}>
                 <span className="day-chevron">{isOpen ? "▾" : "▸"}</span>
-                <span className="day-number">DAY {day.day}</span> <strong>{day.title}</strong>
+                <span className="overview-day">DAY {day.day}</span>
+                <strong className="overview-title">{day.title}</strong>
+                <span className="overview-meta">{day.activities.length} activities</span>
+                <b className="overview-budget">{budget && budget.amount != null ? formatBudget(budget.amount, currency) : "—"}</b>
+                {weather && weather.temperature_c != null && <span className="overview-weather">{weather.temperature_c}°C (est.)</span>}
               </button>
               <div className="trip-day-head-actions">
                 {dayMarkers.length > 0 && <span className="day-map-ref" title="Map reference">🗺 {dayMarkers.join(" · ")}</span>}
-                {!isEditing && <button type="button" className="plan-tool" onClick={() => { setEditingCategory(false); setEditingDay(day.day); setExpandedDays((previous) => ({ ...previous, [day.day]: true })); setNotice(""); setReconsiderPrompt(null); }}>Edit</button>}
+                {!isEditing && <button type="button" className="plan-tool" onClick={() => { setEditingBudget(false); setEditingDay(day.day); setExpandedDays((previous) => ({ ...previous, [day.day]: true })); setNotice(""); setReconsiderPrompt(null); }}>Edit</button>}
               </div>
             </div>
             {isOpen && (isEditing ? <DayEditor day={day} dayBudget={budget} currency={currency} onCancel={() => setEditingDay(null)} onSave={saveDay} /> : <>
@@ -315,8 +264,7 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
             </>)}
           </article>;
         })}
-        </div>
-      )}
+      </div>
     </div>
 
     {/* Accommodation button (opens popup) */}
@@ -413,24 +361,9 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
       <div className="trip-budget-head">
         <span>ESTIMATED BUDGET</span>
         <strong>{estimate == null ? "Not specified" : formatBudget(estimate, currency)}</strong>
-        {!editingCategory && <button type="button" className="plan-tool" onClick={startCategoryEdit}>Edit</button>}
+        {!editingBudget && <button type="button" className="plan-tool" onClick={startBudgetEdit}>Edit</button>}
       </div>
-      {editingCategory ? (
-        <CategoryBudgetEditor plan={plan} currency={currency} onCancel={() => setEditingCategory(false)} onSave={saveCategory} />
-      ) : (
-        items.length > 0 ? <> 
-          <div className="budget-subhead">Category items</div>
-          <ul className="budget-items">
-            {items.map((item, index) => <li key={`${item.category}-${index}`}>
-              <span>{item.category}</span><b>{formatBudget(item.amount, item.currency || currency)}</b>
-            </li>)}
-          </ul>
-          <div className="budget-total-row"><span>Items total</span><b>{formatBudget(itemsTotal, currency)}</b></div>
-          {estimate != null && itemsTotal != null && Math.abs(estimate - itemsTotal) > 0.001 && (
-            <small className="budget-notice warn">Items total {formatBudget(itemsTotal, currency)} differs from the estimated budget {formatBudget(estimate, currency)}.</small>
-          )}
-        </> : <small className="budget-notice">No category items yet — use Edit to add them. Each day has its own budget in its card.</small>
-      )}
+      {editingBudget && <TotalBudgetEditor estimate={estimate} currency={currency} onCancel={() => setEditingBudget(false)} onSave={saveBudget} />}
       {notice && <small className="budget-notice">{notice}</small>}
     </div>
     {plan.notes?.length > 0 && <small className="trip-notes">{plan.notes.join(" · ")}</small>}
