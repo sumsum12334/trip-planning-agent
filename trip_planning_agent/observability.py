@@ -298,10 +298,13 @@ def model_generation(
                 metadata={"model": model, **(metadata or {})},
             )
 
-        # Expose the LangSmith run on the observation so callers that only
-        # call finish_generation() also complete the LangSmith trace.
+        # Expose LangSmith run id + client on the observation so that
+        # finish_generation() / update_generation() can complete the trace.
+        # (Run is a Pydantic model: .id works on instances, but there is no
+        # .client attribute, so we store the client separately.)
         if observation is not None and ls_run is not None:
-            observation._langsmith_run = ls_run  # type: ignore[attr-defined]
+            observation._langsmith_run_id = str(ls_run.id)  # type: ignore[attr-defined]
+            observation._langsmith_client = ls_client  # type: ignore[attr-defined]
 
     except Exception:
         logger.exception("Tracking failed for model request %s.", name)
@@ -311,7 +314,10 @@ def model_generation(
     # When Langfuse is disabled but LangSmith is enabled, observation is None.
     # Wrap the run in a minimal object so finish_generation() can find it.
     if observation is None and ls_run is not None:
-        observation = SimpleNamespace(_langsmith_run=ls_run)
+        observation = SimpleNamespace(
+            _langsmith_run_id=str(ls_run.id),
+            _langsmith_client=ls_client,
+        )
 
     try:
         yield observation
@@ -349,8 +355,8 @@ def ls_finish_generation(
     if run is None:
         return
     try:
-        ls_client = getattr(run, "client", None)
-        run_id = str(getattr(run, "id", ""))
+        ls_client = getattr(run, "_langsmith_client", None)
+        run_id = str(getattr(run, "_langsmith_run_id", ""))
         if ls_client is not None and run_id:
             ls_client.update_run(
                 run_id=run_id,
@@ -383,8 +389,8 @@ def ls_update_generation(
     if run is None:
         return
     try:
-        ls_client = getattr(run, "client", None)
-        run_id = str(getattr(run, "id", ""))
+        ls_client = getattr(run, "_langsmith_client", None)
+        run_id = str(getattr(run, "_langsmith_run_id", ""))
         if ls_client is not None and run_id:
             ls_client.update_run(
                 run_id=run_id,
