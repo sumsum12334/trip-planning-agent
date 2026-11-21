@@ -184,6 +184,30 @@ open `http://<SERVER-URL>:5173` in a browser and follow these steps:
 **Start over**
 - Click **New conversation** in the sidebar to begin a fresh trip plan.
 
+### 1.7 Expected results from a clean run
+
+Running the full stub suite produces the following (timing varies by machine; pass/fail is stable):
+
+```
+Eval [STUB] 30/30 cases passed (23889.9 ms). History contrast 4/4. Tool layer 5/5.
+Plan latency mean 436.9 ms, max 559.2 ms.
+```
+
+Summary of what the count means:
+
+| Metric | Result | Meaning |
+|---|---|---|
+| Cases passed | 30/30 | All plan, revise, and tool cases pass |
+| History contrast | 4/4 | Proposed avoids visited stays/POIs; Baseline A still includes them |
+| Tool layer | 5/5 | All gold tool-call executions succeed |
+| Plan latency | mean 436.9 ms / max 559.2 ms | Per-case wall-clock time (machine-dependent) |
+
+Two reports are written to `eval/results/`:
+- `eval-<timestamp>.json` — full per-case, per-variant results
+- `eval-<timestamp>.csv` — flat table for spreadsheet review
+
+These artifacts are gitignored; each run creates new timestamped files.
+
 ---
 
 # 2. Detailed Instructions
@@ -338,7 +362,45 @@ Per case, per variant (Baseline A / Proposed):
 A case passes only when all applicable checks pass for both variants and all
 contrasts pass.
 
-## 2.6 Reproducibility & archiving
+## 2.6 Reproduce the published results
+
+To reproduce the exact results reported in this artifact, run the full stub
+suite from the repository root:
+
+```bash
+cd <ROOT>
+python -m eval.runner
+```
+
+This uses offline stub tools (no model API key, no network to a model endpoint
+required) and an isolated temporary SQLite database, so it is fully
+deterministic and offline-safe.
+
+**Expected output:**
+
+```
+Eval [STUB] 30/30 cases passed (23889.9 ms). History contrast 4/4. Tool layer 5/5.
+Plan latency mean 436.9 ms, max 559.2 ms.
+```
+
+Run it twice to confirm determinism — both runs should produce identical
+stay names, transport mode/cost/duration, and pass/fail results.
+
+The run writes two timestamped reports:
+
+```
+Wrote eval/results/eval-<timestamp>.json
+Wrote eval/results/eval-<timestamp>.csv
+```
+
+Archive the JSON/CSV pair as the reproducible reference. To review a single
+case:
+
+```bash
+python -m eval.runner --case tokyo_history_avoid_shibuya
+```
+
+## 2.7 Reproducibility & archiving
 
 - **Deterministic baseline:** Always archive the stub-mode JSON/CSV report as
   the reproducible reference; it does not depend on the model API.
@@ -350,7 +412,7 @@ contrasts pass.
 - **Case IDs are unique** (enforced by `test_eval_cases_have_unique_ids`).
 - To re-run a specific set of cases identically: pass the same `--case` list.
 
-## 2.7 Running the unit tests
+## 2.8 Running the unit tests
 
 ```bash
 cd <ROOT>
@@ -363,7 +425,7 @@ Relevant for evaluation reproducibility:
   cases, validation/fail-closed.
 - `tests/test_tacc_client.py` — model client behavior (configured vs stub).
 
-## 2.8 Known limitations / difficulties for evaluators
+## 2.9 Known limitations / difficulties for evaluators
 
 - **API mode requires network** to `https://integrate.api.nvidia.com/v1` from
   the server; if unreachable, the backend emits a labeled `[Model stub]` instead
@@ -380,7 +442,7 @@ Relevant for evaluation reproducibility:
   running Postgres on `localhost:5433`; the default is local SQLite, which
   works offline.
 
-## 2.9 Contact / questions
+## 2.10 Contact / questions
 
 Project-specific questions may be directed to the artifact authors through the
 submission system during the review period.
