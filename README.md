@@ -415,7 +415,7 @@ errors.
 | `NEON_BRANCH` | Optional Neon branch name (e.g. `production`) when using Neon. |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST` | Langfuse 5.x credentials and host |
 | `LANGFUSE_ENABLED` | Set to `1` to emit flushed model-generation traces |
-| `LANGSMITH_API_KEY` | Optional LangSmith API key. When set, every LLM call is traced for evaluation (TTFT, TPOS, input, and output). Create a key at https://smith.langchain.com. |
+| `LANGSMITH_API_KEY` | Optional LangSmith API key. When set, every LLM call is traced for evaluation (TTFT, TPOT, input, and output). Create a key at https://smith.langchain.com. |
 | `LANGSMITH_ENDPOINT` | Optional LangSmith API URL (default `https://api.smith.langchain.com`). |
 | `LANGSMITH_PROJECT` | Optional LangSmith project name (default `trip-planning-agent`). |
 | `NEMOTRON_API_KEY` / `NEMOTRON_API_URL` | Optional Nemotron judge API used by API-mode evaluation |
@@ -447,7 +447,7 @@ LANGSMITH_API_KEY=your-key
 # LANGSMITH_PROJECT=trip-planning-agent
 ```
 
-Restart the app, run a request that calls the model, then open [LangSmith](https://smith.langchain.com) and select the project (`trip-planning-agent` by default). Traces record model input and output separately, plus TTFT and TPOS. Tracking errors are logged without changing the model request result. Do not commit the API key. The graded stub evaluation does not use LangSmith.
+Restart the app, run a request that calls the model, then open [LangSmith](https://smith.langchain.com) and select the project (`trip-planning-agent` by default). Traces record model input and output separately, plus TTFT and TPOT. Tracking errors are logged without changing the model request result. Do not commit the API key. The graded stub evaluation does not use LangSmith.
 
 UI is not hosted on TACC; only the backend calls the course model-serving endpoint (request → queue → worker).
 
@@ -483,7 +483,7 @@ The suite compares the two variants on stay budget and location, transport field
 
 A model response is treated as acceptable on the AI judge if every dimension is at least 3. Live scores can vary with the endpoint and are not part of the stub 30/30 count. API mode talks to the model directly and does not send traces to LangSmith.
 
-To inspect live LLM calls from the running app in LangSmith (TTFT, TPOS, and model input/output), set `LANGSMITH_API_KEY` in `.env` as described under Key `.env` knobs above, install `langsmith`, restart the app, then open the traces at [LangSmith](https://smith.langchain.com) in the project named by `LANGSMITH_PROJECT` (default `trip-planning-agent`). If the LangSmith organization is in the GCP APAC region, open [APAC LangSmith](https://apac.smith.langchain.com) and set `LANGSMITH_ENDPOINT=https://apac.api.smith.langchain.com`. The stub harness does not use LangSmith.
+To inspect live LLM calls from the running app in LangSmith (TTFT, TPOT, and model input/output), set `LANGSMITH_API_KEY` in `.env` as described under Key `.env` knobs above, install `langsmith`, restart the app, then open the traces at [LangSmith](https://smith.langchain.com) in the project named by `LANGSMITH_PROJECT` (default `trip-planning-agent`). If the LangSmith organization is in the GCP APAC region, open [APAC LangSmith](https://apac.smith.langchain.com) and set `LANGSMITH_ENDPOINT=https://apac.api.smith.langchain.com`. The stub harness does not use LangSmith.
 
 ### Human evaluation
 
@@ -620,7 +620,7 @@ Optional live-model mode (not required to reproduce the stub results):
 
 API mode is the AI evaluation path described under Evaluation above. It requires `QWEN_BASE_URL` (including `/v1`) or `--model-url`. It is separate from the deterministic Baseline A vs Proposed tool checks: it calls the configured model and records response metrics such as TTFT and tokens per second in the JSON/CSV report. If `NEMOTRON_API_KEY` and `NEMOTRON_API_URL` are set, the runner attaches Nemotron LLM-as-a-judge scores (relevance, completeness, helpfulness, and accuracy, each 1–5). A response is treated as acceptable on the AI judge if every dimension is at least 3. Live scores can vary and are not the graded stub reproduction path. API mode does not send traces to LangSmith.
 
-To inspect live LLM calls from the running app in LangSmith, set `LANGSMITH_API_KEY` in `.env` (see Key `.env` knobs), install `langsmith`, restart the app, and open [LangSmith](https://smith.langchain.com) in the `LANGSMITH_PROJECT` (default `trip-planning-agent`). If the organization is in the GCP APAC region, use [APAC LangSmith](https://apac.smith.langchain.com) and set `LANGSMITH_ENDPOINT=https://apac.api.smith.langchain.com`. Traces include TTFT, TPOS, and model input/output. The stub evaluation does not use LangSmith.
+To inspect live LLM calls from the running app in LangSmith, set `LANGSMITH_API_KEY` in `.env` (see Key `.env` knobs), install `langsmith`, restart the app, and open [LangSmith](https://smith.langchain.com) in the `LANGSMITH_PROJECT` (default `trip-planning-agent`). If the organization is in the GCP APAC region, use [APAC LangSmith](https://apac.smith.langchain.com) and set `LANGSMITH_ENDPOINT=https://apac.api.smith.langchain.com`. Traces include TTFT, TPOT, and model input/output. The stub evaluation does not use LangSmith.
 
 Human evaluation uses the rubric and scoring rules in the Human evaluation subsection above. Score Baseline A and Proposed plans (and API-mode itineraries when available) independently, then save a CSV under `eval/results/`. Human ratings are not produced by `eval.runner` and are not required to reproduce the stub 30/30 result.
 
@@ -686,7 +686,7 @@ The metrics that support the main findings are:
 - **Revise loop** (`kind=revise` rows such as `hk_revise_budget_cut` and `tokyo_revise_shorter_trip`): after the first plan, the coordinator is re-entered with tighter constraints and must still pass.
 - **Tool layer** (`Tool layer 5/5`): the gold tool-call cases succeed independently of a live model.
 - **AI evaluation** (`--mode api`, optional): JSON/CSV fields for TTFT and tokens per second, plus Nemotron judge scores for relevance, completeness, helpfulness, and accuracy when the Nemotron key is set. These are not part of the stub 30/30 count.
-- **Optional LangSmith traces** (live app only): when `LANGSMITH_API_KEY` is set, LLM traces in [LangSmith](https://smith.langchain.com) (or [APAC LangSmith](https://apac.smith.langchain.com) for an APAC organization) show TTFT, TPOS, and model input/output. This is not part of the stub 30/30 result.
+- **Optional LangSmith traces** (live app only): when `LANGSMITH_API_KEY` is set, LLM traces in [LangSmith](https://smith.langchain.com) (or [APAC LangSmith](https://apac.smith.langchain.com) for an APAC organization) show TTFT, TPOT, and model input/output. This is not part of the stub 30/30 result.
 - **Human evaluation:** rater CSVs under `eval/results/` using the rubric above (the same four 1–5 dimensions, plus the binary checks and the acceptable/not-acceptable rule). These scores are collected by raters, not by `eval.runner`.
 
 Please map the automatic outputs, AI judge scores, and human scores to the corresponding tables or figures in the project report when you discuss Baseline A vs Proposed, history avoidance, budget revise, and fail-closed behaviour. The JSON/CSV files in `eval/results/` are the machine-readable source for those numbers.
