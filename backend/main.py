@@ -75,6 +75,8 @@ from trip_planning_agent.observability import (
     end_trace,
     start_trace,
     trace_context_for,
+    ls_create_run,
+    ls_update_generation,
 )
 
 app = FastAPI(title="trip-planning-agent", version="0.1.0")
@@ -717,6 +719,15 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
 
         def run_model() -> None:
             def tool_executor(name: str, arguments: dict[str, Any]) -> Any:
+                # Each tool call gets its own LangSmith run (a no-op handle
+                # when LangSmith is disabled), per the tool-calling tracing
+                # introduced on the eval-baseline-vs-proposed branch.
+                ls_run, _ls_run_id = ls_create_run(
+                    name=name,
+                    run_type="tool",
+                    inputs={"arguments": arguments},
+                    tags=["trip-planning-agent", "tool-call", name],
+                )
                 if name in TRIP_PLAN_TOOL_NAMES:
                     model_result, ui_plan = _apply_trip_plan_tool(store, conversation_id, name, arguments)
                     if ui_plan is not None:
@@ -725,11 +736,14 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                         if ui_plan.get("destination"):
                             plan_emitted.set()
                         stream_queue.put(("event", _trip_plan_event(name, ui_plan).model_dump()))
+                    ls_update_generation(ls_run, output={"result": model_result})
                     return model_result
                 try:
-                    return execute_history_tool(name, arguments)
+                    result = execute_history_tool(name, arguments)
                 except ValueError as error:
-                    return {"ok": False, "tool": name, "error": str(error)}
+                    result = {"ok": False, "tool": name, "error": str(error)}
+                ls_update_generation(ls_run, output={"result": result})
+                return result
 
             # Build role-separated conversation messages for the model so that
             # LangSmith traces show clean user input (not mixed with prior model
@@ -750,6 +764,7 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                 if role in ("user", "assistant", "system"):
                     initial_messages.append({"role": role, "content": content})
             initial_messages.append({"role": "user", "content": request.message})
+
 
             try:
                 for delta in client.stream(
