@@ -166,8 +166,12 @@ plan is stored per conversation and rendered as the focal, wide trip-plan panel
 to the right of the conversation. The chat pane is intentionally smaller, the
 sidebar is collapsible, and the card is theme-aware (light/dark). It draws the
 route on an interactive OpenStreetMap/Leaflet map: the **arrival airport is the
-first point** of the route (shown with a distinct marker), and a map link is
-shown when no coordinates are provided. Tool payloads are validated in
+first point** of the route (shown with a distinct marker), the map opens by
+default as soon as the plan has route points (a manual show/hide wins
+afterwards), and a map link is shown when no coordinates are provided. When a
+plan carries no coordinates at all, the backend geocodes the destination once
+(Nominatim, cached, with a ten-minute back-off on failures) so the map still
+has a start point. Tool payloads are validated in
 `shared/trip_plan.py`, invalid tool arguments come back as labeled errors (they do
 not abort the turn), and only `http(s)` reference URLs are accepted.
 

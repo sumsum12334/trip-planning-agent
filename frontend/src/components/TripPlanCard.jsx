@@ -35,8 +35,16 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
   const [notice, setNotice] = useState("");
   const [reconsiderPrompt, setReconsiderPrompt] = useState(null);
   const [mapOpen, setMapOpen] = useState(points.length > 0);
+  const [mapTouched, setMapTouched] = useState(false);
   const [showReferences, setShowReferences] = useState(true);
   const [expandedDays, setExpandedDays] = useState({});
+
+  // The card mounts on the first `start_trip_plan` event, before day
+  // coordinates exist, so open the map as soon as the route has points.
+  // A manual show/hide toggle wins from then on.
+  useEffect(() => {
+    if (!mapTouched && points.length > 0) setMapOpen(true);
+  }, [mapTouched, points.length]);
   // The card only renders once the backend has emitted a real plan (the
   // `start_trip_plan` tool event), so show that plan immediately. Placeholder
   // content lives in TripPlanPending and never fakes plan values.
@@ -209,7 +217,7 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
       <span>✦</span>
     </div>
     <div className="trip-plan-toolbar">
-      <button type="button" className="plan-tool" aria-pressed={mapOpen} onClick={() => setMapOpen((value) => !value)}>🗺 {mapOpen ? "Hide map" : "Map route"}</button>
+      <button type="button" className="plan-tool" aria-pressed={mapOpen} onClick={() => { setMapTouched(true); setMapOpen((value) => !value); }}>🗺 {mapOpen ? "Hide map" : "Map route"}</button>
       {days.length > 1 && (
         <button type="button" className="plan-tool" onClick={() => setExpandedDays(allDaysOpen ? {} : Object.fromEntries(days.map((day) => [day.day, true])))}>
           {allDaysOpen ? "Collapse all" : "Expand all"}

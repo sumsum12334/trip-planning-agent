@@ -7,6 +7,7 @@ import json
 import queue
 import re
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -97,6 +98,65 @@ _LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 # and the model client check the event between deltas.
 
 
+def _plan_has_no_coordinates(plan: dict[str, Any]) -> bool:
+    """True when no part of the plan can be drawn on the route map."""
+    if plan.get("destination_coordinates"):
+        return False
+    airport = plan.get("airport")
+    if isinstance(airport, dict) and airport.get("coordinates"):
+        return False
+    for day in plan.get("days") or []:
+        if not isinstance(day, dict):
+            continue
+        if day.get("coordinates"):
+            return False
+        places = day.get("places") or []
+        if any(isinstance(place, dict) and place.get("coordinates") for place in places):
+            return False
+    return True
+
+
+_geocoder: Any = None
+_geocode_attempts: dict[str, float] = {}
+_geocode_lock = threading.Lock()
+_GEOCODE_RETRY_SECONDS = 600.0
+
+
+def _destination_coordinates(destination: str) -> dict[str, float] | None:
+    """Geocode a destination once per retry window (Nominatim is rate-limited).
+
+    Used only when a plan carries no coordinates at all, so the route map still
+    has a start point. Results are cached by the geocoder for 24 hours; failed
+    attempts back off for ten minutes instead of retrying on every tool call.
+    """
+    key = destination.strip().lower()
+    if not key:
+        return None
+    now = time.monotonic()
+    with _geocode_lock:
+        attempted = _geocode_attempts.get(key)
+        if attempted is not None and now - attempted < _GEOCODE_RETRY_SECONDS:
+            return None
+        _geocode_attempts[key] = now
+    global _geocoder
+    if _geocoder is None:
+        from agents.search_stays.tools import NominatimGeocoder
+
+        _geocoder = NominatimGeocoder()
+    return _geocoder.geocode(destination)
+
+
+def _ensure_destination_coordinates(plan: dict[str, Any]) -> dict[str, Any]:
+    """Fill ``destination_coordinates`` when the plan has no route points."""
+    if not _plan_has_no_coordinates(plan):
+        return plan
+    destination = str(plan.get("destination") or "").strip()
+    coordinates = _destination_coordinates(destination)
+    if not coordinates:
+        return plan
+    return {**plan, "destination_coordinates": coordinates}
+
+
 def _apply_trip_plan_tool(
     store: ConversationStore, conversation_id: str, name: str, arguments: dict[str, Any]
 ) -> tuple[Any, dict[str, Any] | None]:
@@ -113,6 +173,7 @@ def _apply_trip_plan_tool(
     if name == "get_trip_plan":
         # Reading the plan does not change the UI.
         return model_result, None
+    new_plan = _ensure_destination_coordinates(new_plan)
     store.save_trip_plan(conversation_id, new_plan)
     return model_result, assemble_trip_plan(new_plan)
 
@@ -511,7 +572,7 @@ def _run_multi_agent_plan(
             "status": "displayed",
         }
         stream_queue.put(
-            ("event", _trip_plan_event("start_trip_plan", assemble_trip_plan(raw_plan)).model_dump())
+            ("event", _trip_plan_event("start_trip_plan", assemble_trip_plan(_ensure_destination_coordinates(raw_plan))).model_dump())
         )
 
         return {
