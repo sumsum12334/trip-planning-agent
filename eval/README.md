@@ -480,9 +480,9 @@ Reviewers should consider the following before running API-mode evaluation:
 - **Server (backend/frontend):** The artifact itself is a Python FastAPI app
   and a Node/Vite frontend. It runs on a standard server or laptop with
   Python 3.11+ and Node.js 18+. No GPU is required on the server because
-  model inference happens on the remote endpoint
-  (`https://integrate.api.nvidia.com/v1`). Memory and CPU needs are modest;
-  the eval runner's stub mode is fully offline and deterministic.
+  model inference happens on the remote configured endpoint. Memory and CPU
+  needs are modest; the eval runner's stub mode is fully offline and
+  deterministic.
 - **Model provider side:** GPU/vRAM is the provider's responsibility. Reviewers running API mode
   depend on the provider's endpoint availability, rate limits, and latency.
   NVIDIA's free tier has rate limits (e.g., 5 requests/second,
