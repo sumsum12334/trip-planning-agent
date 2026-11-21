@@ -166,8 +166,12 @@ plan is stored per conversation and rendered as the focal, wide trip-plan panel
 to the right of the conversation. The chat pane is intentionally smaller, the
 sidebar is collapsible, and the card is theme-aware (light/dark). It draws the
 route on an interactive OpenStreetMap/Leaflet map: the **arrival airport is the
-first point** of the route (shown with a distinct marker), and a map link is
-shown when no coordinates are provided. Tool payloads are validated in
+first point** of the route (shown with a distinct marker), the map opens by
+default as soon as the plan has route points (a manual show/hide wins
+afterwards), and a map link is shown when no coordinates are provided. When a
+plan carries no coordinates at all, the backend geocodes the destination once
+(Nominatim, cached, with a ten-minute back-off on failures) so the map still
+has a start point. Tool payloads are validated in
 `shared/trip_plan.py`, invalid tool arguments come back as labeled errors (they do
 not abort the turn), and only `http(s)` reference URLs are accepted.
 
@@ -189,6 +193,20 @@ expected to use concrete labels rather than a vague "other" bucket.
 Edited budgets are persisted with `PUT /api/conversations/{id}/trip-plan` and
 are sent to the model on the next turn as a `plan_context` block, so the agent
 reflects the user's corrected figures without a separate notification message.
+The plan header also has a start-date input (toolbar row, next to the export
+buttons): choosing a date persists `start_date` on the plan, the UI derives the
+end date from the day count, and the per-day weather block fetches forecasts
+for those dates.
+
+The plan panel opens as a blank **YOUR TRIP PLAN** shell the moment a message is
+sent, so no placeholder values (`Not specified`, `DAY 1`, `$0`) ever flash. The
+configured model is the primary planner: it streams the answer and builds the
+plan through the trip-plan tools (`start_trip_plan`, then `set_trip_day` /
+`set_trip_budget` / `set_trip_references`), and the panel fills in part by part
+as each tool event arrives. If the model answers a trip request without calling
+any trip-plan tool (for example an endpoint without tool support), the
+deterministic multi-agent pipeline runs as a fallback and emits the same plan
+events.
 
 The chat model can also call the sub-agent tools `search_stays` (Agent 1),
 `estimate_transport` (Agent 2), and `web_search` during a turn, defined in
@@ -396,8 +414,9 @@ errors.
 | Variable | Notes |
 |----------|--------|
 | `QWEN_BASE_URL` / `QWEN_MODEL` / `QWEN_API_KEY` | OpenAI-compatible model endpoint and model identifier. Set the base URL including `/v1`; set the key when required by the provider. |
-| `MODEL_MAX_TOKENS` / `MODEL_TEMPERATURE` / `MODEL_TOP_P` / `MODEL_REASONING_BUDGET` | Sampling defaults sent in the chat-completions payload (defaults: `16384` / `1.0` / `0.95` / `16384`). |
-| `MODEL_ENABLE_THINKING` | Optional override for Qwen thinking mode. Unset keeps the default: enabled while streaming, disabled for one-shot completions. |
+| `MODEL_MAX_TOKENS` / `MODEL_TEMPERATURE` / `MODEL_TOP_P` | Sampling defaults sent in the chat-completions payload (defaults: `16384` / `1.0` / `0.95`). |
+| `MODEL_REASONING_BUDGET` | Optional reasoning budget sent to the model. Only sent when explicitly set; leave unset for maximum compatibility with any OpenAI-compatible endpoint. |
+| `MODEL_ENABLE_THINKING` | Optional thinking-mode override. Only sent when explicitly set; leave unset so thinking parameters are not included in the request (works with any endpoint). |
 | `ENABLE_TRAVEL_HISTORY` | `1` = proposed (Agent1–4); `0` = Baseline A (Agent1–3) |
 | `TOOL_STAYS_MODE` | `stub` (default, offline-safe), `overpass` (OpenStreetMap, no auth), `web` (live web-search results; needs `WEB_SEARCH_MODE=duckduckgo`, falls back to stub), `api` (OBO Travel — legacy, kept for rollback) |
 | `TOOL_MAPS_MODE` | `stub` or `api` |

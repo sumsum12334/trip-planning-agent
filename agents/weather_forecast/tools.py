@@ -96,7 +96,7 @@ def _stub_forecast(request: WeatherForecastRequest) -> WeatherForecast:
     return WeatherForecast(
         mode="stub",
         location=request.location,
-        timezone="local (stub)",
+        timezone="local",
         days=[
             WeatherForecastDay(
                 date=today + timedelta(days=index),

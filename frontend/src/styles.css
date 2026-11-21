@@ -104,9 +104,30 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 
 /* Trip plan panel (moved out of the Live workflow list) */
 .trip-plan-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+/* Start-date input sits on the toolbar row, right-aligned next to the exports. */
+.plan-date-input{display:flex;align-items:center;gap:6px;margin-left:auto;padding:4px 8px;border:1px solid #dbe6f7;border-radius:9px;background:#f1f7ff}
+.plan-date-input .plan-date-label{font-size:11px;font-weight:700;color:#3f5f95;white-space:nowrap}
+.plan-date-input input{padding:4px 6px;border:1px solid #cfdcf3;border-radius:7px;font-size:12px;background:#fff;color:#293754}
+.plan-date-input .plan-date-to{font-size:11px;font-weight:600;color:#5f6d8c;white-space:nowrap}
+.plan-date-input input:focus{outline:2px solid #a9c4ec}
+.app[data-color-mode="dark"] .plan-date-input{background:rgba(139,132,255,0.12);border-color:rgba(154,166,196,0.25)}
+.app[data-color-mode="dark"] .plan-date-input .plan-date-label{color:#b9c8f5}
+.app[data-color-mode="dark"] .plan-date-input input{background:#12192c;border-color:rgba(154,166,196,0.2);color:#e8ecf8}
+.app[data-color-mode="dark"] .plan-date-input .plan-date-to{color:#aab5d0}
 .plan-tool{padding:7px 11px;border-radius:9px;border:1px solid #cfdcf3;background:#fff;color:#3f5f95;font-size:12px;font-weight:600}
 .plan-tool:hover{background:#eef4ff;border-color:#a9c4ec}
 .plan-tool.primary{background:#6c63ff;border-color:#6c63ff;color:#fff}
+
+/* Blank trip-plan shell shown from the moment a message is sent until the
+   agent emits the first trip-plan tool event. It contains no placeholder
+   values, only a faint shimmer so the panel reads as loading. */
+.trip-plan-pending{min-height:360px}
+.trip-plan-blank{min-height:260px;margin-top:14px;border-radius:12px;background:linear-gradient(90deg,#f4f7fc 25%,#fbfcfe 50%,#f4f7fc 75%);background-size:200% 100%;animation:shimmer 2s ease-in-out infinite}
+.app[data-color-mode="dark"] .trip-plan-blank{background:linear-gradient(90deg,#141c2b 25%,#1a2436 50%,#141c2b 75%);background-size:200% 100%}
+@keyframes shimmer{
+  0%{background-position:200% 0}
+  100%{background-position:-200% 0}
+}
 .plan-tool.primary:hover{background:#5b52e6}
 .plan-tool:disabled{opacity:.5;cursor:not-allowed}
 .plan-collapse-toggle{margin-left:auto}

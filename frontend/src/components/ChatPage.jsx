@@ -17,7 +17,7 @@ import { Activity } from "./Activity.jsx";
 import { ChatMessages } from "./ChatMessages.jsx";
 import { NextSteps } from "./NextSteps.jsx";
 import { QuestionBox } from "./QuestionBox.jsx";
-import { TripPlanCard } from "./TripPlanCard.jsx";
+import { TripPlanCard, TripPlanPending } from "./TripPlanCard.jsx";
 
 export function ChatPage({ current, setCurrent, loadConversations, userId }) {
   const [message, setMessage] = useState("");
@@ -46,7 +46,10 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
   const requestIdRef = useRef(null);
   const messagesRef = useRef(null);
 
-  const latestPlanEvent = useMemo(() => planFromEvents(current.events), [current.events]);
+  const latestPlanEvent = useMemo(
+    () => planFromEvents(current.events, (plan) => Boolean(plan?.destination)),
+    [current.events],
+  );
   const latestPlan = latestPlanEvent?.data?.result || null;
 
   const pendingQuestionEvent = useMemo(() => {
@@ -65,7 +68,7 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
   useEffect(() => { if (messagesRef.current) messagesRef.current.scrollTop = messagesRef.current.scrollHeight; }, [current.messages, current.events, latestPlan, chatMinimized]);
 
   function planContextFromEvents(events) {
-    const event = planFromEvents(events);
+    const event = planFromEvents(events, (plan) => Boolean(plan?.destination));
     if (!event) return null;
     const result = event.data.result;
     return {
@@ -191,7 +194,7 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
 
   async function savePlanBudget(payload) {
     setCurrent((previous) => {
-      const target = planFromEvents(previous.events);
+      const target = planFromEvents(previous.events, (plan) => Boolean(plan?.destination));
       if (!target) return previous;
       const result = target.data.result;
       const merged = { ...result };
@@ -207,6 +210,7 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
       if (Array.isArray(payload.budget_items)) merged.budget_items = payload.budget_items;
       if ("budget" in payload) merged.budget = payload.budget;
       if (payload.currency) merged.currency = payload.currency;
+      if ("start_date" in payload) merged.start_date = payload.start_date || null;
       return {
         ...previous,
         events: previous.events.map((event) => event === target
@@ -233,10 +237,15 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
     (event) => event.data?.tool === "ask_user_question" && event.data?.result?.question && !event.data?.selected,
   );
   const activeQuestionEvent = pendingEvent || questionEvent;
-  const planKey = latestPlanEvent ? current.events.indexOf(latestPlanEvent) : -1;
+  // Keep the card mounted across incremental `set_trip_day` plan events so the
+  // plan renders part by part instead of remounting on every tool call.
+  const planKey = current.id || "trip-plan";
   const workflow = workflowState(current.events, selectedOption ? null : pendingEvent, status);
   const suggestions = nextStepSuggestions(latestPlan, current.messages, Boolean(pendingEvent), streaming || answering);
   const busy = streaming || answering;
+  // The wide plan layout is used whenever a plan exists or a turn is running
+  // (so the blank plan shell appears the moment a message is sent).
+  const showPlanArea = Boolean(latestPlan) || busy;
   const reconsiderEnabled = effectiveReconsiderEnabled(reconsiderServerDefault, reconsiderOverride);
 
   // Sends the reconsideration request through the normal chat flow, including
@@ -420,7 +429,7 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
             </div>
           )}
           <div className={`workflow-status ${workflow.className}`} aria-live="polite" aria-busy={workflow.className === "working"}><span>{workflow.icon}</span><strong>{workflow.label}</strong>{workflow.detail ? <small>{workflow.detail}</small> : null}</div>
-          {(pendingEvent || retryOption) && <QuestionBox event={activeQuestionEvent} onOption={answerQuestion} disabled={answering} retryOption={retryOption} selectedOption={selectedOption} />}
+          {(pendingEvent || retryOption) && <QuestionBox event={activeQuestionEvent} onOption={answerQuestion} disabled={answering || streaming} retryOption={retryOption} selectedOption={selectedOption} />}
           <NextSteps suggestions={suggestions} onSelect={(text) => sendMessage(null, false, text)} disabled={busy} />
           {renderComposer()}
           {renderComposerFooter()}
@@ -445,7 +454,7 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
 
   return (
     <section className="page chat-page">
-      <div className={`chat-workspace-new${latestPlan ? " has-plan" : ""}`}>
+      <div className={`chat-workspace-new${showPlanArea ? " has-plan" : ""}`}>
         <main className="main-content">
           {latestPlan ? (
             <TripPlanCard
@@ -456,6 +465,8 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
               reconsiderEnabled={reconsiderEnabled}
               busy={busy}
             />
+          ) : busy ? (
+            <TripPlanPending />
           ) : hasConversation ? (
             <div className="working-area">
               <Activity events={current.events} />
@@ -476,7 +487,7 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
           )}
         </main>
 
-        {latestPlan && current.events.length > 0 && (
+        {showPlanArea && current.events.length > 0 && (
           <aside className="live-workflow-sidebar" aria-label="Live workflow">
             <Activity events={current.events} />
           </aside>

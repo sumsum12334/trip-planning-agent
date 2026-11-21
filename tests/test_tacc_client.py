@@ -20,9 +20,6 @@ def _fake_settings(**overrides):
         "langfuse_public_key": "",
         "langfuse_secret_key": "",
         "langfuse_host": "",
-        "langsmith_api_key": "",
-        "langsmith_endpoint": "https://api.smith.langchain.com",
-        "langsmith_project": "trip-planning-agent",
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -137,7 +134,7 @@ def test_complete_uses_legacy_sampling_defaults(monkeypatch):
     assert body["temperature"] == 1.0
     assert body["top_p"] == 0.95
     assert body["reasoning_budget"] == 16384
-    assert body["chat_template_kwargs"] == {"enable_thinking": False}
+    # chat_template_kwargs is only sent when MODEL_ENABLE_THINKING is explicitly set.
 
 
 def test_stream_sampling_defaults_enable_thinking(monkeypatch):
@@ -152,7 +149,7 @@ def test_stream_sampling_defaults_enable_thinking(monkeypatch):
     assert body["temperature"] == 1.0
     assert body["top_p"] == 0.95
     assert body["reasoning_budget"] == 16384
-    assert body["chat_template_kwargs"] == {"enable_thinking": True}
+    # chat_template_kwargs is only sent when MODEL_ENABLE_THINKING is explicitly set.
 
 
 def test_sampling_settings_override_payload(monkeypatch):
@@ -378,7 +375,12 @@ def test_stream_retry_without_tools_ends_generation(monkeypatch):
             pass
 
     langfuse = FakeLangfuse()
-    monkeypatch.setattr(observability, "_langfuse_client", lambda settings=None: langfuse)
+    monkeypatch.setattr(
+        observability, "_langfuse_client", lambda settings=None: langfuse
+    )
+    monkeypatch.setattr(
+        observability, "_langsmith_client", lambda settings=None: None
+    )
 
     no_tools = FakeResponse(status_code=400, body="tool-call-parser is not enabled")
     ok = _sse({"choices": [{"delta": {"content": "final answer"}}]}, None)

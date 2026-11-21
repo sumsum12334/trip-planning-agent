@@ -47,7 +47,15 @@ def _langfuse_settings() -> SimpleNamespace:
 @pytest.fixture()
 def fake_client(monkeypatch: pytest.MonkeyPatch) -> FakeLangfuseClient:
     client = FakeLangfuseClient()
-    monkeypatch.setattr(observability, "_langfuse_client", lambda settings=None: client)
+    # The eval-branch refactor renamed the accessor to _langfuse_client and
+    # added the parallel _langsmith_client; pin both so the tests exercise
+    # only the Langfuse path with the fake client.
+    monkeypatch.setattr(
+        observability, "_langfuse_client", lambda settings=None: client
+    )
+    monkeypatch.setattr(
+        observability, "_langsmith_client", lambda settings=None: None
+    )
     return client
 
 

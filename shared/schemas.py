@@ -123,6 +123,8 @@ class TripPlanUpdate(BaseModel):
     currency: Optional[str] = Field(default=None, max_length=12)
     budget_items: list[dict[str, Any]] = Field(default_factory=list)
     days: list[dict[str, Any]] = Field(default_factory=list)
+    # Optional trip start (arrival) date, YYYY-MM-DD. An empty string clears it.
+    start_date: Optional[str] = Field(default=None, max_length=10)
 
 
 class ChatEvent(BaseModel):

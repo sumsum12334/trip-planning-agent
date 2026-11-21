@@ -11,6 +11,7 @@ import {
   toolOfEvent,
   currentWork,
   workflowState,
+  workflowCards,
 } from "./workflow.js";
 
 const callEvent = (tool, args = {}, overrides = {}) => ({
@@ -57,10 +58,13 @@ describe("currentAgent", () => {
 });
 
 describe("nextStepSuggestions", () => {
-  it("suggests starters for an empty conversation", () => {
+  it("suggests complete trip-plan starters for an empty conversation", () => {
     const suggestions = nextStepSuggestions(null, [], false, false);
-    expect(suggestions.length).toBeGreaterThan(0);
-    expect(suggestions[0]).toContain("Plan a 4-day trip");
+    expect(suggestions.length).toBe(4);
+    suggestions.forEach((suggestion) => {
+      // Destination, duration, budget, and interests in one short prompt.
+      expect(suggestion).toMatch(/^Plan a \d+-day trip to .+ for \$[\d,]+/);
+    });
   });
 
   it("suggests plan refinements once a plan exists", () => {
@@ -125,6 +129,104 @@ describe("workflowState", () => {
     expect(
       workflowState(events, null, "Sending your choice to the assistant...").label,
     ).toBe("Model is thinking");
+  });
+
+  it("reports Ready after a turn whose last tool call already received its result", () => {
+    // Regression: every tool call leaves its "Calling X" event running in the
+    // raw list, so the old last-running-event scan hung the status bar on the
+    // final tool step once the turn had completed.
+    const events = [
+      { type: "agent", label: "Coordinator agent started", status: "running" },
+      { type: "model", label: "Model request queued", status: "running" },
+      callEvent("set_trip_references", { references: [{ title: "Guide", url: "https://example.com" }] }),
+      { type: "tool", label: "Trip plan updated (set_trip_references)", status: "completed", data: { tool: "display_trip_plan", result: {} } },
+      resultEvent("set_trip_references", { ok: true }),
+      { type: "model", label: "Model response received", status: "completed" },
+      { type: "agent", label: "Coordinator agent completed", status: "completed" },
+    ];
+    expect(currentWork(events)).toBeNull();
+    expect(currentAgent(events)).toBeNull();
+    const state = workflowState(events, null, "Model: test-model");
+    expect(state.label).toBe("Ready");
+    expect(state.className).toBe("ready");
+  });
+
+  it("still reports the running step while work is genuinely in progress", () => {
+    const events = [
+      callEvent("set_trip_day", { day: 1 }),
+      resultEvent("set_trip_day", { ok: true }),
+      callEvent("set_trip_budget", { budget: 800 }),
+    ];
+    expect(currentWork(events).label).toBe("Updating the budget");
+    expect(currentAgent(events)).toBe("Agent 3 · coordinator");
+  });
+
+  it("does not hang on the open waiting-for-answer marker after the answer resolves", () => {
+    const events = [
+      callEvent("ask_user_question", { question: "Go when?" }),
+      resultEvent("ask_user_question", { question: "Go when?", status: "awaiting_user" }),
+      { type: "agent", label: "Waiting for your answer", status: "running" },
+      { type: "model", label: "Model request queued", status: "running" },
+      { type: "model", label: "Model response received", status: "completed" },
+      { type: "agent", label: "Coordinator agent completed", status: "completed" },
+    ];
+    expect(currentWork(events)).toBeNull();
+    expect(workflowState(events, null, "Model: test-model").label).toBe("Ready");
+  });
+
+  it("reports Ready after a fallback-pipeline turn whose plain agent runs completed", () => {
+    // Regression: the fallback pipeline's "Travel History Agent" / "Stay
+    // Search Agent" / "Coordinator Agent" events stayed running in the raw
+    // list after their same-label completions, so the status bar hung on
+    // "Building the itinerary" once the turn had finished.
+    const events = [
+      { type: "agent", label: "Coordinator agent started", status: "running" },
+      { type: "agent", label: "Travel History Agent", status: "running" },
+      { type: "agent", label: "Stay Search Agent", status: "running" },
+      { type: "agent", label: "Coordinator Agent", status: "running" },
+      { type: "tool", label: "Trip plan updated (start_trip_plan)", status: "completed", data: { tool: "display_trip_plan", result: {} } },
+      { type: "agent", label: "Travel History Agent", status: "completed" },
+      { type: "agent", label: "Stay Search Agent", status: "completed" },
+      { type: "agent", label: "Coordinator Agent", status: "completed" },
+      { type: "agent", label: "Coordinator agent completed", status: "completed" },
+    ];
+    expect(currentWork(events)).toBeNull();
+    expect(currentAgent(events)).toBeNull();
+    const state = workflowState(events, null, "Model: test-model");
+    expect(state.label).toBe("Ready");
+    expect(state.className).toBe("ready");
+  });
+});
+
+describe("workflowCards", () => {
+  it("hides the plan panel's display_trip_plan mirror events", () => {
+    const events = [
+      { type: "agent", label: "Coordinator agent started", status: "running" },
+      callEvent("set_trip_day", { day: 1 }),
+      { type: "tool", label: "Trip plan updated (set_trip_day)", status: "completed", data: { tool: "display_trip_plan", result: {} } },
+      resultEvent("set_trip_day", { ok: true }),
+    ];
+    const cards = workflowCards(events);
+    expect(cards).toHaveLength(2);
+    expect(cards.every((card) => card.data?.tool !== "display_trip_plan")).toBe(true);
+    // mergeToolEvents itself stays complete for the plan panel and tests.
+    expect(mergeToolEvents(events)).toHaveLength(3);
+  });
+
+  it("keeps question, model, and unmatched events visible", () => {
+    const events = [
+      { type: "model", label: "Model request queued", status: "running" },
+      callEvent("ask_user_question", { question: "Go when?" }),
+      resultEvent("ask_user_question", { question: "Go when?", status: "awaiting_user" }),
+      { type: "agent", label: "Waiting for your answer", status: "running" },
+    ];
+    // One question card (call + result + waiting merged) plus the model card.
+    expect(workflowCards(events)).toHaveLength(2);
+  });
+
+  it("handles empty and missing input", () => {
+    expect(workflowCards([])).toEqual([]);
+    expect(workflowCards(undefined)).toEqual([]);
   });
 });
 
@@ -217,17 +319,34 @@ describe("mergeToolEvents", () => {
     expect(cards[1].data.result).toEqual({ ok: 2 });
   });
 
-  it("keeps ask_user_question events as their own cards", () => {
+  it("folds the question call, result, and waiting marker into one running card", () => {
     const cards = mergeToolEvents([
       callEvent("ask_user_question", { question: "Go when?" }),
       resultEvent("ask_user_question", { question: "Go when?", status: "awaiting_user" }),
-      { type: "agent", label: "Waiting for your answer", status: "running" },
+      { type: "agent", label: "Waiting for your answer", detail: "Go when?", status: "running" },
     ]);
-    expect(cards).toHaveLength(3);
-    expect(cards[0].label).toBe("Calling ask_user_question");
-    expect(cards[1].label).toBe("ask_user_question result received");
-    expect(cards[2].label).toBe("Waiting for your answer");
-    expect(cards.every((card) => card.merged === undefined)).toBe(true);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].toolLabel).toBe("Asking you a question");
+    // The waiting marker is the card's current status, not a separate event.
+    expect(cards[0].status).toBe("running");
+    expect(cards[0].detail).toBe("Go when?");
+    expect(cards[0].data.result).toEqual({ question: "Go when?", status: "awaiting_user" });
+    expect(cards[0].merged).toBe(true);
+  });
+
+  it("shows the answered question card as completed with the selected answer", () => {
+    const cards = mergeToolEvents([
+      callEvent("ask_user_question", { question: "Go when?" }),
+      resultEvent("ask_user_question", { question: "Go when?" }, {
+        data: { tool: "ask_user_question", result: { question: "Go when?" }, selected: "March" },
+        detail: "Answer selected: March",
+      }),
+      { type: "agent", label: "Waiting for your answer", detail: "Go when?", status: "running" },
+    ]);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].status).toBe("completed");
+    expect(cards[0].detail).toBe("Answer selected: March");
+    expect(cards[0].data.selected).toBe("March");
   });
 
   it("keeps agent, handover, and trip-plan events intact", () => {
@@ -372,5 +491,40 @@ describe("mergeToolEvents: agent run pairs", () => {
     expect(cards).toHaveLength(1);
     expect(cards[0].label).toBe("Coordinator agent started");
     expect(cards[0].merged).toBeUndefined();
+  });
+
+  it("pairs the fallback pipeline's plain-label agent runs by label", () => {
+    // The deterministic fallback emits "… Agent" running/completed pairs with
+    // no "started" suffix; interleaved, they must not steal each other's
+    // close event.
+    const cards = mergeToolEvents([
+      { type: "agent", label: "Travel History Agent", status: "running" },
+      { type: "agent", label: "Stay Search Agent", status: "running" },
+      { type: "agent", label: "Coordinator Agent", status: "running" },
+      { type: "agent", label: "Travel History Agent", status: "completed" },
+      { type: "agent", label: "Stay Search Agent", status: "completed" },
+      { type: "agent", label: "Coordinator Agent", status: "completed" },
+    ]);
+    expect(cards).toHaveLength(3);
+    expect(cards.map((card) => card.label)).toEqual([
+      "Travel History Agent",
+      "Stay Search Agent",
+      "Coordinator Agent",
+    ]);
+    expect(cards.every((card) => card.status === "completed")).toBe(true);
+  });
+
+  it("merges a user stop into every open agent run", () => {
+    const cards = mergeToolEvents([
+      { type: "agent", label: "Coordinator agent started", status: "running" },
+      { type: "agent", label: "Travel History Agent", status: "running" },
+      { type: "agent", label: "Stopped by user", status: "completed" },
+    ]);
+    expect(cards).toHaveLength(2);
+    expect(cards[0].label).toBe("Stopped by user");
+    expect(cards[0].status).toBe("completed");
+    // The other open run is closed too, so nothing stays running after a stop.
+    expect(cards[1].label).toBe("Travel History Agent");
+    expect(cards[1].status).toBe("completed");
   });
 });

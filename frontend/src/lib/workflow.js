@@ -24,7 +24,11 @@ export function agentForEvent(event) {
 }
 
 export function currentAgent(events) {
-  const running = [...events].reverse().find((event) => event.status === "running");
+  // Use merged cards so a tool call that already received its result (and
+  // other closed pairs) no longer counts as "running" after the turn ends.
+  const running = [...mergeToolEvents(events)]
+    .reverse()
+    .find((card) => card.status === "running");
   if (!running) return null;
   return agentForEvent(running) || running.label;
 }
@@ -33,10 +37,10 @@ export function nextStepSuggestions(plan, messages, hasPendingQuestion, busy) {
   const hasConversation = messages.some((item) => item.role === "user");
   if (!hasConversation) {
     return [
-      "Plan a 4-day trip to Kyoto in spring",
-      "Search accommodation in Tokyo under $200 per night",
-      "Check weather in Paris for next week",
-      "Estimate transport from Hong Kong to Seoul",
+      "Plan a 4-day trip to Kyoto for $1,200, temples and food",
+      "Plan a 5-day trip to Tokyo for $1,500, food and culture",
+      "Plan a 3-day trip to Paris for $1,000, art and cafés",
+      "Plan a 7-day trip to Rome for $2,000, history and local food",
     ];
   }
   if (plan) {
@@ -63,6 +67,7 @@ const TOOL_DISPLAY_NAMES = {
   web_search: "Web search",
   weather: "Weather lookup",
   search_travel_history: "Search travel history",
+  ask_user_question: "Asking you a question",
   display_trip_plan: "Show trip plan",
   start_trip_plan: "Start trip plan",
   set_trip_day: "Set trip day",
@@ -126,12 +131,60 @@ const isModelRequestOpen = (event) =>
   event?.type === "model" && event.status === "running" && MODEL_REQUEST_PATTERN.test(event.label || "");
 const isModelResponseClose = (event) =>
   event?.type === "model" && event.status !== "running" && MODEL_RESPONSE_LABELS.has(event.label);
+
+// The deterministic fallback pipeline emits plain "… Agent" running/completed
+// pairs (no "started" suffix); pair them like the generic agent runs so a
+// completed fallback step cannot leave a stale running event behind.
+const AGENT_RUN_PLAIN_LABELS = new Set([
+  "Travel History Agent",
+  "Stay Search Agent",
+  "Coordinator Agent",
+]);
 const isAgentRunOpen = (event) =>
-  event?.type === "agent" && event.status === "running" && / started$/i.test(event.label || "");
+  event?.type === "agent" &&
+  event.status === "running" &&
+  (/ started$/i.test(event.label || "") || AGENT_RUN_PLAIN_LABELS.has(event.label || ""));
 const isAgentRunClose = (event) =>
   event?.type === "agent" &&
   event.status !== "running" &&
-  (/ (completed|failed)$/i.test(event.label || "") || event.label === "Stopped by user");
+  (/ (completed|failed)$/i.test(event.label || "") ||
+    event.label === "Stopped by user" ||
+    AGENT_RUN_PLAIN_LABELS.has(event.label || ""));
+// Pair key: the run label without its started/completed/failed suffix, so
+// "Coordinator agent started" and "Coordinator agent completed" share a key.
+const agentRunKey = (label) =>
+  `agent:${String(label || "").replace(/\s+(started|completed|failed)$/i, "")}`;
+
+// Question events fold into ONE card: the call opens it, the result merges
+// into it (carrying `selected` once answered), and the "Waiting for your
+// answer" marker keeps it running until the answer resolves.
+function openQuestionCard(cards, openCalls, event, index) {
+  if (isToolCallEvent(event)) {
+    const card = {
+      ...event,
+      toolName: "ask_user_question",
+      toolLabel: toolDisplayName("ask_user_question"),
+      index,
+    };
+    cards.push(card);
+    const queue = openCalls.get("ask_user_question") || [];
+    queue.push(card);
+    openCalls.set("ask_user_question", queue);
+    return;
+  }
+  const queue = openCalls.get("ask_user_question");
+  const open = queue && queue.length ? queue[queue.length - 1] : null;
+  if (open) {
+    // Spread the whole data object so `selected` and other answer fields
+    // survive the merge, not just `result`.
+    open.data = { ...(open.data || {}), ...(event.data || {}) };
+    if (event.detail) open.detail = event.detail;
+    open.status = event.status || open.status;
+    open.merged = true;
+    return;
+  }
+  cards.push({ ...event, index });
+}
 
 // Groups request/response pairs so one logical step renders as ONE card:
 // each "Calling <tool>" with its result, each model call with its response,
@@ -162,6 +215,24 @@ export function mergeToolEvents(events) {
   list.forEach((event, index) => {
     const tool = toolOfEvent(event);
     if (tool === "ask_user_question") {
+      openQuestionCard(cards, openCalls, event, index);
+      return;
+    }
+    if (isAwaitingAnswer(event)) {
+      // Fold the open "Waiting for your answer" marker into the question card
+      // so one card carries the question and its current state: running while
+      // an answer is pending, completed once the answer is recorded.
+      const questionCard = [...cards]
+        .reverse()
+        .find((card) => toolOfEvent(card) === "ask_user_question");
+      if (questionCard) {
+        if (!questionCard.data?.selected) {
+          questionCard.status = "running";
+          if (event.detail) questionCard.detail = event.detail;
+        }
+        questionCard.merged = true;
+        return;
+      }
       cards.push({ ...event, index });
       return;
     }
@@ -199,11 +270,35 @@ export function mergeToolEvents(events) {
     if (isAgentRunOpen(event)) {
       const card = { ...event, index };
       cards.push(card);
-      openPair("agent", card);
+      // Key runs by base label so interleaved pipeline agents ("Travel
+      // History Agent" / "Stay Search Agent" / "Coordinator Agent") pair with
+      // their own close event instead of stealing another run's.
+      openPair(agentRunKey(event.label), card);
       return;
     }
     if (isAgentRunClose(event)) {
-      const open = closePair("agent", event);
+      let open = null;
+      if (event.label === "Stopped by user") {
+        // A user stop ends the whole turn: close every open agent run, with
+        // the oldest one carrying the "Stopped by user" label.
+        let oldest = null;
+        for (const [key, queue] of [...openCalls.entries()]) {
+          if (!key.startsWith("agent:")) continue;
+          while (queue.length) {
+            const stoppedCard = closePair(key, event);
+            if (!stoppedCard) break;
+            stoppedCard.status = event.status || stoppedCard.status;
+            stoppedCard.merged = true;
+            if (!oldest || stoppedCard.index < oldest.index) oldest = stoppedCard;
+          }
+        }
+        if (oldest) {
+          oldest.label = event.label;
+          return;
+        }
+      } else {
+        open = closePair(agentRunKey(event.label), event);
+      }
       if (open) {
         if (event.label === "Stopped by user") open.label = event.label;
         else {
@@ -252,14 +347,28 @@ const WORK_LABELS = {
   ask_user_question: "Asking you a question",
 };
 
-function isAnsweredQuestion(event) {
-  return event?.data?.tool === "ask_user_question" && Boolean(event?.data?.selected);
+// The backend leaves the question events ("Calling ask_user_question" and the
+// "Waiting for your answer" marker) open while a question is pending, and the
+// open call card is never closed even after the answer resolves. The waiting
+// state is owned by workflowState's pendingQuestion branch, so these markers
+// must never keep the status bar (or agent chip) busy on their own.
+function isQuestionLifecycle(event) {
+  return isAwaitingAnswer(event) || toolOfEvent(event) === "ask_user_question";
+}
+
+// The backend leaves this agent event open while a question is pending; the
+// waiting state is owned by workflowState's pendingQuestion branch, so it must
+// never keep the status bar (or agent chip) busy after the turn resolves.
+function isAwaitingAnswer(event) {
+  return event?.type === "agent" && event?.label === "Waiting for your answer";
 }
 
 export function currentWork(events) {
-  const list = Array.isArray(events) ? events : [];
-  const running = [...list].reverse().find(
-    (event) => event.status === "running" && !isAnsweredQuestion(event),
+  // Scan merged cards, not raw events: a "Calling X" event stays "running" in
+  // the raw list even after its "X result received" close arrives, which made
+  // the status bar hang on the last tool call once the turn had finished.
+  const running = [...mergeToolEvents(events)].reverse().find(
+    (card) => card.status === "running" && !isQuestionLifecycle(card),
   );
   if (!running) return null;
   const tool = toolOfEvent(running);
@@ -287,6 +396,14 @@ export function currentWork(events) {
     return { label: "Building the itinerary", detail: detail || label };
   }
   return { label: label || "Agent working", detail };
+}
+
+// Cards for the Live workflow list. The backend mirrors every trip-plan tool
+// call as a display_trip_plan event so the plan panel can render it; the
+// workflow list already shows the underlying "Calling <tool>" card, so the
+// mirror stays out of the timeline.
+export function workflowCards(events) {
+  return mergeToolEvents(events).filter((card) => card?.data?.tool !== "display_trip_plan");
 }
 
 export function workflowState(events, pendingQuestion, status) {
