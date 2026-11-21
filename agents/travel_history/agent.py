@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -11,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
+
+from langsmith import traceable
 
 from config.settings import get_settings
 from shared.schemas import TripRequest
@@ -435,6 +438,12 @@ class TravelHistoryStore:
         return self.record_visit(user_id, location, country=country, city=city)
 
 
+@traceable(
+    run_type="tool",
+    name="agent_travel_history",
+    project_name=os.getenv("LANGSMITH_PROJECT", "trip-planning-agent"),
+    metadata={"agent": "travel_history"},
+)
 def run(request: TripRequest) -> list[str]:
     """Return previously visited place names for this user."""
     settings = get_settings()

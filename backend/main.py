@@ -486,11 +486,12 @@ def _run_multi_agent_plan(
 ) -> dict | None:
     """Run the multi-agent coordinator pipeline and stream agent events.
 
-    Emits SSE agent events for Travel History → Stay Search → Coordinator
+    Emits SSE agent events for Travel History → Stay Search → Transport Estimate → Coordinator
     so the Live workflow panel shows each agent working. Returns a dict with
     the itinerary (or an error) for the ``done`` frame.
     """
     from shared.schemas import TripRequest
+    from agents.estimate_transport import run as estimate_transport
 
     constraints = _parse_trip_constraints(request_message)
 
@@ -505,25 +506,142 @@ def _run_multi_agent_plan(
 
     _emit("travel_history", "Travel History Agent", "running", "Checking travel history")
     _emit("search_stays", "Stay Search Agent", "running", "Searching accommodations")
+    _emit("estimate_transport", "Transport Estimate Agent", "running", "Estimating transport")
     _emit("coordinate", "Coordinator Agent", "running", "Building itinerary")
 
+    # Extract destination city from message (e.g. "Plan a trip to Tokyo" -> "Tokyo")
+    import re as _re
+    dest_caps = _re.findall(r'\b[A-Z][a-z]+\b', request_message)
+    dest_city = dest_caps[-1] if dest_caps else request_message.strip()
+
+    # Extract number of days from message (e.g. "3-day trip", "5 days")
+    days = None
+    day_match = _re.search(r'(\d+)\s*[- ]?day', request_message, _re.IGNORECASE)
+    if day_match:
+        days = int(day_match.group(1))
+
+    # Extract budget from message (e.g. "$2000", "budget of $1500")
+    # Require the dollar sign so we don't accidentally match day counts like "3-day"
+    budget = None
+    budget_match = _re.search(r'(?:budget\s+(?:of\s+)?)?\$(\d[\d,]*)', request_message)
+    if budget_match:
+        budget = float(budget_match.group(1).replace(",", ""))
+
     trip_request = TripRequest(
-        destination=constraints.get("destination", request_message.strip()),
+        destination=constraints.get("destination", dest_city),
         user_id=user_id,
-        budget=constraints.get("budget"),
-        days=constraints.get("days"),
+        budget=constraints.get("budget", budget),
+        days=constraints.get("days", days),
         interests=[],
     )
 
     try:
+        # Step 1: Travel History
+        from agents.travel_history import run as travel_history
+        visited = travel_history(trip_request)
+        _emit("travel_history", "Travel History Agent", "completed", "History checked", {})
+
+        # Step 2: Stay Search
+        from agents.search_stays import run as search_stays
+        excluded = visited if trip_request.avoid_visited else []
+        stays = search_stays(trip_request, excluded_locations=excluded)
+        stay_count = len(stays)
+        _emit("search_stays", "Stay Search Agent", "completed", f"{stay_count} stays evaluated", {})
+
+        # Step 3: Transport Estimate (origin to destination)
+        origin = trip_request.origin or trip_request.destination
+        transport = estimate_transport(trip_request, origin, dest_city)
+        _emit("estimate_transport", "Transport Estimate Agent", "completed", f"Arrival via {transport.mode or 'transport'}", {})
+
+        # Step 4: Coordinator
         itinerary = coordinate(trip_request, session_id=session_id)
 
-        stay_count = len(itinerary.days[0].stays) if itinerary.days and itinerary.days[0].stays else 0
         cost = itinerary.total_estimated_cost or 0
         currency = itinerary.currency or ""
 
+        _emit("coordinate", "Coordinator Agent", "completed", f"Itinerary ready: {currency}{cost}", {})
+
+        # Publish the itinerary as a trip-plan tool event so the browser renders
+        # the focal trip-plan panel immediately instead of waiting for the agent
+        # to call start_trip_plan / set_trip_day during the turn.
+        raw_plan = {
+            "destination": trip_request.destination,
+            "currency": itinerary.currency or "",
+            "budget": trip_request.budget,
+            "start_date": trip_request.start_date.isoformat() if trip_request.start_date else None,
+            "days": [
+                {
+                    "day": day.day_index,
+                    "title": f"Day {day.day_index}",
+                    "activities": list(day.pois or []),
+                    "stays": [
+                        {
+                            "name": stay.name,
+                            "location": stay.location,
+                            "nightly_cost": stay.nightly_cost,
+                            "currency": stay.currency,
+                            "notes": stay.notes,
+                            "coordinates": stay.coordinates,
+                        }
+                        for stay in (day.stays or [])
+                    ],
+                    "transports": [
+                        {
+                            "from_place": leg.from_place,
+                            "to_place": leg.to_place,
+                            "mode": leg.mode,
+                            "duration_minutes": leg.duration_minutes,
+                            "cost": leg.cost,
+                            "currency": leg.currency,
+                            "source_url": leg.source_url,
+                            "notes": leg.notes,
+                        }
+                        for leg in (day.transports or [])
+                    ],
+                    "budget": day.estimated_cost,
+                    "budget_items": [],
+                }
+                for day in itinerary.days
+            ],
+            "notes": list(itinerary.notes or []),
+            "references": [],
+            "status": "displayed",
+        }
+        stream_queue.put(
+            ("event", _trip_plan_event("start_trip_plan", assemble_trip_plan(_ensure_destination_coordinates(raw_plan))).model_dump())
+        )
+
+        return {
+            "kind": "itinerary",
+            "itinerary": itinerary.model_dump(mode="json"),
+            "text": _format_itinerary_summary(itinerary),
+        }
+    except NoFeasiblePlanError as error:
+        _emit("coordinate", "Coordinator Agent", "error", str(error), {})
+        return {"kind": "error", "message": str(error)}
+        # Step 1: Travel History
+        from agents.travel_history import run as travel_history
+        visited = travel_history(trip_request)
         _emit("travel_history", "Travel History Agent", "completed", "History checked", {})
+
+        # Step 2: Stay Search
+        from agents.search_stays import run as search_stays
+        excluded = visited if trip_request.avoid_visited else []
+        stays = search_stays(trip_request, excluded_locations=excluded)
+        stay_count = len(stays)
         _emit("search_stays", "Stay Search Agent", "completed", f"{stay_count} stays evaluated", {})
+
+        # Step 3: Transport Estimate (origin to destination)
+        origin = trip_request.origin or trip_request.destination
+        transport = estimate_transport(trip_request, origin, dest_city)
+        _emit("estimate_transport", "Transport Estimate Agent", "completed", f"Arrival via {transport.mode or 'transport'}", {})
+
+        # Step 4: Coordinator
+        itinerary = coordinate(trip_request, session_id=session_id)
+
+        cost = itinerary.total_estimated_cost or 0
+        currency = itinerary.currency or ""
+
         _emit("coordinate", "Coordinator Agent", "completed", f"Itinerary ready: {currency}{cost}", {})
 
         # Publish the itinerary as a trip-plan tool event so the browser renders
@@ -576,6 +694,76 @@ def _run_multi_agent_plan(
         stream_queue.put(
             ("event", _trip_plan_event("start_trip_plan", assemble_trip_plan(_ensure_destination_coordinates(raw_plan))).model_dump())
         )
+        # Publish the itinerary as a trip-plan tool event so the browser renders
+        # the focal trip-plan panel immediately instead of waiting for the agent
+        # to call start_trip_plan / set_trip_day during the turn.
+        raw_plan = {
+            "destination": trip_request.destination,
+            "currency": itinerary.currency or "",
+            "budget": trip_request.budget,
+            "start_date": trip_request.start_date.isoformat() if trip_request.start_date else None,
+            "days": [
+                {
+                    "day": day.day_index,
+                    "title": f"Day {day.day_index}",
+                    "activities": list(day.pois or []),
+                    "stays": [
+                        {
+                            "name": stay.name,
+                            "location": stay.location,
+                            "nightly_cost": stay.nightly_cost,
+                            "currency": stay.currency,
+                            "notes": stay.notes,
+                            "coordinates": stay.coordinates,
+                        }
+                        for stay in (day.stays or [])
+                    ],
+                    "transports": [
+                        {
+                            "from_place": leg.from_place,
+                            "to_place": leg.to_place,
+                            "mode": leg.mode,
+                            "duration_minutes": leg.duration_minutes,
+                            "cost": leg.cost,
+                            "currency": leg.currency,
+                            "source_url": leg.source_url,
+                            "notes": leg.notes,
+                        }
+                        for leg in (day.transports or [])
+                    ],
+                    "budget": day.estimated_cost,
+                    "budget_items": [],
+                }
+                for day in itinerary.days
+            ],
+            "notes": list(itinerary.notes or []),
+            "references": [],
+            "status": "displayed",
+        }
+        stream_queue.put(
+            ("event", _trip_plan_event("start_trip_plan", assemble_trip_plan(_ensure_destination_coordinates(raw_plan))).model_dump())
+        )
+
+        return {
+            "notes": list(itinerary.notes),
+            "references": [],
+            "status": "displayed",
+        }
+        ui_plan = assemble_trip_plan(plan_dict)
+        _emit("display_trip_plan", "Trip plan updated", "completed", f"Plan ready for {itinerary.request.destination}", {
+            "tool": "display_trip_plan",
+            "result": ui_plan,
+            "action": "display_trip_plan",
+        })
+
+        return {
+            "kind": "itinerary",
+            "itinerary": itinerary.model_dump(mode="json"),
+            "text": _format_itinerary_summary(itinerary),
+        }
+    except NoFeasiblePlanError as error:
+        _emit("coordinate", "Coordinator Agent", "error", str(error), {})
+        return {"kind": "error", "message": str(error)}
 
         return {
             "kind": "itinerary",

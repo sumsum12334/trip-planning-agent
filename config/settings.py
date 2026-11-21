@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     model_max_tokens: int = Field(default=16384, alias="MODEL_MAX_TOKENS")
     model_temperature: float = Field(default=1.0, alias="MODEL_TEMPERATURE")
     model_top_p: float = Field(default=0.95, alias="MODEL_TOP_P")
-    model_reasoning_budget: int = Field(default=16384, alias="MODEL_REASONING_BUDGET")
+    model_reasoning_budget: int | None = Field(default=None, alias="MODEL_REASONING_BUDGET")
     model_enable_thinking: bool | None = Field(
         default=None, alias="MODEL_ENABLE_THINKING"
     )

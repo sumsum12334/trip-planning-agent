@@ -64,6 +64,7 @@ _STUB_CATALOG: list[dict[str, Any]] = [
         "phone": "+81 3-5555-0123",
         "amenities": ["wifi", "locker"],
         "source_url": "https://example.com/stays/tyo-capsule",
+        "coordinates": {"lat": 35.6580, "lng": 139.7016},
     },
     {
         "name": "Asakusa Traditional Ryokan",
@@ -74,6 +75,7 @@ _STUB_CATALOG: list[dict[str, Any]] = [
         "phone": "+81 3-5555-3456",
         "amenities": ["wifi", "onsen", "breakfast"],
         "source_url": "https://example.com/stays/tyo-ryokan",
+        "coordinates": {"lat": 35.7148, "lng": 139.7967},
     },
     {
         "name": "Shinjuku Business Hotel",
@@ -84,6 +86,7 @@ _STUB_CATALOG: list[dict[str, Any]] = [
         "phone": "+81 3-5555-7890",
         "amenities": ["wifi", "desk"],
         "source_url": "https://example.com/stays/tyo-business",
+        "coordinates": {"lat": 35.6938, "lng": 139.7034},
     },
     {
         "name": "Canal-Side Guesthouse",
@@ -1098,6 +1101,7 @@ def _to_candidate(row: dict[str, Any], notes: str) -> StayCandidate:
         currency=row.get("currency"),
         rating=row.get("rating"),
         amenities=list(row.get("amenities") or []),
+        coordinates=row.get("coordinates"),
     )
 
 

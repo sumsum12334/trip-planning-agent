@@ -124,7 +124,20 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
           ? optimisticMessages
           : [...optimisticMessages, { role: "assistant", content: result.text, reasoning: result.reasoning || streamedReasoning }];
         const mergedEvents = [...current.events, ...(result.events || [])];
-        setCurrent({ id: result.conversation_id || current.id, messages: completedMessages, events: mergedEvents });
+        
+        // Fallback: if result has itinerary but no display_trip_plan event, create one
+        let finalEvents = mergedEvents;
+        if (result.itinerary && !mergedEvents.some(e => e.data?.tool === "display_trip_plan")) {
+          finalEvents = [...mergedEvents, {
+            type: "agent",
+            label: "Trip plan updated",
+            detail: `Plan ready for ${result.itinerary.request?.destination || "destination"}`,
+            status: "completed",
+            data: { tool: "display_trip_plan", result: result.itinerary, action: "display_trip_plan" }
+          }];
+        }
+        
+        setCurrent({ id: result.conversation_id || current.id, messages: completedMessages, events: finalEvents });
         setStatus(
           result.pending_question
             ? "The assistant is waiting for your choice."

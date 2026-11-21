@@ -76,6 +76,8 @@ class DayPlan(BaseModel):
     stays: list[StayCandidate] = Field(default_factory=list)
     transports: list[TransportLeg] = Field(default_factory=list)
     pois: list[str] = Field(default_factory=list)
+    places: list[dict[str, Any]] = Field(default_factory=list)
+    coordinates: Optional[dict[str, float]] = None
     estimated_cost: Optional[float] = None
 
 
@@ -86,6 +88,8 @@ class Itinerary(BaseModel):
     currency: Optional[str] = None
     used_travel_history: bool = False
     notes: list[str] = Field(default_factory=list)
+    airport: Optional[dict[str, Any]] = None
+    destination_coordinates: Optional[dict[str, float]] = None
 
 
 class PlanReviseRequest(BaseModel):

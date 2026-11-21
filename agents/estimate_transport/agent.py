@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
+
+from langsmith import traceable
 
 from config.settings import get_settings
 from shared.schemas import TransportLeg, TripRequest
@@ -10,6 +13,12 @@ from shared.schemas import TransportLeg, TripRequest
 from . import tools
 
 
+@traceable(
+    run_type="tool",
+    name="agent_estimate_transport",
+    project_name=os.getenv("LANGSMITH_PROJECT", "trip-planning-agent"),
+    metadata={"agent": "estimate_transport"},
+)
 def run(request: TripRequest, from_place: str, to_place: str) -> TransportLeg:
     """Return one transport leg via tools catalog (stub or future maps API).
 

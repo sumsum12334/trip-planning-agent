@@ -14,7 +14,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from typing import Any
+import os
 from urllib.parse import parse_qs, urlencode, urlparse
+
+from langsmith import traceable
 
 from config.settings import get_settings
 from shared.history_match import stay_overlaps_places
@@ -120,6 +123,12 @@ def _with_search_links(
     return candidates
 
 
+@traceable(
+    run_type="tool",
+    name="agent_search_stays",
+    project_name=os.getenv("LANGSMITH_PROJECT", "trip-planning-agent"),
+    metadata={"agent": "search_stays"},
+)
 def run(
     request: TripRequest,
     excluded_locations: Iterable[str] = (),
