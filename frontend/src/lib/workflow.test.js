@@ -56,10 +56,13 @@ describe("currentAgent", () => {
 });
 
 describe("nextStepSuggestions", () => {
-  it("suggests starters for an empty conversation", () => {
+  it("suggests complete trip-plan starters for an empty conversation", () => {
     const suggestions = nextStepSuggestions(null, [], false, false);
-    expect(suggestions.length).toBeGreaterThan(0);
-    expect(suggestions[0]).toContain("Plan a 4-day trip");
+    expect(suggestions.length).toBe(4);
+    suggestions.forEach((suggestion) => {
+      // Destination, duration, budget, and interests in one short prompt.
+      expect(suggestion).toMatch(/^Plan a \d+-day trip to .+ for \$[\d,]+/);
+    });
   });
 
   it("suggests plan refinements once a plan exists", () => {

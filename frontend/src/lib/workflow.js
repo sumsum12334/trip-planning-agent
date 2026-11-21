@@ -33,10 +33,10 @@ export function nextStepSuggestions(plan, messages, hasPendingQuestion, busy) {
   const hasConversation = messages.some((item) => item.role === "user");
   if (!hasConversation) {
     return [
-      "Plan a 4-day trip to Kyoto in spring",
-      "Search accommodation in Tokyo under $200 per night",
-      "Check weather in Paris for next week",
-      "Estimate transport from Hong Kong to Seoul",
+      "Plan a 4-day trip to Kyoto for $1,200, temples and food",
+      "Plan a 5-day trip to Tokyo for $1,500, food and culture",
+      "Plan a 3-day trip to Paris for $1,000, art and cafés",
+      "Plan a 7-day trip to Rome for $2,000, history and local food",
     ];
   }
   if (plan) {

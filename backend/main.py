@@ -440,14 +440,14 @@ def _parse_trip_constraints(message: str) -> dict[str, Any]:
     lowered = message.lower()
     constraints: dict[str, Any] = {}
 
-    # Budget: "$800", "USD 800", "800 dollars".
-    m = re.search(r"[\$£€]\s*(\d+(?:\.\d+)?)", message)
+    # Budget: "$800", "$1,200", "USD 800", "800 dollars".
+    m = re.search(r"[\$£€]\s*(\d[\d,]*(?:\.\d+)?)", message)
     if m:
-        constraints["budget"] = float(m.group(1))
+        constraints["budget"] = float(m.group(1).replace(",", ""))
     else:
-        m = re.search(r"(\d+(?:\.\d+)?)\s*(?:usd|dollars?)\b", lowered)
+        m = re.search(r"(\d[\d,]*(?:\.\d+)?)\s*(?:usd|dollars?)\b", lowered)
         if m:
-            constraints["budget"] = float(m.group(1))
+            constraints["budget"] = float(m.group(1).replace(",", ""))
 
     # Days: "2-day", "2 days", "3 day trip".
     m = re.search(r"(\d+)\s*[-–]\s*day\b", lowered) or re.search(r"(\d+)\s+days?\b", lowered)
