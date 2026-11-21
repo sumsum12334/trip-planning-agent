@@ -73,6 +73,8 @@ from trip_planning_agent.observability import (
     end_trace,
     start_trace,
     trace_context_for,
+    ls_create_run,
+    ls_update_generation,
 )
 
 app = FastAPI(title="trip-planning-agent", version="0.1.0")
@@ -606,10 +608,17 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
             # --- Backend-side tool calling (Ollama/vLLM doesn't support tool calling) ---
             # Call tools directly and prepend results as context to the model prompt.
             tool_context_messages: list[dict[str, str]] = []
+            import re as _re
 
             # Travel history search for trip-related messages
             if _looks_like_trip_request(request.message) or "weather" in request.message.lower():
                 try:
+                    ls_hist, hist_run_id = ls_create_run(
+                        name="search_travel_history",
+                        run_type="tool",
+                        inputs={"query": request.message},
+                        tags=["trip-planning-agent", "tool-call", "search_travel_history"],
+                    )
                     history_results = history_store.search(memory_user_id, request.message)
                     if history_results:
                         places = [e["location"] for e in history_results if e.get("location")]
@@ -619,20 +628,35 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                                 "content": f"Travel history for this user (past locations): {', '.join(places[:10])}. "
                                            f"Avoid repeating these unless specifically requested.",
                             })
+                    ls_update_generation(
+                        ls_hist,
+                        output={"results": history_results},
+                    )
                 except Exception as e:
                     print(f"DEBUG Travel history tool failed: {e}", flush=True)
+                    ls_hist = None
+                    hist_run_id = None
 
             # Weather forecast when mentioned
             if "weather" in request.message.lower():
                 try:
                     weather_dest = request.message.strip()
-                    import re as _re
                     caps = _re.findall(r'\b[A-Z][a-z]+\b', weather_dest)
                     if caps:
                         weather_dest = caps[-1]
                     print(f"DEBUG Weather tool: calling weather_run('{weather_dest}')", flush=True)
+                    ls_weather, weather_run_id = ls_create_run(
+                        name="weather_run",
+                        run_type="tool",
+                        inputs={"query": weather_dest},
+                        tags=["trip-planning-agent", "tool-call", "weather_run"],
+                    )
                     weather_result = weather_run(weather_dest)
                     print(f"DEBUG Weather tool result: {weather_result}", flush=True)
+                    ls_update_generation(
+                        ls_weather,
+                        output={"result": weather_result},
+                    )
                     tool_context_messages.append({
                         "role": "system",
                         "content": f"Weather forecast for {weather_dest}: "
@@ -649,6 +673,12 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                     stay_caps = _re.findall(r'\b[A-Z][a-z]+\b', request.message)
                     stay_dest = stay_caps[-1] if stay_caps else request.message.strip()
                     print(f"DEBUG Stay search tool: calling search_stays_run('{stay_dest}')", flush=True)
+                    ls_stays, stays_run_id = ls_create_run(
+                        name="search_stays",
+                        run_type="tool",
+                        inputs={"destination": stay_dest},
+                        tags=["trip-planning-agent", "tool-call", "search_stays"],
+                    )
                     stay_request = TripRequest(
                         destination=stay_dest,
                         user_id=request.user_id or conversation_id,
@@ -658,6 +688,10 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                     )
                     stays = search_stays_run(stay_request)
                     print(f"DEBUG Stay search result: {len(stays)} stays", flush=True)
+                    ls_update_generation(
+                        ls_stays,
+                        output={"stays": [s.model_dump() for s in stays]},
+                    )
                     if stays:
                         stay_names = [s.name for s in stays[:5]]
                         tool_context_messages.append({

@@ -489,3 +489,44 @@ def update_generation(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
+
+
+def ls_create_run(
+    name: str,
+    *,
+    run_type: str = "tool",
+    inputs: dict[str, Any] | None = None,
+    project_name: str | None = None,
+    tags: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> tuple[Any, str] | tuple[None, None]:
+    """Create a LangSmith run and return (client, run_id) for later completion.
+
+    LangSmith's create_run() returns None by default (fire-and-forget), so we
+    generate our own UUID and store the client + run_id on a SimpleNamespace
+    for later use with ls_update_generation().
+    """
+    settings = get_settings()
+    ls_client = _langsmith_client(settings)
+    if ls_client is None:
+        return None, None
+
+    run_id = str(uuid.uuid4())
+    try:
+        ls_client.create_run(
+            id=run_id,
+            name=name,
+            run_type=run_type,
+            inputs=inputs or {},
+            project_name=project_name or settings.langsmith_project,
+            tags=tags or [],
+            metadata=metadata or {},
+        )
+    except Exception:
+        logger.exception("LangSmith create_run failed for %s", name)
+        return None, None
+
+    return SimpleNamespace(
+        _langsmith_client=ls_client,
+        _langsmith_run_id=run_id,
+    ), run_id
