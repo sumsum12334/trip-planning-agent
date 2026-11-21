@@ -131,12 +131,29 @@ const isModelRequestOpen = (event) =>
   event?.type === "model" && event.status === "running" && MODEL_REQUEST_PATTERN.test(event.label || "");
 const isModelResponseClose = (event) =>
   event?.type === "model" && event.status !== "running" && MODEL_RESPONSE_LABELS.has(event.label);
+
+// The deterministic fallback pipeline emits plain "… Agent" running/completed
+// pairs (no "started" suffix); pair them like the generic agent runs so a
+// completed fallback step cannot leave a stale running event behind.
+const AGENT_RUN_PLAIN_LABELS = new Set([
+  "Travel History Agent",
+  "Stay Search Agent",
+  "Coordinator Agent",
+]);
 const isAgentRunOpen = (event) =>
-  event?.type === "agent" && event.status === "running" && / started$/i.test(event.label || "");
+  event?.type === "agent" &&
+  event.status === "running" &&
+  (/ started$/i.test(event.label || "") || AGENT_RUN_PLAIN_LABELS.has(event.label || ""));
 const isAgentRunClose = (event) =>
   event?.type === "agent" &&
   event.status !== "running" &&
-  (/ (completed|failed)$/i.test(event.label || "") || event.label === "Stopped by user");
+  (/ (completed|failed)$/i.test(event.label || "") ||
+    event.label === "Stopped by user" ||
+    AGENT_RUN_PLAIN_LABELS.has(event.label || ""));
+// Pair key: the run label without its started/completed/failed suffix, so
+// "Coordinator agent started" and "Coordinator agent completed" share a key.
+const agentRunKey = (label) =>
+  `agent:${String(label || "").replace(/\s+(started|completed|failed)$/i, "")}`;
 
 // Question events fold into ONE card: the call opens it, the result merges
 // into it (carrying `selected` once answered), and the "Waiting for your
@@ -253,11 +270,35 @@ export function mergeToolEvents(events) {
     if (isAgentRunOpen(event)) {
       const card = { ...event, index };
       cards.push(card);
-      openPair("agent", card);
+      // Key runs by base label so interleaved pipeline agents ("Travel
+      // History Agent" / "Stay Search Agent" / "Coordinator Agent") pair with
+      // their own close event instead of stealing another run's.
+      openPair(agentRunKey(event.label), card);
       return;
     }
     if (isAgentRunClose(event)) {
-      const open = closePair("agent", event);
+      let open = null;
+      if (event.label === "Stopped by user") {
+        // A user stop ends the whole turn: close every open agent run, with
+        // the oldest one carrying the "Stopped by user" label.
+        let oldest = null;
+        for (const [key, queue] of [...openCalls.entries()]) {
+          if (!key.startsWith("agent:")) continue;
+          while (queue.length) {
+            const stoppedCard = closePair(key, event);
+            if (!stoppedCard) break;
+            stoppedCard.status = event.status || stoppedCard.status;
+            stoppedCard.merged = true;
+            if (!oldest || stoppedCard.index < oldest.index) oldest = stoppedCard;
+          }
+        }
+        if (oldest) {
+          oldest.label = event.label;
+          return;
+        }
+      } else {
+        open = closePair(agentRunKey(event.label), event);
+      }
       if (open) {
         if (event.label === "Stopped by user") open.label = event.label;
         else {

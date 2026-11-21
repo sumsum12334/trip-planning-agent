@@ -173,6 +173,29 @@ describe("workflowState", () => {
     expect(currentWork(events)).toBeNull();
     expect(workflowState(events, null, "Model: test-model").label).toBe("Ready");
   });
+
+  it("reports Ready after a fallback-pipeline turn whose plain agent runs completed", () => {
+    // Regression: the fallback pipeline's "Travel History Agent" / "Stay
+    // Search Agent" / "Coordinator Agent" events stayed running in the raw
+    // list after their same-label completions, so the status bar hung on
+    // "Building the itinerary" once the turn had finished.
+    const events = [
+      { type: "agent", label: "Coordinator agent started", status: "running" },
+      { type: "agent", label: "Travel History Agent", status: "running" },
+      { type: "agent", label: "Stay Search Agent", status: "running" },
+      { type: "agent", label: "Coordinator Agent", status: "running" },
+      { type: "tool", label: "Trip plan updated (start_trip_plan)", status: "completed", data: { tool: "display_trip_plan", result: {} } },
+      { type: "agent", label: "Travel History Agent", status: "completed" },
+      { type: "agent", label: "Stay Search Agent", status: "completed" },
+      { type: "agent", label: "Coordinator Agent", status: "completed" },
+      { type: "agent", label: "Coordinator agent completed", status: "completed" },
+    ];
+    expect(currentWork(events)).toBeNull();
+    expect(currentAgent(events)).toBeNull();
+    const state = workflowState(events, null, "Model: test-model");
+    expect(state.label).toBe("Ready");
+    expect(state.className).toBe("ready");
+  });
 });
 
 describe("workflowCards", () => {
@@ -468,5 +491,40 @@ describe("mergeToolEvents: agent run pairs", () => {
     expect(cards).toHaveLength(1);
     expect(cards[0].label).toBe("Coordinator agent started");
     expect(cards[0].merged).toBeUndefined();
+  });
+
+  it("pairs the fallback pipeline's plain-label agent runs by label", () => {
+    // The deterministic fallback emits "… Agent" running/completed pairs with
+    // no "started" suffix; interleaved, they must not steal each other's
+    // close event.
+    const cards = mergeToolEvents([
+      { type: "agent", label: "Travel History Agent", status: "running" },
+      { type: "agent", label: "Stay Search Agent", status: "running" },
+      { type: "agent", label: "Coordinator Agent", status: "running" },
+      { type: "agent", label: "Travel History Agent", status: "completed" },
+      { type: "agent", label: "Stay Search Agent", status: "completed" },
+      { type: "agent", label: "Coordinator Agent", status: "completed" },
+    ]);
+    expect(cards).toHaveLength(3);
+    expect(cards.map((card) => card.label)).toEqual([
+      "Travel History Agent",
+      "Stay Search Agent",
+      "Coordinator Agent",
+    ]);
+    expect(cards.every((card) => card.status === "completed")).toBe(true);
+  });
+
+  it("merges a user stop into every open agent run", () => {
+    const cards = mergeToolEvents([
+      { type: "agent", label: "Coordinator agent started", status: "running" },
+      { type: "agent", label: "Travel History Agent", status: "running" },
+      { type: "agent", label: "Stopped by user", status: "completed" },
+    ]);
+    expect(cards).toHaveLength(2);
+    expect(cards[0].label).toBe("Stopped by user");
+    expect(cards[0].status).toBe("completed");
+    // The other open run is closed too, so nothing stays running after a stop.
+    expect(cards[1].label).toBe("Travel History Agent");
+    expect(cards[1].status).toBe("completed");
   });
 });
