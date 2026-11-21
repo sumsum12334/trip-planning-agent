@@ -490,18 +490,6 @@ def update_generation(
             )
     except Exception:
         logger.exception("Could not update Langfuse model tracking.")
-    # Also update the LangSmith run attached to this observation.
-    ls_run_id = getattr(observation, "_langsmith_run_id", None)
-    ls_client = getattr(observation, "_langsmith_client", None)
-    if ls_client is not None and ls_run_id:
-        ls_update_generation(
-            observation,
-            output=output,
-            error=error,
-            first_token_time=first_token_time,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
 
 
 def ls_create_run(
