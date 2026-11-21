@@ -555,3 +555,66 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .app[data-color-mode="dark"] .event-stays-list li{color:#aab5d0}
 .app[data-color-mode="dark"] .event-stay-price{color:#9db8ff}
 .app[data-color-mode="dark"] .event-stays-more{color:#9aa6c4}
+
+/* Workflow status in-progress motion */
+.workflow-status.working{
+  position:relative;
+  overflow:hidden;
+}
+.workflow-status.working>span{
+  animation:workflow-icon-pulse 1.4s ease-in-out infinite;
+}
+.workflow-status.working::before{
+  content:"";
+  position:absolute;
+  inset:0;
+  pointer-events:none;
+  background:linear-gradient(110deg,transparent 25%,rgba(108,99,255,0.14) 50%,transparent 75%);
+  background-size:220% 100%;
+  animation:workflow-shimmer 1.8s ease-in-out infinite;
+}
+.workflow-status.working::after{
+  content:"";
+  position:absolute;
+  left:0;
+  right:0;
+  bottom:0;
+  height:2px;
+  pointer-events:none;
+  background:linear-gradient(90deg,transparent,#6c63ff,transparent);
+  background-size:40% 100%;
+  background-repeat:no-repeat;
+  animation:workflow-bar-slide 1.4s ease-in-out infinite;
+}
+.app[data-color-mode="dark"] .workflow-status.working::before{
+  background:linear-gradient(110deg,transparent 25%,rgba(197,191,255,0.16) 50%,transparent 75%);
+  background-size:220% 100%;
+}
+.app[data-color-mode="dark"] .workflow-status.working::after{
+  background:linear-gradient(90deg,transparent,#9b94ff,transparent);
+  background-size:40% 100%;
+  background-repeat:no-repeat;
+}
+@keyframes workflow-icon-pulse{
+  0%,100%{transform:scale(1);opacity:1}
+  50%{transform:scale(1.12);opacity:0.78}
+}
+@keyframes workflow-shimmer{
+  0%{background-position:100% 0}
+  100%{background-position:-100% 0}
+}
+@keyframes workflow-bar-slide{
+  0%{background-position:-40% 0}
+  100%{background-position:140% 0}
+}
+.chat-panel-collapsed-status.working .chat-panel-collapsed-icon{
+  animation:chat-pill-pulse 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion:reduce){
+  .workflow-status.working::before,
+  .workflow-status.working::after,
+  .workflow-status.working>span,
+  .chat-panel-collapsed-status.working .chat-panel-collapsed-icon{
+    animation:none;
+  }
+}
