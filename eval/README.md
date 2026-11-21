@@ -144,6 +144,46 @@ cd <ROOT>
 python -m eval.runner --case tokyo_history_avoid_shibuya
 ```
 
+### 1.6 Use the frontend (Tripwise)
+
+With the backend (`:8000`) and frontend (`:5173`) both running on the server,
+open `http://<SERVER-URL>:5173` in a browser and follow these steps:
+
+**Start a trip plan**
+1. On the landing page, type your request in the centered composer, for example:
+   - `Plan a 3-day trip to Kyoto for $800`
+   - `Plan a 4-day Tokyo trip under $400, interested in food`
+2. Click **Send** (or press Enter on the form).
+
+**Watch the plan build**
+1. The assistant streams its response in real time in the chat pane.
+2. Once a plan is generated, a wide **trip plan panel** opens to the right of the
+   conversation, with a **Live workflow sidebar** naming the agent currently
+   working (Coordinator → Agent 1 Search Stays → Agent 2 Estimate Transport →
+   Agent 4 Travel History).
+3. The map draws your route starting from the arrival airport.
+
+**Edit the plan**
+1. Each day card merges its route with its itemized budget — edit both together.
+2. Use the **Overview / Day-by-day** toggle; days are collapsible.
+3. Click **Edit** on a day or the budget to change days, budget, currency, or
+   items, then click **Reconsider** to ask the AI to re-plan with your changes.
+
+**Answer clarifying questions (if asked)**
+1. If the assistant needs a decision, a question box appears with 2–6 options plus
+   an **Other…** free-text field.
+2. Pick an option or type your own; the plan continues from your answer.
+3. You can click **Stop** at any time to abort a streaming turn.
+
+**Sidebar navigation**
+- **Chat** — current conversation
+- **Travel history** — your visited places organized by country → city → place
+- **Settings** — change the model endpoint, model name, and API key for the
+  running session
+
+**Start over**
+- Click **New conversation** in the sidebar to begin a fresh trip plan.
+
 ---
 
 # 2. Detailed Instructions
