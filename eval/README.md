@@ -485,8 +485,6 @@ Reviewers should consider the following before running API-mode evaluation:
   deterministic.
 - **Model provider side:** GPU/vRAM is the provider's responsibility. Reviewers running API mode
   depend on the provider's endpoint availability, rate limits, and latency.
-  NVIDIA's free tier has rate limits (e.g., 5 requests/second,
-  10,000 requests/day for Nemotron), which may throttle large eval suites.
 
 **Impact on evaluation results**
 
