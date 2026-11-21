@@ -223,9 +223,9 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
           {allDaysOpen ? "Collapse all" : "Expand all"}
         </button>
       )}
-      {weatherLoading?.global && <span className="weather-loading-chip">Loading weather…</span>}
       <button type="button" className="plan-tool" onClick={() => downloadPlanMarkdown(plan)}>⬇ Markdown</button>
       <button type="button" className="plan-tool" onClick={() => printPlanReport(plan)}>🖨 PDF report</button>
+      {weatherLoading?.global && <span className="weather-loading-chip">Loading weather…</span>}
       <label className="plan-date-input" title="Trip start date: sets the covered date range and fetches the per-day weather">
         <span className="plan-date-label">🗓 Start</span>
         <input
@@ -286,7 +286,7 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
                       </span>
                       <span className="weather-estimate">(est.)</span>
                       {weather.humidity != null && <span className="day-weather-humidity">💧 {weather.humidity}%</span>}
-                      {weather.stub && <span style={{color: '#aa6c16', fontSize: 10, marginLeft: 8}}>(stub)</span>}
+                      {weather.stub && <span style={{color: '#aa6c16', fontSize: 10, marginLeft: 8}}></span>}
                     </>
                   )}
                 </div>

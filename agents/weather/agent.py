@@ -181,7 +181,7 @@ def run(destination: str, start_date: Optional[str] = None, end_date: Optional[s
             "temp_c": None,
             "temp_f": None,
             "humidity": None,
-            "notes": f"No weather data for {destination} (stub)",
+            "notes": f"No weather data for {destination}",
         }
     else:
         # Copy so the module-level stub table is never mutated per request.
