@@ -400,8 +400,9 @@ errors.
 | Variable | Notes |
 |----------|--------|
 | `QWEN_BASE_URL` / `QWEN_MODEL` / `QWEN_API_KEY` | OpenAI-compatible model endpoint and model identifier. Set the base URL including `/v1`; set the key when required by the provider. |
-| `MODEL_MAX_TOKENS` / `MODEL_TEMPERATURE` / `MODEL_TOP_P` / `MODEL_REASONING_BUDGET` | Sampling defaults sent in the chat-completions payload (defaults: `16384` / `1.0` / `0.95` / `16384`). |
-| `MODEL_ENABLE_THINKING` | Optional override for Qwen thinking mode. Unset keeps the default: enabled while streaming, disabled for one-shot completions. |
+| `MODEL_MAX_TOKENS` / `MODEL_TEMPERATURE` / `MODEL_TOP_P` | Sampling defaults sent in the chat-completions payload (defaults: `16384` / `1.0` / `0.95`). |
+| `MODEL_REASONING_BUDGET` | Optional reasoning budget sent to the model. Only sent when explicitly set; leave unset for maximum compatibility with any OpenAI-compatible endpoint. |
+| `MODEL_ENABLE_THINKING` | Optional thinking-mode override. Only sent when explicitly set; leave unset so thinking parameters are not included in the request (works with any endpoint). |
 | `ENABLE_TRAVEL_HISTORY` | `1` = proposed (Agent1–4); `0` = Baseline A (Agent1–3) |
 | `TOOL_STAYS_MODE` | `stub` (default, offline-safe), `overpass` (OpenStreetMap, no auth), `web` (live web-search results; needs `WEB_SEARCH_MODE=duckduckgo`, falls back to stub), `api` (OBO Travel — legacy, kept for rollback) |
 | `TOOL_MAPS_MODE` | `stub` or `api` |
