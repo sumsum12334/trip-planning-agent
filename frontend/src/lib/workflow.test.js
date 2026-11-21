@@ -11,6 +11,7 @@ import {
   toolOfEvent,
   currentWork,
   workflowState,
+  workflowCards,
 } from "./workflow.js";
 
 const callEvent = (tool, args = {}, overrides = {}) => ({
@@ -129,6 +130,81 @@ describe("workflowState", () => {
       workflowState(events, null, "Sending your choice to the assistant...").label,
     ).toBe("Model is thinking");
   });
+
+  it("reports Ready after a turn whose last tool call already received its result", () => {
+    // Regression: every tool call leaves its "Calling X" event running in the
+    // raw list, so the old last-running-event scan hung the status bar on the
+    // final tool step once the turn had completed.
+    const events = [
+      { type: "agent", label: "Coordinator agent started", status: "running" },
+      { type: "model", label: "Model request queued", status: "running" },
+      callEvent("set_trip_references", { references: [{ title: "Guide", url: "https://example.com" }] }),
+      { type: "tool", label: "Trip plan updated (set_trip_references)", status: "completed", data: { tool: "display_trip_plan", result: {} } },
+      resultEvent("set_trip_references", { ok: true }),
+      { type: "model", label: "Model response received", status: "completed" },
+      { type: "agent", label: "Coordinator agent completed", status: "completed" },
+    ];
+    expect(currentWork(events)).toBeNull();
+    expect(currentAgent(events)).toBeNull();
+    const state = workflowState(events, null, "Model: test-model");
+    expect(state.label).toBe("Ready");
+    expect(state.className).toBe("ready");
+  });
+
+  it("still reports the running step while work is genuinely in progress", () => {
+    const events = [
+      callEvent("set_trip_day", { day: 1 }),
+      resultEvent("set_trip_day", { ok: true }),
+      callEvent("set_trip_budget", { budget: 800 }),
+    ];
+    expect(currentWork(events).label).toBe("Updating the budget");
+    expect(currentAgent(events)).toBe("Agent 3 · coordinator");
+  });
+
+  it("does not hang on the open waiting-for-answer marker after the answer resolves", () => {
+    const events = [
+      callEvent("ask_user_question", { question: "Go when?" }),
+      resultEvent("ask_user_question", { question: "Go when?", status: "awaiting_user" }),
+      { type: "agent", label: "Waiting for your answer", status: "running" },
+      { type: "model", label: "Model request queued", status: "running" },
+      { type: "model", label: "Model response received", status: "completed" },
+      { type: "agent", label: "Coordinator agent completed", status: "completed" },
+    ];
+    expect(currentWork(events)).toBeNull();
+    expect(workflowState(events, null, "Model: test-model").label).toBe("Ready");
+  });
+});
+
+describe("workflowCards", () => {
+  it("hides the plan panel's display_trip_plan mirror events", () => {
+    const events = [
+      { type: "agent", label: "Coordinator agent started", status: "running" },
+      callEvent("set_trip_day", { day: 1 }),
+      { type: "tool", label: "Trip plan updated (set_trip_day)", status: "completed", data: { tool: "display_trip_plan", result: {} } },
+      resultEvent("set_trip_day", { ok: true }),
+    ];
+    const cards = workflowCards(events);
+    expect(cards).toHaveLength(2);
+    expect(cards.every((card) => card.data?.tool !== "display_trip_plan")).toBe(true);
+    // mergeToolEvents itself stays complete for the plan panel and tests.
+    expect(mergeToolEvents(events)).toHaveLength(3);
+  });
+
+  it("keeps question, model, and unmatched events visible", () => {
+    const events = [
+      { type: "model", label: "Model request queued", status: "running" },
+      callEvent("ask_user_question", { question: "Go when?" }),
+      resultEvent("ask_user_question", { question: "Go when?", status: "awaiting_user" }),
+      { type: "agent", label: "Waiting for your answer", status: "running" },
+    ];
+    // One question card (call + result + waiting merged) plus the model card.
+    expect(workflowCards(events)).toHaveLength(2);
+  });
+
+  it("handles empty and missing input", () => {
+    expect(workflowCards([])).toEqual([]);
+    expect(workflowCards(undefined)).toEqual([]);
+  });
 });
 
 describe("toolDisplayName / toolOfEvent", () => {
@@ -220,17 +296,34 @@ describe("mergeToolEvents", () => {
     expect(cards[1].data.result).toEqual({ ok: 2 });
   });
 
-  it("keeps ask_user_question events as their own cards", () => {
+  it("folds the question call, result, and waiting marker into one running card", () => {
     const cards = mergeToolEvents([
       callEvent("ask_user_question", { question: "Go when?" }),
       resultEvent("ask_user_question", { question: "Go when?", status: "awaiting_user" }),
-      { type: "agent", label: "Waiting for your answer", status: "running" },
+      { type: "agent", label: "Waiting for your answer", detail: "Go when?", status: "running" },
     ]);
-    expect(cards).toHaveLength(3);
-    expect(cards[0].label).toBe("Calling ask_user_question");
-    expect(cards[1].label).toBe("ask_user_question result received");
-    expect(cards[2].label).toBe("Waiting for your answer");
-    expect(cards.every((card) => card.merged === undefined)).toBe(true);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].toolLabel).toBe("Asking you a question");
+    // The waiting marker is the card's current status, not a separate event.
+    expect(cards[0].status).toBe("running");
+    expect(cards[0].detail).toBe("Go when?");
+    expect(cards[0].data.result).toEqual({ question: "Go when?", status: "awaiting_user" });
+    expect(cards[0].merged).toBe(true);
+  });
+
+  it("shows the answered question card as completed with the selected answer", () => {
+    const cards = mergeToolEvents([
+      callEvent("ask_user_question", { question: "Go when?" }),
+      resultEvent("ask_user_question", { question: "Go when?" }, {
+        data: { tool: "ask_user_question", result: { question: "Go when?" }, selected: "March" },
+        detail: "Answer selected: March",
+      }),
+      { type: "agent", label: "Waiting for your answer", detail: "Go when?", status: "running" },
+    ]);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].status).toBe("completed");
+    expect(cards[0].detail).toBe("Answer selected: March");
+    expect(cards[0].data.selected).toBe("March");
   });
 
   it("keeps agent, handover, and trip-plan events intact", () => {
