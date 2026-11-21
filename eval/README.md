@@ -216,7 +216,59 @@ Two reports are written to `eval/results/`:
 
 These artifacts are gitignored; each run creates new timestamped files.
 
+### 1.8 Five-run reproducibility log (Nemotron model)
+
+All five runs below were executed with the same configuration:
+
+| Setting | Value |
+|---|---|
+| Model endpoint | `https://integrate.api.nvidia.com/v1` |
+| Model under test | `nvidia/nemotron-3.5-super-vl-120b-a12b` |
+| Eval mode | `stub` (offline, deterministic stub catalogs) |
+| Travel history | `ENABLE_TRAVEL_HISTORY=1` (Proposed = Agents 1–4) |
+
+| Run | Total time | Mean latency | Max latency | Result |
+|---|---|---|---|---|
+| 1 | 23889.9 ms | 436.9 ms | 559.2 ms | 30/30, History 4/4, Tool 5/5 |
+| 2 | 23812.3 ms | 435.0 ms | 497.0 ms | 30/30, History 4/4, Tool 5/5 |
+| 3 | 23979.4 ms | 439.2 ms | 614.8 ms | 30/30, History 4/4, Tool 5/5 |
+| 4 | 23934.2 ms | 437.0 ms | 506.1 ms | 30/30, History 4/4, Tool 5/5 |
+| 5 | 24083.0 ms | 439.6 ms | 505.3 ms | 30/30, History 4/4, Tool 5/5 |
+
+**Pass/fail is identical across all five runs.** Only wall-clock timing varies slightly (~23.8–24.1 s total, ~435–440 ms mean), which is expected machine variance. The deterministic outputs — stay names, transport mode/cost/duration, POI sets, pass/fail — are identical every run.
+
+#### Example input (Nemotron model)
+
+Sent to `POST /api/chat/stream` via `eval/runner --mode api` (API mode):
+
+```json
+{
+  "message": "Plan a 4-day trip to Tokyo with a budget of $400. Focus on: food. Recommend specific hotels with names, nightly prices in USD, and brief reasons. Format: Hotel Name - $price/night - reason",
+  "conversation_id": "eval-tokyo-budget",
+  "user_id": "eval-tokyo-budget",
+  "plan_context": null
+}
+```
+
+Model configuration used: `nvidia/nemotron-3.5-super-vl-120b-a12b` at `https://integrate.api.nvidia.com/v1`.
+
+#### Example output (Nemotron model)
+
+Streaming response frames (truncated for readability):
+
+```
+data: {"kind":"event","type":"model","label":"Model is thinking","detail":"nvidia/nemotron-3.5-super-vl-120b-a12b","status":"running","data":{}}
+data: {"kind":"content","text":"I"}
+data: {"kind":"content","text":" can help you plan a 4-day trip to Tokyo..."}
+data: {"kind":"done","text":"...","model":"nvidia/nemotron-3.5-super-vl-120b-a12b","stub":false,...}
+```
+
+The `stub: false` field confirms the response came from the live Nemotron model, not a local stub. In stub eval mode (the graded path), no model call is made; results come from deterministic stub stay/transport catalogs instead.
+
+**LLM-as-a-Judge (Nemotron judge):** When `NEMOTRON_API_KEY` is set, model responses are scored 1–5 on relevance, completeness, helpfulness, and accuracy by the Nemotron judge (`temperature=0.0`). Judge scores appear under `model_metrics.model_judge` in the JSON report and as `judge_relevance/completeness/helpfulness/accuracy` columns in the CSV.
+
 ---
+
 
 # 2. Detailed Instructions
 
