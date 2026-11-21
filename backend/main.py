@@ -402,6 +402,57 @@ def _run_multi_agent_plan(
         _emit("search_stays", "Stay Search Agent", "completed", f"{stay_count} stays evaluated", {})
         _emit("coordinate", "Coordinator Agent", "completed", f"Itinerary ready: {currency}{cost}", {})
 
+        # Publish the itinerary as a trip-plan tool event so the browser renders
+        # the focal trip-plan panel immediately instead of waiting for the agent
+        # to call the trip-plan tools during a turn.
+        raw_plan = {
+            "destination": trip_request.destination,
+            "currency": itinerary.currency or "",
+            "budget": trip_request.budget,
+            "start_date": trip_request.start_date.isoformat() if trip_request.start_date else None,
+            "days": [
+                {
+                    "day": day.day_index,
+                    "title": f"Day {day.day_index}",
+                    "activities": list(day.pois or []),
+                    "stays": [
+                        {
+                            "name": stay.name,
+                            "location": stay.location,
+                            "nightly_cost": stay.nightly_cost,
+                            "currency": stay.currency,
+                            "notes": stay.notes,
+                            "coordinates": stay.coordinates,
+                        }
+                        for stay in (day.stays or [])
+                    ],
+                    "transports": [
+                        {
+                            "from_place": leg.from_place,
+                            "to_place": leg.to_place,
+                            "mode": leg.mode,
+                            "duration_minutes": leg.duration_minutes,
+                            "cost": leg.cost,
+                            "currency": leg.currency,
+                            "source_url": leg.source_url,
+                            "notes": leg.notes,
+                        }
+                        for leg in (day.transports or [])
+                    ],
+                    "budget": day.estimated_cost,
+                    "budget_items": [],
+                }
+                for day in itinerary.days
+            ],
+            "notes": list(itinerary.notes or []),
+            "references": [],
+            "budget_items": [],
+            "status": "displayed",
+        }
+        stream_queue.put(
+            ("event", _trip_plan_event("start_trip_plan", assemble_trip_plan(raw_plan)).model_dump())
+        )
+
         return {
             "kind": "itinerary",
             "itinerary": itinerary.model_dump(mode="json"),
