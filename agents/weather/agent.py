@@ -7,6 +7,9 @@ weather into trip planning. Falls back to stub data if API unavailable.
 from __future__ import annotations
 
 import logging
+import threading
+import time
+from datetime import date, timedelta
 from typing import Any, Optional
 
 import httpx
@@ -14,6 +17,43 @@ from config.settings import get_settings
 
 
 logger = logging.getLogger(__name__)
+
+# Open-Meteo's forecast API only serves dates up to this many days ahead on the
+# free plan; a start_date beyond the horizon returns HTTP 400, not a truncated
+# response.
+_FORECAST_HORIZON_DAYS = 16
+
+# Short-TTL cache so the plan UI's per-day fetches (re-run on every plan
+# update) do not hammer the geocoder and Open-Meteo with identical requests.
+_WEATHER_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_WEATHER_CACHE_LOCK = threading.Lock()
+_WEATHER_CACHE_TTL_SECONDS = 600.0
+
+
+def _weather_cache_get(key: str) -> Optional[dict[str, Any]]:
+    now = time.monotonic()
+    with _WEATHER_CACHE_LOCK:
+        entry = _WEATHER_CACHE.get(key)
+        if entry is None:
+            return None
+        if now - entry[0] > _WEATHER_CACHE_TTL_SECONDS:
+            _WEATHER_CACHE.pop(key, None)
+            return None
+        return dict(entry[1])
+
+
+def _weather_cache_set(key: str, value: dict[str, Any]) -> None:
+    with _WEATHER_CACHE_LOCK:
+        _WEATHER_CACHE[key] = (time.monotonic(), dict(value))
+
+
+def _beyond_forecast_horizon(day: str) -> bool:
+    """True when the requested date is past Open-Meteo's forecast horizon."""
+    try:
+        requested = date.fromisoformat(day)
+    except (TypeError, ValueError):
+        return False
+    return requested > date.today() + timedelta(days=_FORECAST_HORIZON_DAYS)
 
 
 # Stub fallback data for when API fails
@@ -146,15 +186,23 @@ def run(destination: str, start_date: Optional[str] = None, end_date: Optional[s
 
     # Default to tomorrow if no date provided
     if not start_date:
-        from datetime import date, timedelta
         start_date = (date.today() + timedelta(days=1)).isoformat()
     if not end_date:
         end_date = start_date
 
+    cache_key = f"{configured_mode}|{destination.strip().lower()}|{start_date}|{end_date}"
+    cached = _weather_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    # Dates past the forecast horizon would only get an HTTP 400 from
+    # Open-Meteo, so skip the request and return the labeled sample directly.
+    beyond_horizon = _beyond_forecast_horizon(start_date)
+
     # Try to get live data from Open-Meteo unless the stub mode is forced.
     live_data = None
     mode = configured_mode
-    if configured_mode != "stub":
+    if configured_mode != "stub" and not beyond_horizon:
         import asyncio
         try:
             # Run async geocoding and weather fetch
@@ -194,6 +242,11 @@ def run(destination: str, start_date: Optional[str] = None, end_date: Optional[s
         mode = "open-meteo"
     else:
         data["stub"] = True
+        if beyond_horizon:
+            data["notes"] = (
+                f"Sample estimate — {start_date} is beyond Open-Meteo's "
+                f"{_FORECAST_HORIZON_DAYS}-day forecast horizon"
+            )
 
     result = {
         "destination": destination,
@@ -209,6 +262,7 @@ def run(destination: str, start_date: Optional[str] = None, end_date: Optional[s
         result["start_date"] = start_date
     if end_date:
         result["end_date"] = end_date
+    _weather_cache_set(cache_key, result)
     return result
 
 
