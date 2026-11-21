@@ -142,7 +142,11 @@ def _call_model_stream(
                         continue
                     delta = choices[0].get("delta", {})
                     content = delta.get("content", "") or ""
-                    reasoning = delta.get("reasoning", "") or ""
+                    reasoning = (
+                        delta.get("reasoning", "")
+                        or delta.get("reasoning_content", "")
+                        or ""
+                    )
                     current_time = time.perf_counter()
 
                     if (content or reasoning) and first_delta_time is None:
@@ -370,6 +374,13 @@ def _judge_model_response_nemotron(
 def _extract_hotels_from_text(text: str) -> list[dict[str, Any]]:
     """Extract hotel/stay mentions from model response text.
 
+    Robust extraction that tolerates varied model output formats:
+    - Prices with or without a currency symbol ($, ¥, €, £, etc.)
+    - Prices written as bare numbers (e.g. "95/night")
+    - Hotel keywords on the same line or within a small window of lines
+    - Bullet points, numbered lists, and free paragraphs
+    - Lowercase or mixed-case hotel names
+
     Returns list of dicts with name, nightly_cost, currency, notes.
     """
     import re
@@ -377,60 +388,225 @@ def _extract_hotels_from_text(text: str) -> list[dict[str, Any]]:
     hotels: list[dict[str, Any]] = []
     seen_names: set[str] = set()
 
-    for line in text.split("\n"):
-        line_stripped = line.strip()
-        if not line_stripped:
-            continue
+    # Match a price:
+    #   * With a currency symbol: 1+ digits (e.g. $95, ¥9500)
+    #   * Without a symbol: 2-4 digits (avoids matching list enumerators "1.", "2.")
+    # Optionally followed by /night, /pn, per night, nightly.
+    price_re = re.compile(
+        r"(?:"
+        r"(?P<sym>[\$¥€£]|USD|EUR|GBP|JPY|HKD|TWD|THB|KRW|INR|SGD|AUD|CAD|CNY)"
+        r"\s?(?P<amt_with_sym>\d{1,6}(?:,\d{3})*(?:\.\d{1,2})?)"
+        r"|(?P<amt_bare>\d{2,4}(?:,\d{3})*(?:\.\d{1,2})?)"
+        r")"
+        r"\s*(?:/night|/pn|per night|nightly)?",
+        re.IGNORECASE,
+    )
 
-        price_match = re.search(r"\$(\d{2,4})", line_stripped)
+    # Currency symbol → ISO code
+    CURRENCY_MAP = {
+        "$": "USD", "USD": "USD",
+        "€": "EUR", "EUR": "EUR",
+        "£": "GBP", "GBP": "GBP",
+        "¥": "JPY", "JPY": "JPY",
+        "HKD": "HKD", "HK$": "HKD",
+        "TWD": "TWD", "NT$": "TWD",
+        "THB": "THB",
+        "KRW": "KRW",
+        "INR": "INR",
+        "SGD": "SGD", "S$": "SGD",
+        "AUD": "AUD", "A$": "AUD",
+        "CAD": "CAD", "C$": "CAD",
+        "CNY": "CNY",
+    }
+
+    hotel_keywords = [
+        "hotel", "hostel", "ryokan", "guesthouse", "guest house",
+        "capsule", "inn", "motel", "resort", "lodge", "apartment",
+        "b&b", "bed and breakfast", "accommodation", "stay",
+        # Japanese (CJK) hotel terms
+        "ホテル", "旅館", "ホステル", "ペンション", "ロッジ", "民宿",
+    ]
+
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+
+    for i, line in enumerate(lines):
+        price_match = price_re.search(line)
         if not price_match:
             continue
 
-        hotel_keywords = [
-            "hotel", "hostel", "ryokan", "guesthouse", "guest house",
-            "capsule", "inn", "motel", "resort", "lodge",
-        ]
-        if not any(kw in line_stripped.lower() for kw in hotel_keywords):
+        # Determine currency and amount
+        sym = (price_match.group("sym") or "").upper()
+        amt_str = price_match.group("amt_with_sym") or price_match.group("amt_bare")
+        currency = CURRENCY_MAP.get(sym, "USD")
+        price_text = price_match.group(0)
+
+        try:
+            nightly_cost = int(float(amt_str.replace(",", "")))
+        except (ValueError, TypeError):
             continue
 
-        price_pos = line_stripped.find(price_match.group(0))
-        before_price = line_stripped[:price_pos].strip()
+        # Determine the search window for hotel keywords:
+        # same line, next 2 lines, previous 1 line.
+        window_lines = [line]
+        if i + 1 < len(lines):
+            window_lines.append(lines[i + 1])
+        if i + 2 < len(lines):
+            window_lines.append(lines[i + 2])
+        if i - 1 >= 0:
+            window_lines.append(lines[i - 1])
+        window_text = " ".join(window_lines).lower()
 
-        cleaned = re.sub(r"^[-•\d\.\s]*", "", before_price)
+        if not any(kw in window_text for kw in hotel_keywords):
+            continue
+
+        # Extract hotel name from text BEFORE the price on the same line,
+        # taking the segment closest to the price (after splitting by delimiters).
+        # Only fall back to adjacent lines if the price line yields nothing.
+        price_pos = line.find(price_text)
+        before_text = line[:price_pos].strip() if price_pos >= 0 else line.strip()
+
+        cleaned = ""
+        if before_text:
+            segments = re.split(r"[-:|•]", before_text)
+            for seg in reversed(segments):  # closest to price first
+                seg = seg.strip(" -:,\t").strip()
+                if len(seg) >= 3 and any(c.isalpha() for c in seg):
+                    seg_words = seg.lower().split()
+                    if seg_words and seg_words[-1].lower() in {
+                        "under", "around", "about", "for", "in", "to", "the",
+                        "a", "an", "of", "from", "with", "by", "on", "at", "per",
+                    }:
+                        continue
+                    cleaned = seg
+                    break
+            if not cleaned:
+                cleaned = before_text.strip(" -:,\t").strip()
+
+        # Strip list markers
+        cleaned = re.sub(r"^[-•\d\.\s]*", "", cleaned)
         cleaned = re.sub(r"^\d+\.\s*", "", cleaned)
         cleaned = re.sub(r"^\d+\)\s*", "", cleaned)
-        cleaned = cleaned.strip()
+        cleaned = cleaned.strip(" -:,:|-").strip()
 
-        name_match = re.match(r"([A-Z][A-Za-z0-9\s&\'-]{3,40})", cleaned)
-        if name_match:
-            name = name_match.group(1).strip()
-        else:
-            words = cleaned.split()[:4]
-            name = " ".join(words)
+        # If cleaned still looks like a sentence (contains hotel keyword plus
+        # extra words), extract just the hotel name portion: find the hotel
+        # keyword and take the 2-3 capitalized words immediately before it.
+        if cleaned and any(kw in cleaned.lower() for kw in hotel_keywords):
+            words = cleaned.split()
+            kw_idx = None
+            for j, w in enumerate(words):
+                if any(kw == w.lower().strip(".,:;") for kw in hotel_keywords):
+                    kw_idx = j
+                    break
+            if kw_idx is not None and kw_idx > 0:
+                start = max(0, kw_idx - 3)
+                name_words = words[start:kw_idx + 1]
+                # Drop leading prepositions/articles
+                while name_words and name_words[0].lower() in {"at", "in", "the", "a", "an", "staying", "at", "is", "are", "was", "were", "has", "have", "for", "with", "by"}:
+                    name_words.pop(0)
+                if name_words:
+                    cleaned = " ".join(name_words)[:40]
 
-        name = name.strip(" -:,:")
+        # If nothing usable from the price line, try adjacent lines that
+        # contain a hotel keyword (for cases where price and name are on
+        # different lines). Prefer the line immediately before the price.
+        if not cleaned:
+            for offset in (-1, 1):
+                cand_idx = i + offset
+                if 0 <= cand_idx < len(lines):
+                    candidate_line = lines[cand_idx]
+                    if any(kw in candidate_line.lower() for kw in hotel_keywords):
+                        cand = candidate_line.strip()
+                        cand = re.sub(r"^[-•\d\.\s]*", "", cand)
+                        cand = re.sub(r"^\d+\.\s*", "", cand)
+                        cand = re.sub(r"^\d+\)\s*", "", cand)
+                        cand = cand.strip(" -:,:|-").strip()
+                        if len(cand) >= 3 and any(c.isalpha() for c in cand):
+                            cleaned = cand[:40]
+                            break
+
+        # If still nothing, try text AFTER the price on the same line
+        if not cleaned:
+            after_text = line[price_match.end():].strip() if price_match.end() < len(line) else ""
+            if after_text:
+                segments = re.split(r"[-:|•]", after_text)
+                for seg in segments:
+                    seg = seg.strip(" -:,\t").strip()
+                    if len(seg) >= 3 and any(c.isalpha() for c in seg):
+                        cleaned = seg
+                        break
+                if not cleaned:
+                    cleaned = after_text.strip(" -:,\t").strip()
+
+        if not cleaned:
+            continue
+
+        name = cleaned[:40]
+
+        # Drop leading sentence starters (but keep multi-word names)
+        name_lower = name.lower().strip()
+        first_word = name_lower.split()[0] if name_lower.split() else ""
+        sentence_starters = {"the", "this", "that", "a", "an", "here", "there",
+                             "it", "its", "i", "we", "you", "he", "she", "they"}
+        if first_word in sentence_starters and len(name_lower.split()) > 1:
+            name = " ".join(name_lower.split()[1:])[:40]
+
         if not name or len(name) < 3:
             continue
 
-        name_lower = name.lower().strip()
-        sentence_starters = {"the", "this", "that", "a", "an", "here", "there",
-                             "it", "its", "i", "we", "you", "he", "she", "they"}
-        if first_word := name_lower.split()[0] if name_lower.split() else "":
-            if first_word.lower() in sentence_starters:
-                continue
-
-        name = name[:40].strip()
+        name = name.strip(" -:,:|-").strip()
+        # Strip trailing punctuation that isn't part of a name
+        name = name.rstrip(".,;:!?~*")
         key = name.lower().replace(" ", "")
         if key in seen_names:
             continue
         seen_names.add(key)
 
-        nightly_cost = int(price_match.group(1))
+        # Skip obvious non-hotel extractions from chain-of-thought text:
+        # standalone common words, sentence fragments, or lowercase-only names.
+        name_lower = name.lower().strip()
+        non_hotel_words = {
+            "food", "budget", "cost", "price", "night", "day", "trip", "plan",
+            "stay", "accommodation", "total", "per", "approximately", "around",
+            "about", "hotel", "hotels", "hostel", "hostels", "estimate",
+            "estimation", "breakdown", "allocation", "remaining",
+            "assess", "constraint", "acknowledge", "structure", "provide",
+            "options", "first", "wait", "maybe", "perhaps",
+        }
+        if name_lower in non_hotel_words:
+            continue
+        # Skip names that look like sentence fragments (start with lowercase
+        # and contain sentence verbs) unless they contain a hotel keyword.
+        if name and name[0].islower() and not any(
+            kw in name_lower for kw in hotel_keywords
+        ):
+            continue
+        # Skip very short names that are just common words
+        if len(name) <= 4 and name_lower in {
+            "hotel", "food", "stay", "room", "bed", "inn",
+        }:
+            continue
+        name_words = name_lower.split()
+        # Skip names that end with common prepositions (not a hotel name)
+        if name_words and name_words[-1].lower() in {
+            "under", "around", "about", "for", "in", "to", "the", "a", "an",
+            "of", "from", "with", "by", "on", "at", "per",
+        }:
+            continue
+        # Skip names that are sentence fragments (contain discourse verbs
+        # or question words that indicate this isn't a hotel name).
+        discourse_words = {
+            "assess", "acknowledge", "structure", "provide", "let's",
+            "should", "would", "could", "might", "maybe", "perhaps",
+            "wait", "think", "consider", "note", "remember",
+        }
+        if any(w in discourse_words for w in name_words):
+            continue
 
         hotels.append({
             "name": name,
             "nightly_cost": nightly_cost,
-            "currency": "USD",
+            "currency": currency,
             "notes": f"Model suggested: {name}",
         })
 
