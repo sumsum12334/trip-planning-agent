@@ -413,12 +413,25 @@ def ls_update_generation(
 ) -> None:
     """Update a LangSmith LLM run output.
 
-    Note: LangSmith's update_run() can only set outputs once, so we only
-    call it from ls_finish_generation(). This function is kept for API
-    compatibility but does not make an API call.
+    Calls LangSmith's update_run() to set outputs and end_time on the run.
     """
     if run is None:
         return
+    try:
+        ls_client = getattr(run, "_langsmith_client", None)
+        run_id = str(getattr(run, "_langsmith_run_id", ""))
+        if ls_client is not None and run_id:
+            ls_client.update_run(
+                run_id=run_id,
+                outputs={"output": output} if output is not None else {},
+                error=str(error) if error else None,
+                end_time=datetime.now(timezone.utc),
+                first_token_time=first_token_time,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
+    except Exception:
+        logger.exception("Could not update LangSmith model tracking.")
 
 
 def finish_generation(
