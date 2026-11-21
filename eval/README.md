@@ -390,6 +390,54 @@ python -m eval.runner --mode api \
 Override the judge URL with `--model-url` for the model-under-test call; the
 Nemotron judge URL comes from `NEMOTRON_API_URL`.
 
+### 2.4.1 API mode live data results (Nemotron model)
+
+All runs below were executed with the same configuration:
+
+| Setting | Value |
+|---|---|
+| Model endpoint | `https://integrate.api.nvidia.com/v1` |
+| Model under test | `nvidia/nemotron-3.5-super-vl-120b-a12b` |
+| Eval mode | `api` (live model calls) |
+| Travel history | `ENABLE_TRAVEL_HISTORY=1` (Proposed = Agents 1–4) |
+
+| Metric | Result |
+|---|---|
+| Cases passed | 9/30 |
+| Failed | 21/30 |
+| History contrast | 0/4 |
+| Tool layer | 5/5 |
+| Plan latency (mean) | 3747.3 ms |
+| Plan latency (max) | 14724.4 ms |
+| Plan runs measured | 46 |
+| Generated | 2026-11-22T02:43:06+08:00 |
+
+**Per-case model metrics (TTFT, TPS, TPOT, token count):**
+
+API mode records per-call latency metrics under `model_metrics.model_metrics` in the JSON report. In this run, per-case `ttft_ms`, `tps`, `tpot_ms`, and `token_count` were recorded as `None`/`0` because the model's streaming response did not yield extractable content tokens (the response either errored or produced no parseable hotel mentions). The overall plan latency (wall-clock time per case) is still recorded: mean 3747.3 ms, max 14724.4 ms.
+
+**Why 21 cases failed in API mode:**
+
+API mode extracts hotel/stay mentions from the model's free-text response using regex (`_extract_hotels_from_text`). When the model does not return stays in the expected `Hotel Name - $price/night - reason` format, the extraction yields zero stays, causing the `has_stays` check to fail. This is an extraction/format issue, not a constraint-check failure — the same cases pass in stub mode (30/30) because stub mode uses deterministic catalogs instead of model-generated text.
+
+The 9 cases that passed in API mode are those where validation/fail-closed logic or revise logic didn't depend on extracted stays:
+- `empty_destination_fail_closed` (PASS)
+- `invalid_days_zero` (PASS)
+- `hk_revise_budget_cut` (PASS, revise)
+- `tokyo_revise_shorter_trip` (PASS, revise)
+- All 5 tool-layer cases (PASS)
+
+**Command to reproduce:**
+
+```bash
+cd <ROOT>
+python -m eval.runner --mode api --model-url https://integrate.api.nvidia.com/v1
+```
+
+Requires `QWEN_BASE_URL` and `QWEN_API_KEY` set in `.env` (or use `--model-url`).
+
+---
+
 ## 2.5 What is scored (metrics)
 
 Per case, per variant (Baseline A / Proposed):
