@@ -47,7 +47,7 @@ def _langfuse_settings() -> SimpleNamespace:
 @pytest.fixture()
 def fake_client(monkeypatch: pytest.MonkeyPatch) -> FakeLangfuseClient:
     client = FakeLangfuseClient()
-    monkeypatch.setattr(observability, "_client", lambda settings=None: client)
+    monkeypatch.setattr(observability, "_langfuse_client", lambda settings=None: client)
     return client
 
 

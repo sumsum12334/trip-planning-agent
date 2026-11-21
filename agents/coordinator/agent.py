@@ -109,21 +109,39 @@ def render_days(
     request: TripRequest,
     stays: list[StayCandidate],
     transport: TransportLeg,
-    pois_by_day: list[list[str]] | None = None,
+    pois_by_day: list[list[dict]] | None = None,
 ) -> list[DayPlan]:
-    """Emit one DayPlan per requested day, charging one night on each day."""
-    stay = _chosen_stay(stays)
+    """Emit one DayPlan per requested day, charging one night on each day.
+
+    Cycles through available stays so each day gets a different accommodation
+    with its own coordinates for the map.
+    """
     packed = pois_by_day or []
     days: list[DayPlan] = []
+    stay_count = len(stays)
     for index in range(1, trip_length(request) + 1):
         transports = [transport] if index == 1 else []
-        pois = packed[index - 1] if index - 1 < len(packed) else []
+        day_places = packed[index - 1] if index - 1 < len(packed) else []
+        # Cycle through stays: day 1 -> stays[0], day 2 -> stays[1], etc.
+        stay = stays[(index - 1) % stay_count] if stay_count else None
+        # Use stay coordinates as day coordinates for the map
+        day_coordinates = stay.coordinates if stay and stay.coordinates else None
+        # Build places: POI places from pack_pois + stay as a place
+        places: list[dict] = list(day_places)
+        if stay and stay.coordinates:
+            places.append({
+                "name": stay.name,
+                "coordinates": stay.coordinates,
+                "kind": "stay",
+            })
         days.append(
             DayPlan(
                 day_index=index,
                 stays=[stay] if stay else [],
                 transports=transports,
-                pois=list(pois),
+                pois=[p["name"] for p in day_places],
+                places=places,
+                coordinates=day_coordinates,
                 estimated_cost=_day_cost(stay, transports),
             )
         )
@@ -132,12 +150,17 @@ def render_days(
 
 def render_itinerary(
     request: TripRequest,
-    stay: Optional[StayCandidate],
+    stays: list[StayCandidate],
     visited: list[str],
     used_history: bool,
     notes: list[str],
 ) -> Itinerary:
-    """Render a complete itinerary around one chosen stay."""
+    """Render a complete itinerary with all available stays.
+
+    Cycles through stays per day so each day gets a different accommodation
+    with its own coordinates for the map.
+    """
+    stay = _chosen_stay(stays)
     transport = _arrival_transport(request, stay)
     excluded = visited if request.avoid_visited else []
     packed = pack_pois(
@@ -146,8 +169,25 @@ def render_itinerary(
         interests=request.interests,
         excluded=excluded,
     )
-    days = render_days(request, [stay] if stay else [], transport, packed)
-    currency = _components_currency([stay] if stay else [], [transport])
+    days = render_days(request, stays, transport, packed)
+    currency = _components_currency(stays, [transport])
+    
+    # Build airport info with coordinates for the map
+    airport_info = None
+    if transport and transport.from_place:
+        airport_info = {
+            "name": transport.from_place,
+            "coordinates": None,  # Could be geocoded later
+        }
+    
+    # Destination coordinates from the chosen stay (or first stay with coords)
+    dest_coords = stay.coordinates if stay and stay.coordinates else None
+    if not dest_coords:
+        for s in stays:
+            if s.coordinates:
+                dest_coords = s.coordinates
+                break
+    
     return Itinerary(
         request=request,
         days=days,
@@ -155,6 +195,8 @@ def render_itinerary(
         currency=currency,
         used_travel_history=used_history,
         notes=list(notes),
+        airport=airport_info,
+        destination_coordinates=dest_coords,
     )
 
 
@@ -185,7 +227,7 @@ def revise_itinerary(
     alternatives.sort(key=lambda stay: (-(stay.rating or 0), stay.nightly_cost or 0))
     for stay in alternatives:
         try:
-            trial = render_itinerary(request, stay, visited, used_history, itinerary.notes)
+            trial = render_itinerary(request, [stay], visited, used_history, itinerary.notes)
         except NoFeasiblePlanError:
             # The alternative mixes currencies; it cannot be cost-checked.
             continue
@@ -225,13 +267,19 @@ def _coordinate_node(state: CoordinatorState) -> CoordinatorState:
     if used_history:
         notes.append(f"Travel history entries considered: {len(visited)}")
 
-    if not stays:
+    # Filter out provider error stays (no cost data) so they don't break the plan
+    valid_stays = [
+        stay for stay in stays
+        if stay.name != "Provider error" and stay.nightly_cost is not None
+    ]
+
+    if not valid_stays:
         raise NoFeasiblePlanError(
-            "no feasible stay: all candidates over budget or none matched"
+            "no feasible stay: all candidates over budget, none matched, or provider unavailable"
         )
 
-    itinerary = render_itinerary(request, _chosen_stay(stays), visited, used_history, notes)
-    itinerary = revise_itinerary(request, stays, itinerary, visited, used_history)
+    itinerary = render_itinerary(request, valid_stays, visited, used_history, notes)
+    itinerary = revise_itinerary(request, valid_stays, itinerary, visited, used_history)
     if _over_budget(itinerary):
         raise NoFeasiblePlanError(
             "no feasible stay: plan still exceeds budget after revise"

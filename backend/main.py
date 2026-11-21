@@ -366,11 +366,12 @@ def _run_multi_agent_plan(
 ) -> dict | None:
     """Run the multi-agent coordinator pipeline and stream agent events.
 
-    Emits SSE agent events for Travel History → Stay Search → Coordinator
+    Emits SSE agent events for Travel History → Stay Search → Transport Estimate → Coordinator
     so the Live workflow panel shows each agent working. Returns a dict with
     the itinerary (or an error) for the ``done`` frame.
     """
     from shared.schemas import TripRequest
+    from agents.estimate_transport import run as estimate_transport
 
     def _emit(agent: str, label: str, status: str, detail: str = "", data: dict | None = None) -> None:
         stream_queue.put(("event", {
@@ -383,6 +384,7 @@ def _run_multi_agent_plan(
 
     _emit("travel_history", "Travel History Agent", "running", "Checking travel history")
     _emit("search_stays", "Stay Search Agent", "running", "Searching accommodations")
+    _emit("estimate_transport", "Transport Estimate Agent", "running", "Estimating transport")
     _emit("coordinate", "Coordinator Agent", "running", "Building itinerary")
 
     # Extract destination city from message (e.g. "Plan a trip to Tokyo" -> "Tokyo")
@@ -390,24 +392,103 @@ def _run_multi_agent_plan(
     dest_caps = _re.findall(r'\b[A-Z][a-z]+\b', request_message)
     dest_city = dest_caps[-1] if dest_caps else request_message.strip()
 
+    # Extract number of days from message (e.g. "3-day trip", "5 days")
+    days = None
+    day_match = _re.search(r'(\d+)\s*[- ]?day', request_message, _re.IGNORECASE)
+    if day_match:
+        days = int(day_match.group(1))
+
+    # Extract budget from message (e.g. "$2000", "budget of $1500")
+    # Require the dollar sign so we don't accidentally match day counts like "3-day"
+    budget = None
+    budget_match = _re.search(r'(?:budget\s+(?:of\s+)?)?\$(\d[\d,]*)', request_message)
+    if budget_match:
+        budget = float(budget_match.group(1).replace(",", ""))
+
     trip_request = TripRequest(
         destination=dest_city,
         user_id=user_id,
-        budget=None,
-        days=None,
+        budget=budget,
+        days=days,
         interests=[],
     )
 
     try:
+        # Step 1: Travel History
+        from agents.travel_history import run as travel_history
+        visited = travel_history(trip_request)
+        _emit("travel_history", "Travel History Agent", "completed", "History checked", {})
+
+        # Step 2: Stay Search
+        from agents.search_stays import run as search_stays
+        excluded = visited if trip_request.avoid_visited else []
+        stays = search_stays(trip_request, excluded_locations=excluded)
+        stay_count = len(stays)
+        _emit("search_stays", "Stay Search Agent", "completed", f"{stay_count} stays evaluated", {})
+
+        # Step 3: Transport Estimate (origin to destination)
+        origin = trip_request.origin or trip_request.destination
+        transport = estimate_transport(trip_request, origin, dest_city)
+        _emit("estimate_transport", "Transport Estimate Agent", "completed", f"Arrival via {transport.mode or 'transport'}", {})
+
+        # Step 4: Coordinator
         itinerary = coordinate(trip_request, session_id=session_id)
 
-        stay_count = len(itinerary.days[0].stays) if itinerary.days and itinerary.days[0].stays else 0
         cost = itinerary.total_estimated_cost or 0
         currency = itinerary.currency or ""
 
-        _emit("travel_history", "Travel History Agent", "completed", "History checked", {})
-        _emit("search_stays", "Stay Search Agent", "completed", f"{stay_count} stays evaluated", {})
         _emit("coordinate", "Coordinator Agent", "completed", f"Itinerary ready: {currency}{cost}", {})
+
+        # Emit display_trip_plan event so the frontend can render the trip plan
+        from shared.trip_plan import assemble_trip_plan
+
+        # Build a UI-compatible plan dict from the Itinerary model.
+        # assemble_trip_plan expects top-level destination/budget, but Itinerary
+        # nests them in request/total_estimated_cost, so we map them explicitly.
+        plan_dict = {
+            "destination": itinerary.request.destination,
+            "destination_coordinates": itinerary.destination_coordinates,
+            "airport": itinerary.airport,
+            "start_date": itinerary.request.start_date,
+            "currency": itinerary.currency or "",
+            "budget": itinerary.total_estimated_cost,
+            "budget_items": [],
+            "days": [
+                {
+                    "day": day.day_index,
+                    "title": f"Day {day.day_index}",
+                    "activities": list(day.pois),
+                    "notes": [],
+                    "coordinates": day.coordinates,
+                    "places": day.places or [],
+                    "stays": [
+                        {
+                            "name": s.name,
+                            "location": s.location or "",
+                            "nightly_cost": s.nightly_cost,
+                            "currency": s.currency,
+                            "rating": s.rating,
+                            "amenities": s.amenities or [],
+                            "source_url": s.source_url,
+                            "coordinates": s.coordinates,
+                        }
+                        for s in (day.stays or [])
+                    ],
+                    "budget": day.estimated_cost,
+                    "budget_items": [],
+                }
+                for day in itinerary.days
+            ],
+            "notes": list(itinerary.notes),
+            "references": [],
+            "status": "displayed",
+        }
+        ui_plan = assemble_trip_plan(plan_dict)
+        _emit("display_trip_plan", "Trip plan updated", "completed", f"Plan ready for {itinerary.request.destination}", {
+            "tool": "display_trip_plan",
+            "result": ui_plan,
+            "action": "display_trip_plan",
+        })
 
         return {
             "kind": "itinerary",

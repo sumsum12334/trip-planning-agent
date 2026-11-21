@@ -20,6 +20,9 @@ def _fake_settings(**overrides):
         "langfuse_public_key": "",
         "langfuse_secret_key": "",
         "langfuse_host": "",
+        "langsmith_api_key": "",
+        "langsmith_endpoint": "https://api.smith.langchain.com",
+        "langsmith_project": "trip-planning-agent",
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -375,7 +378,7 @@ def test_stream_retry_without_tools_ends_generation(monkeypatch):
             pass
 
     langfuse = FakeLangfuse()
-    monkeypatch.setattr(observability, "_client", lambda settings=None: langfuse)
+    monkeypatch.setattr(observability, "_langfuse_client", lambda settings=None: langfuse)
 
     no_tools = FakeResponse(status_code=400, body="tool-call-parser is not enabled")
     ok = _sse({"choices": [{"delta": {"content": "final answer"}}]}, None)
