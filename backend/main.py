@@ -618,26 +618,11 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
     memory_user_id = request.user_id or conversation_id
     remembered_places = remember_from_message(memory_user_id, request.message)
     history_store = TravelHistoryStore(get_settings().database_url)
-    # Surface known places from the in-process cache (database only on a cache
-    # miss or after writes). Do not require a history tool call on every plan.
-    known_places = (
-        history_store.list_places(memory_user_id)[:20]
-        if get_settings().enable_travel_history
-        else []
-    )
-    if known_places:
-        prompt = (
-            "Known travel history for this user (already loaded; do not call "
-            "search_travel_history just to re-read this list): "
-            + ", ".join(known_places)
-            + "\n\n"
-            + prompt
-        )
     history_tools = [{
         "type": "function",
         "function": {
             "name": "search_travel_history",
-            "description": "Filter or refresh the user's saved travel history for a destination or place. Use only when known history was not already provided, or a filtered lookup is needed.",
+            "description": "Search the user's saved travel history for a destination or place. For trip-planning requests, call this after the initial itinerary is out to check the planned places against past trips, or whenever a filtered lookup is needed.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -754,17 +739,6 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
             if TRIP_PLANNING_SYSTEM_PROMPT:
                 initial_messages.append(
                     {"role": "system", "content": TRIP_PLANNING_SYSTEM_PROMPT}
-                )
-            if known_places:
-                initial_messages.append(
-                    {
-                        "role": "system",
-                        "content": (
-                            "Known travel history for this user (already loaded; do not call "
-                            "search_travel_history just to re-read this list): "
-                            + ", ".join(known_places)
-                        ),
-                    }
                 )
             if plan_context:
                 initial_messages.append(
@@ -1008,7 +982,7 @@ def _prepare_question_continuation(request: ChatRequest) -> dict[str, Any]:
         "type": "function",
         "function": {
             "name": "search_travel_history",
-            "description": "Filter or refresh the user's saved travel history for a destination or place. Use only when known history was not already provided, or a filtered lookup is needed.",
+            "description": "Search the user's saved travel history for a destination or place. For trip-planning requests, call this after the initial itinerary is out to check the planned places against past trips, or whenever a filtered lookup is needed.",
             "parameters": {
                 "type": "object",
                 "properties": {"query": {"type": "string"}},
