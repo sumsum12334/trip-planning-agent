@@ -416,7 +416,7 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
             </div>
           )}
           <div className={`workflow-status ${workflow.className}`} aria-live="polite" aria-busy={workflow.className === "working"}><span>{workflow.icon}</span><strong>{workflow.label}</strong>{workflow.detail ? <small>{workflow.detail}</small> : null}</div>
-          {(pendingEvent || retryOption) && <QuestionBox event={activeQuestionEvent} onOption={answerQuestion} disabled={answering} retryOption={retryOption} selectedOption={selectedOption} />}
+          {(pendingEvent || retryOption) && <QuestionBox event={activeQuestionEvent} onOption={answerQuestion} disabled={answering || streaming} retryOption={retryOption} selectedOption={selectedOption} />}
           <NextSteps suggestions={suggestions} onSelect={(text) => sendMessage(null, false, text)} disabled={busy} />
           {renderComposer()}
           {renderComposerFooter()}
