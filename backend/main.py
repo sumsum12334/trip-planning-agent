@@ -26,6 +26,7 @@ from agents.coordinator import run as coordinate
 from agents.coordinator.agent import NoFeasiblePlanError, health as coordinator_health
 from agents.estimate_transport.agent import health as transport_health
 from agents.search_stays.agent import health as stays_health
+from agents.search_stays.agent import run as search_stays_run
 from agents.travel_history.agent import health as history_health
 from agents.travel_history.agent import remember_from_message
 from agents.travel_history.agent import TravelHistoryStore
@@ -382,8 +383,13 @@ def _run_multi_agent_plan(
     _emit("search_stays", "Stay Search Agent", "running", "Searching accommodations")
     _emit("coordinate", "Coordinator Agent", "running", "Building itinerary")
 
+    # Extract destination city from message (e.g. "Plan a trip to Tokyo" -> "Tokyo")
+    import re as _re
+    dest_caps = _re.findall(r'\b[A-Z][a-z]+\b', request_message)
+    dest_city = dest_caps[-1] if dest_caps else request_message.strip()
+
     trip_request = TripRequest(
-        destination=request_message.strip(),
+        destination=dest_city,
         user_id=user_id,
         budget=None,
         days=None,
@@ -598,6 +604,74 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                     initial_messages.append({"role": role, "content": content})
             initial_messages.append({"role": "user", "content": request.message})
 
+            # --- Backend-side tool calling (Ollama/vLLM doesn't support tool calling) ---
+            # Call tools directly and prepend results as context to the model prompt.
+            tool_context_messages: list[dict[str, str]] = []
+
+            # Travel history search for trip-related messages
+            if _looks_like_trip_request(request.message) or "weather" in request.message.lower():
+                try:
+                    history_results = history_store.search(memory_user_id, request.message)
+                    if history_results:
+                        places = [e["location"] for e in history_results if e.get("location")]
+                        if places:
+                            tool_context_messages.append({
+                                "role": "system",
+                                "content": f"Travel history for this user (past locations): {', '.join(places[:10])}. "
+                                           f"Avoid repeating these unless specifically requested.",
+                            })
+                except Exception as e:
+                    print(f"DEBUG Travel history tool failed: {e}", flush=True)
+
+            # Weather forecast when mentioned
+            if "weather" in request.message.lower():
+                try:
+                    weather_dest = request.message.strip()
+                    import re as _re
+                    caps = _re.findall(r'\b[A-Z][a-z]+\b', weather_dest)
+                    if caps:
+                        weather_dest = caps[-1]
+                    print(f"DEBUG Weather tool: calling weather_run('{weather_dest}')", flush=True)
+                    weather_result = weather_run(weather_dest)
+                    print(f"DEBUG Weather tool result: {weather_result}", flush=True)
+                    tool_context_messages.append({
+                        "role": "system",
+                        "content": f"Weather forecast for {weather_dest}: "
+                                  f"{weather_result.get('condition', 'unknown')}, "
+                                  f"{weather_result.get('temperature_c', '?')}°C, "
+                                  f"{weather_result.get('notes', '')}",
+                    })
+                except Exception as e:
+                    print(f"DEBUG Weather tool failed: {e}", flush=True)
+
+            # Stay search for trip requests
+            if _looks_like_trip_request(request.message):
+                try:
+                    stay_caps = _re.findall(r'\b[A-Z][a-z]+\b', request.message)
+                    stay_dest = stay_caps[-1] if stay_caps else request.message.strip()
+                    print(f"DEBUG Stay search tool: calling search_stays_run('{stay_dest}')", flush=True)
+                    stay_request = TripRequest(
+                        destination=stay_dest,
+                        user_id=request.user_id or conversation_id,
+                        budget=None,
+                        days=None,
+                        interests=[],
+                    )
+                    stays = search_stays_run(stay_request)
+                    print(f"DEBUG Stay search result: {len(stays)} stays", flush=True)
+                    if stays:
+                        stay_names = [s.name for s in stays[:5]]
+                        tool_context_messages.append({
+                            "role": "system",
+                            "content": f"Available stays for {stay_dest}: {', '.join(stay_names)}.",
+                        })
+                except Exception as e:
+                    print(f"DEBUG Stay search tool failed: {e}", flush=True)
+
+            # Prepend tool context to initial_messages
+            tool_context_messages.extend(initial_messages)
+            initial_messages = tool_context_messages
+
             try:
                 if use_multi_agent:
                     result = _run_multi_agent_plan(
@@ -613,8 +687,6 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                         request.message,
                         system=TRIP_PLANNING_SYSTEM_PROMPT,
                         initial_messages=initial_messages,
-                        on_event=lambda event: stream_queue.put(("event", event)),
-                        tools=history_tools,
                         tool_executor=tool_executor,
                         on_pause=save_pause,
                         session_id=conversation_id,

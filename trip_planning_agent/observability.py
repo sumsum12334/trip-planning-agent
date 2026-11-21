@@ -469,11 +469,12 @@ def update_generation(
     if observation is None:
         return
     try:
-        observation.update(
-            output=output,
-            level="ERROR" if error else "DEFAULT",
-            status_message=str(error) if error else None,
-        )
+        if hasattr(observation, "update"):
+            observation.update(
+                output=output,
+                level="ERROR" if error else "DEFAULT",
+                status_message=str(error) if error else None,
+            )
     except Exception:
         logger.exception("Could not update Langfuse model tracking.")
     # Also update the LangSmith run attached to this observation.
