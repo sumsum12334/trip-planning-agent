@@ -186,7 +186,15 @@ open `http://<SERVER-URL>:5173` in a browser and follow these steps:
 
 ### 1.7 Expected results from a clean run
 
-Running the full stub suite produces the following (timing varies by machine; pass/fail is stable):
+Running the full stub suite produces the following (timing varies by machine; pass/fail is stable).
+Across five consecutive runs on the same machine:
+
+```
+Eval [STUB] 30/30 cases passed (~23800–24100 ms). History contrast 4/4. Tool layer 5/5.
+Plan latency mean ~435–440 ms, max ~500–615 ms (machine-dependent).
+```
+
+Example single run:
 
 ```
 Eval [STUB] 30/30 cases passed (23889.9 ms). History contrast 4/4. Tool layer 5/5.
@@ -377,6 +385,13 @@ required) and an isolated temporary SQLite database, so it is fully
 deterministic and offline-safe.
 
 **Expected output:**
+
+```
+Eval [STUB] 30/30 cases passed (~23800–24100 ms). History contrast 4/4. Tool layer 5/5.
+Plan latency mean ~435–440 ms, max ~500–615 ms (machine-dependent).
+```
+
+Example single run:
 
 ```
 Eval [STUB] 30/30 cases passed (23889.9 ms). History contrast 4/4. Tool layer 5/5.
