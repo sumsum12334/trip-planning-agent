@@ -403,29 +403,30 @@ All runs below were executed with the same configuration:
 
 | Metric | Result |
 |---|---|
-| Cases passed | 9/30 |
-| Failed | 21/30 |
+| Cases passed | 20/30 |
+| Failed | 10/30 |
 | History contrast | 0/4 |
 | Tool layer | 5/5 |
-| Plan latency (mean) | 3747.3 ms |
-| Plan latency (max) | 14724.4 ms |
+| Plan latency (mean) | 3446.5 ms |
+| Plan latency (max) | 6698.2 ms |
 | Plan runs measured | 46 |
-| Generated | 2026-11-22T02:43:06+08:00 |
+| Generated | 2026-11-22T02:57:38+08:00 |
 
 **Per-case model metrics (TTFT, TPS, TPOT, token count):**
 
-API mode records per-call latency metrics under `model_metrics.model_metrics` in the JSON report. In this run, per-case `ttft_ms`, `tps`, `tpot_ms`, and `token_count` were recorded as `None`/`0` because the model's streaming response did not yield extractable content tokens (the response either errored or produced no parseable hotel mentions). The overall plan latency (wall-clock time per case) is still recorded: mean 3747.3 ms, max 14724.4 ms.
+API mode records per-call latency metrics under `model_metrics.model_metrics` in the JSON report. The Nemotron model returns its output in `reasoning_content` (chain-of-thought) rather than `content`, so per-case `ttft_ms`, `tps`, `tpot_ms`, and `token_count` may be `None`/`0` when the model's streaming response doesn't yield extractable content tokens. The overall plan latency (wall-clock time per case) is still recorded: mean 3446.5 ms, max 6698.2 ms.
 
-**Why 21 cases failed in API mode:**
+**Why 10 cases still fail in API mode:**
 
-API mode extracts hotel/stay mentions from the model's free-text response using regex (`_extract_hotels_from_text`). When the model does not return stays in the expected `Hotel Name - $price/night - reason` format, the extraction yields zero stays, causing the `has_stays` check to fail. This is an extraction/format issue, not a constraint-check failure — the same cases pass in stub mode (30/30) because stub mode uses deterministic catalogs instead of model-generated text.
+API mode extracts hotel/stay mentions from the model's free-text response using regex (`_extract_hotels_from_text`). The Nemotron model is a reasoning model that outputs chain-of-thought in `reasoning_content` rather than a clean `Hotel Name - $price/night - reason` list. When the model doesn't return stays in a parseable format, the extraction yields zero stays, causing the `has_stays` check to fail. This is a model-output-format issue, not a constraint-check failure — the same cases pass in stub mode (30/30) because stub mode uses deterministic catalogs instead of model-generated text.
 
-The 9 cases that passed in API mode are those where validation/fail-closed logic or revise logic didn't depend on extracted stays:
-- `empty_destination_fail_closed` (PASS)
-- `invalid_days_zero` (PASS)
-- `hk_revise_budget_cut` (PASS, revise)
-- `tokyo_revise_shorter_trip` (PASS, revise)
+The 20 cases that pass in API mode include:
 - All 5 tool-layer cases (PASS)
+- Validation/fail-closed cases: `empty_destination_fail_closed`, `invalid_days_zero` (PASS)
+- Revise cases: `hk_revise_budget_cut`, `tokyo_revise_shorter_trip` (PASS)
+- Plan cases where the model returns parseable hotel mentions
+
+History contrast cases (0/4) fail because the model's chain-of-thought output doesn't reliably avoid visited hotels in a way the extraction can detect.
 
 **Command to reproduce:**
 
