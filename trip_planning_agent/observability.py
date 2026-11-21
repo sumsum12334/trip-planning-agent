@@ -29,7 +29,9 @@ def _langfuse_enabled(settings: Settings) -> bool:
 
 
 def _langsmith_enabled(settings: Settings) -> bool:
-    return bool(settings.langsmith_api_key)
+    # getattr keeps settings-like stand-ins (tests, callers with the older
+    # Settings shape) working when the LangSmith fields are absent.
+    return bool(getattr(settings, "langsmith_api_key", ""))
 
 
 def _langfuse_client(settings: Settings) -> Optional[Any]:

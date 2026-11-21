@@ -375,7 +375,12 @@ def test_stream_retry_without_tools_ends_generation(monkeypatch):
             pass
 
     langfuse = FakeLangfuse()
-    monkeypatch.setattr(observability, "_client", lambda settings=None: langfuse)
+    monkeypatch.setattr(
+        observability, "_langfuse_client", lambda settings=None: langfuse
+    )
+    monkeypatch.setattr(
+        observability, "_langsmith_client", lambda settings=None: None
+    )
 
     no_tools = FakeResponse(status_code=400, body="tool-call-parser is not enabled")
     ok = _sse({"choices": [{"delta": {"content": "final answer"}}]}, None)
