@@ -21,6 +21,14 @@ The runner uses stub stay/maps tools and an isolated SQLite file. Stub mode is
 offline and does not call a live model endpoint. API mode sends a trip-planning
 prompt to the configured OpenAI-compatible `QWEN_BASE_URL` using `QWEN_MODEL`
 and `QWEN_API_KEY`, and may use the optional Nemotron judge configuration.
+API mode records TTFT and tokens-per-second in the local JSON/CSV report; it
+does not send traces to LangSmith.
+
+To inspect live LLM calls from the running app in LangSmith, set
+`LANGSMITH_API_KEY` in `.env` (`pip install langsmith`, then restart the app)
+and open https://smith.langchain.com in the project named by
+`LANGSMITH_PROJECT` (default `trip-planning-agent`). Traces include TTFT,
+TPOS, and model input/output. The stub evaluation does not use LangSmith.
 
 ## Run
 
