@@ -219,7 +219,7 @@ def list_travel_history(
     user_id: str = Query(default="local-user", min_length=1, max_length=200),
 ) -> list[TravelHistoryEntry]:
     store = TravelHistoryStore(get_settings().database_url)
-    return [TravelHistoryEntry(**entry) for entry in store.list_entries(user_id)]
+    return [TravelHistoryEntry(**entry) for entry in store.list_entries(user_id, fresh=True)]
 
 
 @app.post("/api/travel-history", response_model=TravelHistoryEntry, status_code=201)
@@ -450,9 +450,8 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
     memory_user_id = request.user_id or conversation_id
     remembered_places = remember_from_message(memory_user_id, request.message)
     history_store = TravelHistoryStore(get_settings().database_url)
-    # Make the coordinator's mandatory travel-history check verifiable even if
-    # the model skips the tool call: surface the known places up front (labeled,
-    # capped) and require the search in the system prompt.
+    # Surface known places from the in-process cache (database only on a cache
+    # miss or after writes). Do not require a history tool call on every plan.
     known_places = (
         history_store.list_places(memory_user_id)[:20]
         if get_settings().enable_travel_history
@@ -460,8 +459,8 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
     )
     if known_places:
         prompt = (
-            "Known travel history for this user (always verify with the "
-            "search_travel_history tool before planning): "
+            "Known travel history for this user (already loaded; do not call "
+            "search_travel_history just to re-read this list): "
             + ", ".join(known_places)
             + "\n\n"
             + prompt
@@ -470,7 +469,7 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
         "type": "function",
         "function": {
             "name": "search_travel_history",
-            "description": "Search the user's saved travel history for locations related to a destination or place.",
+            "description": "Filter or refresh the user's saved travel history for a destination or place. Use only when known history was not already provided, or a filtered lookup is needed.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -587,8 +586,8 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                     {
                         "role": "system",
                         "content": (
-                            "Known travel history for this user (always verify with "
-                            "the search_travel_history tool before planning): "
+                            "Known travel history for this user (already loaded; do not call "
+                            "search_travel_history just to re-read this list): "
                             + ", ".join(known_places)
                         ),
                     }
@@ -912,7 +911,7 @@ def _prepare_question_continuation(request: ChatRequest) -> dict[str, Any]:
         "type": "function",
         "function": {
             "name": "search_travel_history",
-            "description": "Search the user's saved travel history for locations related to a destination or place.",
+            "description": "Filter or refresh the user's saved travel history for a destination or place. Use only when known history was not already provided, or a filtered lookup is needed.",
             "parameters": {
                 "type": "object",
                 "properties": {"query": {"type": "string"}},

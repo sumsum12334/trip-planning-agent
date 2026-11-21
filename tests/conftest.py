@@ -24,3 +24,13 @@ def _offline_provider_modes(monkeypatch: pytest.MonkeyPatch):
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _clear_travel_history_cache():
+    """Keep the in-process history cache from leaking across tests."""
+    from agents.travel_history.agent import clear_travel_history_cache
+
+    clear_travel_history_cache()
+    yield
+    clear_travel_history_cache()
