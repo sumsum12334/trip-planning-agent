@@ -9,6 +9,7 @@ import {
   nextStepSuggestions,
   toolDisplayName,
   toolOfEvent,
+  currentWork,
   workflowState,
 } from "./workflow.js";
 
@@ -81,12 +82,52 @@ describe("nextStepSuggestions", () => {
 describe("workflowState", () => {
   it("reports waiting, working, error, and ready states", () => {
     expect(workflowState([], {}, "").label).toBe("Waiting for your response");
+    expect(workflowState([], {}, "").detail).toBe("Choose an option below.");
     expect(workflowState([], null, "Working...").label).toBe("Agent working");
     expect(workflowState([{ status: "error" }], null, "").label).toBe(
       "Needs attention",
     );
     expect(workflowState([], null, "").label).toBe("Ready");
     expect(workflowState([], null, "Stopped.").label).toBe("Stopped");
+  });
+
+  it("keeps a generic sending label until work events arrive", () => {
+    const state = workflowState([], null, "Sending your choice to the assistant...");
+    expect(state.label).toBe("Sending your choice to the assistant...");
+    expect(state.detail).toBe("Waiting for the assistant to continue.");
+    expect(state.className).toBe("working");
+  });
+
+  it("shows the current running step instead of a generic sending status", () => {
+    const events = [callEvent("search_stays", { destination: "Kyoto" })];
+    const state = workflowState(
+      events,
+      null,
+      "Sending your choice to the assistant...",
+    );
+    expect(state.label).toBe("Searching accommodation");
+    expect(state.className).toBe("working");
+  });
+
+  it("ignores a just-answered question when describing current work", () => {
+    const events = [
+      {
+        type: "tool",
+        label: "ask_user_question",
+        status: "running",
+        data: {
+          tool: "ask_user_question",
+          result: { question: "Budget?" },
+          selected: "$2,000–$3,500",
+        },
+        detail: "Answer selected: $2,000–$3,500",
+      },
+      { type: "model", label: "Model is thinking", status: "running" },
+    ];
+    expect(currentWork(events).label).toBe("Model is thinking");
+    expect(
+      workflowState(events, null, "Sending your choice to the assistant...").label,
+    ).toBe("Model is thinking");
   });
 });
 

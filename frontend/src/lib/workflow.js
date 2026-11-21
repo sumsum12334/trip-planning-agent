@@ -62,6 +62,7 @@ const TOOL_DISPLAY_NAMES = {
   estimate_transport: "Estimate transport",
   web_search: "Web search",
   weather: "Weather lookup",
+  search_travel_history: "Search travel history",
   display_trip_plan: "Show trip plan",
   start_trip_plan: "Start trip plan",
   set_trip_day: "Set trip day",
@@ -235,12 +236,81 @@ export function mergeToolEvents(events) {
   return cards;
 }
 
+const WORK_LABELS = {
+  search_stays: "Searching accommodation",
+  estimate_transport: "Estimating transport",
+  web_search: "Searching the web",
+  weather: "Checking weather",
+  search_travel_history: "Checking travel history",
+  display_trip_plan: "Updating the trip plan",
+  start_trip_plan: "Starting the trip plan",
+  set_trip_day: "Updating a trip day",
+  set_trip_budget: "Updating the budget",
+  set_trip_references: "Adding references",
+  remove_trip_day: "Removing a trip day",
+  get_trip_plan: "Reading the trip plan",
+  ask_user_question: "Asking you a question",
+};
+
+function isAnsweredQuestion(event) {
+  return event?.data?.tool === "ask_user_question" && Boolean(event?.data?.selected);
+}
+
+export function currentWork(events) {
+  const list = Array.isArray(events) ? events : [];
+  const running = [...list].reverse().find(
+    (event) => event.status === "running" && !isAnsweredQuestion(event),
+  );
+  if (!running) return null;
+  const tool = toolOfEvent(running);
+  const detail = typeof running.detail === "string" ? running.detail.trim() : "";
+  if (tool) {
+    return { label: WORK_LABELS[tool] || toolDisplayName(tool) || running.label, detail };
+  }
+  const label = running.label || "";
+  if (/^Retrying continuation/.test(label)) {
+    return { label: "Retrying the model…", detail: detail || label };
+  }
+  if (label === "Model request queued" || label === "Preparing model request") {
+    return { label: "Preparing the model…", detail };
+  }
+  if (label === "Model is thinking") {
+    return { label: "Model is thinking", detail };
+  }
+  if (/travel history/i.test(`${label} ${detail}`)) {
+    return { label: "Checking travel history", detail: detail || label };
+  }
+  if (/stay search|searching accommodations/i.test(`${label} ${detail}`)) {
+    return { label: "Searching accommodation", detail: detail || label };
+  }
+  if (/coordinator/i.test(label)) {
+    return { label: "Building the itinerary", detail: detail || label };
+  }
+  return { label: label || "Agent working", detail };
+}
+
 export function workflowState(events, pendingQuestion, status) {
-  if (pendingQuestion) return { label: "Waiting for your response", className: "waiting", icon: "?" };
-  if (status.includes("Sending your choice")) return { label: "Sending your choice to the assistant...", className: "working", icon: "➜" };
-  if (status.includes("Stopping") || status.includes("Stopped")) return { label: "Stopped", className: "ready", icon: "■" };
-  if (status.includes("failed") || events.some((event) => event.status === "error")) return { label: "Needs attention", className: "error", icon: "!" };
+  const text = status || "";
+  if (pendingQuestion) {
+    return { label: "Waiting for your response", detail: "Choose an option below.", className: "waiting", icon: "?" };
+  }
+  if (text.includes("Stopping") || text.includes("Stopped")) {
+    return { label: "Stopped", detail: "", className: "ready", icon: "■" };
+  }
+  if (text.includes("failed") || events.some((event) => event.status === "error")) {
+    return { label: "Needs attention", detail: text.includes("failed") ? text : "", className: "error", icon: "!" };
+  }
+  const work = currentWork(events);
   const lastEvent = events[events.length - 1];
-  if (status === "Working..." || status.includes("Sending") || lastEvent?.status === "running") return { label: "Agent working", className: "working", icon: "✦" };
-  return { label: "Ready", className: "ready", icon: "✓" };
+  const busy = text === "Working..." || text.includes("Sending") || lastEvent?.status === "running" || Boolean(work);
+  if (busy) {
+    if (work) {
+      return { label: work.label, detail: work.detail, className: "working", icon: "✦" };
+    }
+    if (text.includes("Sending your choice")) {
+      return { label: "Sending your choice to the assistant...", detail: "Waiting for the assistant to continue.", className: "working", icon: "➜" };
+    }
+    return { label: "Agent working", detail: "Starting the next step…", className: "working", icon: "✦" };
+  }
+  return { label: "Ready", detail: "", className: "ready", icon: "✓" };
 }

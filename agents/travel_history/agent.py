@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
+import threading
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -14,6 +17,11 @@ from shared.schemas import TripRequest
 from .memory import extract_visited_places
 
 StorageKind = Literal["sqlite", "postgres"]
+
+_schema_lock = threading.Lock()
+_schema_ensured: set[str] = set()
+_cache_lock = threading.Lock()
+_entries_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
 
 
 def storage_kind(database_url: str) -> StorageKind:
@@ -54,8 +62,31 @@ def _psycopg_conninfo(database_url: str) -> str:
     return url
 
 
+def _backend_key(database_url: str) -> str:
+    """Stable in-process key that does not keep the raw URL (it may contain a password)."""
+    return hashlib.sha256(database_url.encode("utf-8")).hexdigest()
+
+
+def _copy_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [dict(entry) for entry in entries]
+
+
+def clear_travel_history_cache() -> None:
+    """Drop the in-process entry cache and schema-ensure markers (used by tests)."""
+    with _cache_lock:
+        _entries_cache.clear()
+    with _schema_lock:
+        _schema_ensured.clear()
+
+
 class TravelHistoryStore:
-    """Small storage abstraction for user-scoped visited places."""
+    """Small storage abstraction for user-scoped visited places.
+
+    Reads are served from an in-process cache after the first fetch for a
+    user. The cache is invalidated on writes. Pass ``fresh=True`` to
+    ``list_entries`` to reload from the database (for example the History page).
+    Schema setup runs once per process per database URL.
+    """
 
     def __init__(self, database_url: str) -> None:
         self.database_url = database_url
@@ -63,12 +94,37 @@ class TravelHistoryStore:
         if self.kind == "sqlite":
             self.path = _sqlite_path(database_url)
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self._connection() as connection:
-                self._ensure_sqlite_schema(connection)
         else:
             self.path = None
+        self._ensure_schema()
+
+    def _cache_key(self, user_id: str) -> tuple[str, str]:
+        return (_backend_key(self.database_url), user_id)
+
+    def _cached_entries(self, user_id: str) -> list[dict[str, Any]] | None:
+        with _cache_lock:
+            cached = _entries_cache.get(self._cache_key(user_id))
+            return _copy_entries(cached) if cached is not None else None
+
+    def _store_entries(self, user_id: str, entries: list[dict[str, Any]]) -> None:
+        with _cache_lock:
+            _entries_cache[self._cache_key(user_id)] = _copy_entries(entries)
+
+    def _invalidate_user(self, user_id: str) -> None:
+        with _cache_lock:
+            _entries_cache.pop(self._cache_key(user_id), None)
+
+    def _ensure_schema(self) -> None:
+        key = _backend_key(self.database_url)
+        with _schema_lock:
+            if key in _schema_ensured:
+                return
             with self._connection() as connection:
-                self._ensure_postgres_schema(connection)
+                if self.kind == "sqlite":
+                    self._ensure_sqlite_schema(connection)
+                else:
+                    self._ensure_postgres_schema(connection)
+            _schema_ensured.add(key)
 
     def _connect_sqlite(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path)
@@ -172,7 +228,7 @@ class TravelHistoryStore:
             "UPDATE travel_history SET location = place WHERE location IS NULL"
         )
 
-    def list_entries(self, user_id: str) -> list[dict[str, Any]]:
+    def _fetch_entries(self, user_id: str) -> list[dict[str, Any]]:
         sql = """
             SELECT id, user_id, country, city, COALESCE(location, place), visited_at
             FROM travel_history
@@ -201,6 +257,16 @@ class TravelHistoryStore:
             }
             for row in rows
         ]
+
+    def list_entries(self, user_id: str, *, fresh: bool = False) -> list[dict[str, Any]]:
+        cleaned = user_id.strip()
+        if not fresh:
+            cached = self._cached_entries(cleaned)
+            if cached is not None:
+                return cached
+        entries = self._fetch_entries(cleaned)
+        self._store_entries(cleaned, entries)
+        return deepcopy(entries)
 
     def list_places(self, user_id: str) -> list[str]:
         return list(dict.fromkeys(entry["location"] for entry in self.list_entries(user_id)))
@@ -249,35 +315,43 @@ class TravelHistoryStore:
                     """,
                     values,
                 )
-                return int(cursor.lastrowid)
-        with self._connection() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    INSERT INTO travel_history
-                        (user_id, place, country, city, location, visited_at)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    RETURNING id
-                    """,
-                    values,
-                )
-                return int(cursor.fetchone()[0])
+                entry_id = int(cursor.lastrowid)
+        else:
+            with self._connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO travel_history
+                            (user_id, place, country, city, location, visited_at)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        RETURNING id
+                        """,
+                        values,
+                    )
+                    entry_id = int(cursor.fetchone()[0])
+        self._invalidate_user(cleaned_user_id)
+        return entry_id
 
     def delete(self, user_id: str, entry_id: int) -> bool:
+        cleaned_user_id = user_id.strip()
         if self.kind == "sqlite":
             with self._connection() as connection:
                 cursor = connection.execute(
                     "DELETE FROM travel_history WHERE id = ? AND user_id = ?",
-                    (entry_id, user_id.strip()),
+                    (entry_id, cleaned_user_id),
                 )
-                return cursor.rowcount > 0
-        with self._connection() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    "DELETE FROM travel_history WHERE id = %s AND user_id = %s",
-                    (entry_id, user_id.strip()),
-                )
-                return cursor.rowcount > 0
+                deleted = cursor.rowcount > 0
+        else:
+            with self._connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "DELETE FROM travel_history WHERE id = %s AND user_id = %s",
+                        (entry_id, cleaned_user_id),
+                    )
+                    deleted = cursor.rowcount > 0
+        if deleted:
+            self._invalidate_user(cleaned_user_id)
+        return deleted
 
     def update(self, entry_id: int, user_id: str, country: str | None, city: str | None, location: str) -> bool:
         """Update a travel history entry."""
@@ -297,21 +371,32 @@ class TravelHistoryStore:
                     """,
                     (cleaned_country, cleaned_city, cleaned_location, entry_id, cleaned_user_id),
                 )
-                return cursor.rowcount > 0
-        with self._connection() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    UPDATE travel_history
-                    SET country = %s, city = %s, location = %s
-                    WHERE id = %s AND user_id = %s
-                    """,
-                    (cleaned_country, cleaned_city, cleaned_location, entry_id, cleaned_user_id),
-                )
-                return cursor.rowcount > 0
+                updated = cursor.rowcount > 0
+        else:
+            with self._connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE travel_history
+                        SET country = %s, city = %s, location = %s
+                        WHERE id = %s AND user_id = %s
+                        """,
+                        (cleaned_country, cleaned_city, cleaned_location, entry_id, cleaned_user_id),
+                    )
+                    updated = cursor.rowcount > 0
+        if updated:
+            self._invalidate_user(cleaned_user_id)
+        return updated
 
     def get(self, user_id: str, entry_id: int) -> dict[str, Any] | None:
         """Get a single travel history entry by ID."""
+        cleaned = user_id.strip()
+        cached = self._cached_entries(cleaned)
+        if cached is not None:
+            for entry in cached:
+                if entry["id"] == entry_id:
+                    return entry
+            return None
         sql = """
             SELECT id, user_id, country, city, COALESCE(location, place), visited_at
             FROM travel_history
@@ -321,12 +406,12 @@ class TravelHistoryStore:
             with self._connection() as connection:
                 row = connection.execute(
                     sql.format(ph="?"),
-                    (user_id.strip(), entry_id),
+                    (cleaned, entry_id),
                 ).fetchone()
         else:
             with self._connection() as connection:
                 with connection.cursor() as cursor:
-                    cursor.execute(sql.format(ph="%s"), (user_id.strip(), entry_id))
+                    cursor.execute(sql.format(ph="%s"), (cleaned, entry_id))
                     row = cursor.fetchone()
         if not row:
             return None

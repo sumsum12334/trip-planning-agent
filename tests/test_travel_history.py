@@ -124,3 +124,110 @@ def test_extract_visited_places_ignores_clauses() -> None:
         )
         == []
     )
+
+
+
+def test_list_places_uses_cache_after_first_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from agents.travel_history.agent import clear_travel_history_cache
+
+    clear_travel_history_cache()
+    url = f"sqlite:///{tmp_path / 'history.sqlite'}"
+    store = TravelHistoryStore(url)
+    store.record_visit("u1", "Kyoto", country="JP", city="Kyoto")
+
+    fetches = {"n": 0}
+    original = TravelHistoryStore._fetch_entries
+
+    def wrapped(self: TravelHistoryStore, user_id: str):
+        fetches["n"] += 1
+        return original(self, user_id)
+
+    monkeypatch.setattr(TravelHistoryStore, "_fetch_entries", wrapped)
+
+    assert store.list_places("u1") == ["Kyoto"]
+    assert store.list_places("u1") == ["Kyoto"]
+    assert TravelHistoryStore(url).list_places("u1") == ["Kyoto"]
+    assert store.search("u1", "kyoto")[0]["location"] == "Kyoto"
+    assert fetches["n"] == 1
+
+    store.record_visit("u1", "Osaka", country="JP", city="Osaka")
+    assert store.list_places("u1") == ["Osaka", "Kyoto"]
+    assert fetches["n"] == 2
+    store.list_entries("u1", fresh=True)
+    assert fetches["n"] == 3
+
+
+def test_cache_is_isolated_by_user_and_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    url_a = f"sqlite:///{tmp_path / 'a.sqlite'}"
+    url_b = f"sqlite:///{tmp_path / 'b.sqlite'}"
+    store_a = TravelHistoryStore(url_a)
+    store_b = TravelHistoryStore(url_b)
+    store_a.record_visit("u1", "Kyoto")
+    store_a.record_visit("u2", "Tokyo")
+    store_b.record_visit("u1", "Taipei")
+
+    fetches = {"n": 0}
+    original = TravelHistoryStore._fetch_entries
+
+    def wrapped(self: TravelHistoryStore, user_id: str):
+        fetches["n"] += 1
+        return original(self, user_id)
+
+    monkeypatch.setattr(TravelHistoryStore, "_fetch_entries", wrapped)
+
+    assert store_a.list_places("u1") == ["Kyoto"]
+    assert store_a.list_places("u2") == ["Tokyo"]
+    assert store_b.list_places("u1") == ["Taipei"]
+    assert fetches["n"] == 3
+    assert store_a.list_places("u1") == ["Kyoto"]
+    assert fetches["n"] == 3
+
+    store_a.record_visit("u1", "Osaka")
+    assert store_a.list_places("u1") == ["Osaka", "Kyoto"]
+    assert store_a.list_places("u2") == ["Tokyo"]
+    assert fetches["n"] == 4
+
+
+def test_schema_is_ensured_once_per_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from agents.travel_history.agent import clear_travel_history_cache
+
+    clear_travel_history_cache()
+    url = f"sqlite:///{tmp_path / 'history.sqlite'}"
+    ensures = {"n": 0}
+    original = TravelHistoryStore._ensure_sqlite_schema
+
+    def wrapped(self: TravelHistoryStore, connection) -> None:
+        ensures["n"] += 1
+        return original(self, connection)
+
+    monkeypatch.setattr(TravelHistoryStore, "_ensure_sqlite_schema", wrapped)
+    TravelHistoryStore(url)
+    TravelHistoryStore(url)
+    TravelHistoryStore(url).list_places("u1")
+    assert ensures["n"] == 1
+
+
+def test_delete_and_update_invalidate_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    url = f"sqlite:///{tmp_path / 'history.sqlite'}"
+    store = TravelHistoryStore(url)
+    first = store.record_visit("u1", "Kyoto", country="JP", city="Kyoto")
+    store.record_visit("u1", "Osaka", country="JP", city="Osaka")
+    assert "Kyoto" in store.list_places("u1")
+
+    fetches = {"n": 0}
+    original = TravelHistoryStore._fetch_entries
+
+    def wrapped(self: TravelHistoryStore, user_id: str):
+        fetches["n"] += 1
+        return original(self, user_id)
+
+    monkeypatch.setattr(TravelHistoryStore, "_fetch_entries", wrapped)
+    assert store.list_places("u1")  # cached from the earlier list
+    assert fetches["n"] == 0
+
+    assert store.update(first, "u1", "JP", "Kyoto", "Fushimi") is True
+    assert store.list_places("u1") == ["Osaka", "Fushimi"]
+    assert fetches["n"] == 1
+    assert store.delete("u1", first) is True
+    assert store.list_places("u1") == ["Osaka"]
+    assert fetches["n"] == 2
