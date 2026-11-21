@@ -1,17 +1,20 @@
 """Stay-search tool: stub catalog (local MVP), OpenStreetMap Overpass API,
-or OBO Travel live booking API."""
+live web search (preferred live mode), or OBO Travel live booking API
+(legacy; prefer ``web``)."""
 
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from datetime import date, timedelta
 from typing import Any, Optional
 
 import httpx
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlparse
 
+from agents.web_search import run as web_search_run
 from config.settings import get_settings
 from shared.schemas import StayCandidate
 
@@ -386,11 +389,15 @@ class OverpassProvider:
 
 
 # ---------------------------------------------------------------------------
-# OBO Travel API provider (Agent 1, used when TOOL_STAYS_MODE=api)
+# OBO Travel API provider (Agent 1, legacy; used when TOOL_STAYS_MODE=api).
+# Kept for rollback — prefer TOOL_STAYS_MODE=web for live results.
 # ---------------------------------------------------------------------------
 
 class ApiProvider:
     """OBO Travel accommodation provider via MCP JSON-RPC 2.0 endpoint.
+
+    Legacy provider kept for rollback — prefer ``TOOL_STAYS_MODE=web``, which
+    sources live stay results from the shared DuckDuckGo web-search tool.
 
     Endpoint: https://onebookingonline.com/mcp
     Auth: None required (optional X-OBO-Key header for higher limits)
@@ -558,6 +565,440 @@ class ApiProvider:
             "api_key_configured": bool(self.api_key),
             "offline_safe": False,
             "timeout_seconds": self.timeout,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Web-search-backed provider (Agent 1, used when TOOL_STAYS_MODE=web)
+# ---------------------------------------------------------------------------
+
+# Bounded query plan: at most one request per template (web_search.run applies
+# its own ~15s per-request timeout), and the third query runs only when the
+# first two did not yield enough priced candidates.
+_WEB_QUERY_TEMPLATES: tuple[str, ...] = (
+    "{destination} hotels price per night",
+    "{destination} guesthouse hostel nightly rate",
+    "{destination} budget hotel room rates",
+)
+_WEB_MAX_QUERIES = 3
+_WEB_RESULTS_PER_QUERY = 8
+_WEB_MIN_PRICED_RESULTS = 3
+_WEB_RESULT_CAP = 10
+
+# Lodging relevance keywords: a search result must mention at least one of
+# these in its title/snippet to become a StayCandidate.
+_STAY_KEYWORDS: tuple[str, ...] = (
+    "hotel", "hostel", "guesthouse", "guest house", "motel", "resort",
+    "ryokan", "inn", "b&b", "bed and breakfast", "apartment", "lodging",
+    "accommodation", "capsule", "per night", "nightly", "stay",
+)
+
+# Property-type inference for pricing.apply_estimates on unpriced results.
+_PROPERTY_TYPE_KEYWORDS: tuple[tuple[str, str], ...] = (
+    ("hostel", "hostel"),
+    ("capsule", "capsule"),
+    ("ryokan", "ryokan"),
+    ("guest house", "guest_house"),
+    ("guesthouse", "guest_house"),
+    ("b&b", "guest_house"),
+    ("bed and breakfast", "guest_house"),
+    ("motel", "motel"),
+    ("resort", "resort"),
+    ("apartment", "apartment"),
+)
+
+# --- Nightly price parsing from search snippets ---------------------------
+# Symbol → ISO code. Longer symbols must be tried first so "US$" is not read
+# as "$". "¥" is ambiguous (JPY/CNY) and resolved by amount magnitude.
+_CURRENCY_SYMBOLS: dict[str, str] = {
+    "US$": "USD", "HK$": "HKD", "NT$": "TWD", "S$": "SGD",
+    "A$": "AUD", "C$": "CAD", "NZ$": "NZD",
+    "$": "USD", "€": "EUR", "£": "GBP",
+}
+_CURRENCY_CODES: frozenset[str] = frozenset({
+    "USD", "EUR", "GBP", "JPY", "HKD", "TWD", "THB", "KRW", "INR",
+    "SGD", "AUD", "CAD", "CHF", "CNY", "MYR", "NZD",
+})
+_CURRENCY_WORDS: dict[str, str] = {"yen": "JPY", "yuan": "CNY"}
+
+# Plausible per-night lodging range per currency, in the currency's own units.
+# Amounts outside the range are treated as fees, transport, or other noise.
+_PLAUSIBLE_NATIVE_RANGE: dict[str, tuple[float, float]] = {
+    "USD": (15.0, 5000.0),
+    "EUR": (15.0, 5000.0),
+    "GBP": (10.0, 4000.0),
+    "JPY": (3000.0, 200000.0),
+    "CNY": (80.0, 30000.0),
+    "HKD": (100.0, 30000.0),
+    "TWD": (500.0, 100000.0),
+    "THB": (300.0, 100000.0),
+    "KRW": (20000.0, 2000000.0),
+    "INR": (500.0, 150000.0),
+    "SGD": (20.0, 8000.0),
+    "AUD": (20.0, 6000.0),
+    "CAD": (20.0, 6000.0),
+    "CHF": (20.0, 5000.0),
+    "MYR": (30.0, 15000.0),
+    "NZD": (20.0, 6000.0),
+}
+
+# Approximate fixed rates for normalizing parsed prices to USD so budget caps
+# and plan currency stay consistent (the rest of the pipeline is USD-based).
+# Deliberately static and labeled as approximate in the result notes.
+_APPROX_USD_PER_UNIT: dict[str, float] = {
+    "USD": 1.0, "EUR": 1.1, "GBP": 1.3, "JPY": 0.0068, "CNY": 0.14,
+    "HKD": 0.13, "TWD": 0.032, "THB": 0.029, "KRW": 0.00075, "INR": 0.012,
+    "SGD": 0.75, "AUD": 0.66, "CAD": 0.73, "CHF": 1.1, "MYR": 0.24,
+    "NZD": 0.6,
+}
+
+_AMOUNT_PATTERN = r"\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?"
+_SYMBOL_ALTERNATION = "|".join(
+    re.escape(symbol)
+    for symbol in sorted(_CURRENCY_SYMBOLS, key=len, reverse=True)
+)
+_CODE_ALTERNATION = "|".join(sorted(_CURRENCY_CODES, key=len, reverse=True))
+_WORD_ALTERNATION = "|".join(sorted(_CURRENCY_WORDS, key=len, reverse=True))
+
+# Currency written before the amount: "US$120", "USD 120", "¥18,000", "yen 12,000"
+_PRICE_BEFORE_RE = re.compile(
+    rf"(?P<cur>{_SYMBOL_ALTERNATION}|¥|\b(?:{_CODE_ALTERNATION}|{_WORD_ALTERNATION})\b)"
+    rf"\s?(?P<amt>{_AMOUNT_PATTERN})",
+    re.IGNORECASE,
+)
+# Currency written after the amount: "120 USD", "1,200 THB", "12,000 yen"
+_PRICE_AFTER_RE = re.compile(
+    rf"(?P<amt>{_AMOUNT_PATTERN})\s?(?P<cur>\b(?:{_CODE_ALTERNATION}|{_WORD_ALTERNATION})\b)",
+    re.IGNORECASE,
+)
+# Monthly/weekly rates and stay totals are not per-night prices.
+_NEGATIVE_CONTEXT_RE = re.compile(
+    r"(?:per|a|/)\s?(?:month|week)|monthly|weekly", re.IGNORECASE
+)
+_NIGHT_CONTEXT_RE = re.compile(r"night", re.IGNORECASE)
+
+# Neighborhood hint: "… in Shibuya, Tokyo …" / "… near Kyoto Station …"
+_AREA_HINT_RE = re.compile(
+    r"\b(?:in|near)\s+([A-Z][A-Za-z0-9'’-]+(?:\s+[A-Z][A-Za-z0-9'’-]+){0,2})"
+)
+_AREA_STOPWORDS = frozenset({
+    "from", "per", "with", "and", "the", "a", "near", "best", "top",
+    "cheap", "budget", "luxury", "rates", "rate", "price", "prices",
+    "night", "nights", "hotel", "hotels", "hostel", "hostels",
+    "guesthouse", "guest", "house", "motel", "resort", "inn", "stay",
+})
+
+
+def _resolve_currency(token: str, amount: float) -> Optional[str]:
+    """Map a matched currency token to an ISO code, or None if unknown."""
+    code = _CURRENCY_SYMBOLS.get(token)
+    if code:
+        return code
+    if token == "¥":
+        # ¥ means JPY in Japan but CNY elsewhere; magnitude disambiguates
+        # (¥18,000/night is Tokyo, ¥350/night is a mainland China hostel).
+        return "JPY" if amount >= 2000 else "CNY"
+    word = _CURRENCY_WORDS.get(token.casefold())
+    if word:
+        return word
+    upper = token.upper()
+    return upper if upper in _CURRENCY_CODES else None
+
+
+def parse_nightly_price(text: str) -> Optional[tuple[float, str]]:
+    """Parse a per-night lodging price from free text (title/snippet).
+
+    Returns ``(amount, currency_code)`` in the currency as written, or None
+    when no confident per-night lodging price is present. Only amounts within
+    a plausible per-night range for the currency are accepted, monthly/weekly
+    rates and stay totals are rejected, and matches near "per night"/"nightly"
+    wording are preferred over unrelated numbers.
+    """
+    if not text:
+        return None
+    lowered = text.casefold()
+    matches: list[tuple[float, str, int, bool]] = []
+    for regex in (_PRICE_BEFORE_RE, _PRICE_AFTER_RE):
+        for match in regex.finditer(text):
+            raw_amount = match.group("amt").replace(",", "")
+            try:
+                amount = float(raw_amount)
+            except ValueError:
+                continue
+            code = _resolve_currency(match.group("cur"), amount)
+            if code is None:
+                continue
+            low, high = _PLAUSIBLE_NATIVE_RANGE.get(code, (0.0, float("inf")))
+            if not low <= amount <= high:
+                continue
+            start, end = match.span()
+            before = lowered[max(0, start - 40):start]
+            after = lowered[end:end + 15]
+            if _NEGATIVE_CONTEXT_RE.search(after):
+                continue
+            if "total" in before[-15:]:
+                continue
+            night_context = bool(
+                _NIGHT_CONTEXT_RE.search(after)
+                or _NIGHT_CONTEXT_RE.search(lowered[max(0, start - 40):start])
+            )
+            matches.append((amount, code, start, night_context))
+    if not matches:
+        return None
+    # Prefer per-night wording; tie-break on position.
+    matches.sort(key=lambda entry: (not entry[3], entry[2]))
+    amount, code, _, _ = matches[0]
+    return amount, code
+
+
+def _to_usd(amount: float, code: str) -> float:
+    """Normalize a parsed price to approximate USD (labeled in notes)."""
+    return round(amount * _APPROX_USD_PER_UNIT.get(code, 1.0), 2)
+
+
+def _format_amount(amount: float) -> str:
+    """Render 12000.0 as "12,000" and 81.5 as "81.5" for notes."""
+    if amount == int(amount):
+        return f"{int(amount):,}"
+    return f"{amount:,}"
+
+
+def _unwrap_search_url(url: str) -> str:
+    """Resolve DuckDuckGo redirect wrappers (…/l/?uddg=…) to the target page.
+
+    Mirrors ``agents.search_stays.agent._unwrap_result_url``; kept local so
+    this module has no import cycle with the agent layer.
+    """
+    text = str(url or "").strip()
+    if not text:
+        return ""
+    if text.startswith("//"):
+        text = "https:" + text
+    try:
+        parsed = urlparse(text)
+    except ValueError:
+        return text
+    if "duckduckgo.com" in parsed.netloc.casefold():
+        return parse_qs(parsed.query).get("uddg", [""])[0] or text
+    return text
+
+
+def _infer_property_type(folded_text: str) -> str:
+    for keyword, property_type in _PROPERTY_TYPE_KEYWORDS:
+        if keyword in folded_text:
+            return property_type
+    return "hotel"
+
+
+def _extract_area_hint(text: str, destination: str) -> str:
+    """Best-effort neighborhood hint ("Shibuya") from "… in Shibuya, Tokyo …"."""
+    dest_tokens = {
+        token
+        for token in destination.casefold().replace(",", " ").split()
+        if token
+    }
+    for match in _AREA_HINT_RE.finditer(text):
+        words = [word for word in match.group(1).split()]
+        while words and words[0].casefold() in _AREA_STOPWORDS:
+            words.pop(0)
+        while words and words[-1].casefold() in _AREA_STOPWORDS:
+            words.pop()
+        # Drop destination-token overlap: "Shibuya Tokyo" → "Shibuya".
+        while words and words[0].casefold() in dest_tokens:
+            words.pop(0)
+        while words and words[-1].casefold() in dest_tokens:
+            words.pop()
+        if words:
+            return " ".join(words)
+    return ""
+
+
+def _map_web_result(result: Any, destination: str) -> Optional[StayCandidate]:
+    """Map one web-search result to a StayCandidate, or None if unusable.
+
+    Results are dropped when they don't read as lodging (no stay keyword) or
+    clearly don't match the destination. ``nightly_cost`` is set only when a
+    price is confidently parsed and normalized to approximate USD; otherwise
+    it stays None so ``pricing.apply_estimates`` can label an estimate.
+    """
+    title = str(getattr(result, "title", "") or "").strip()
+    snippet = str(getattr(result, "snippet", "") or "").strip()
+    url = _unwrap_search_url(str(getattr(result, "url", "") or ""))
+    if not title or not url:
+        return None
+    text = f"{title}. {snippet}"
+    folded = text.casefold()
+    if not any(keyword in folded for keyword in _STAY_KEYWORDS):
+        return None
+    if not _location_matches(text, destination):
+        return None
+
+    try:
+        host = urlparse(url).netloc.casefold() or "web"
+    except ValueError:
+        host = "web"
+    parsed = parse_nightly_price(text)
+    if parsed is not None:
+        amount, code = parsed
+        nightly_cost = _to_usd(amount, code)
+        if code == "USD":
+            price_note = f"listed {_format_amount(amount)} USD/night"
+        else:
+            price_note = (
+                f"listed {_format_amount(amount)} {code}/night"
+                f" ≈ {nightly_cost:g} USD (approx. fixed rate)"
+            )
+        currency: Optional[str] = "USD"
+    else:
+        nightly_cost = None
+        currency = None
+        price_note = "no nightly price in snippet; estimate below"
+
+    area = _extract_area_hint(text, destination)
+    location = f"{destination} {area}" if area else destination
+    return StayCandidate(
+        name=title,
+        location=location,
+        nightly_cost=nightly_cost,
+        source_url=url,
+        notes=f"web search: {host}; {price_note}",
+        currency=currency,
+        rating=None,
+        amenities=[],
+        property_type=_infer_property_type(folded),
+    )
+
+
+def _web_stub_fallback(
+    destination: str,
+    budget: Optional[float],
+    days: Optional[int],
+    interests: Optional[list[str]],
+    reason: str,
+) -> list[StayCandidate]:
+    """Return the curated stub catalog with a labeled web-mode note."""
+    logger.info("Web stays fallback for %r: %s", destination, reason)
+    candidates = _search_stub(destination, budget, days, interests)
+    for stay in candidates:
+        prefix = f"web: {reason}"
+        stay.notes = f"{prefix}; {stay.notes}" if stay.notes else prefix
+    return candidates
+
+
+class WebSearchProvider:
+    """Find stays via the shared web-search tool (DuckDuckGo HTML search).
+
+    Live engine (``WEB_SEARCH_MODE=duckduckgo``): runs 1–3 bounded queries per
+    search (web_search.run applies its own ~15s per-request timeout), maps
+    results to StayCandidate, and parses nightly prices from snippets when
+    confidently listed (normalized to approximate USD and labeled). Results
+    are provenance-labeled with ``web search: <host>`` in notes.
+
+    When the web-search tool itself is in stub mode, the network fails, or no
+    usable results come back, the curated stub catalog is returned with a
+    labeled note — results are never fabricated.
+    """
+
+    def __init__(
+        self,
+        max_queries: int = _WEB_MAX_QUERIES,
+        results_per_query: int = _WEB_RESULTS_PER_QUERY,
+    ) -> None:
+        self.max_queries = max_queries
+        self.results_per_query = results_per_query
+
+    def _run_query(self, query: str) -> list[Any]:
+        return web_search_run(query, limit=self.results_per_query)
+
+    def search(
+        self,
+        destination: str,
+        budget: Optional[float] = None,
+        days: Optional[int] = None,
+        interests: Optional[list[str]] = None,
+    ) -> list[StayCandidate]:
+        """Search the web for stays at ``destination`` and parse prices."""
+        settings = get_settings()
+        if getattr(settings, "web_search_mode", "stub") != "duckduckgo":
+            return _web_stub_fallback(
+                destination, budget, days, interests,
+                reason="web search unavailable; showing stub catalog",
+            )
+
+        cap = nightly_budget_cap(budget, days)
+        cache_key = f"web:{destination.strip().casefold()}:{cap}"
+        cached = _search_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        candidates: list[StayCandidate] = []
+        seen: set[tuple[str, str]] = set()
+        priced_count = 0
+        for index, template in enumerate(_WEB_QUERY_TEMPLATES[: self.max_queries]):
+            # Third query only when we still lack priced results — this keeps
+            # total requests bounded at 3 while usually parsing some prices.
+            if index >= 2 and priced_count >= _WEB_MIN_PRICED_RESULTS:
+                break
+            query = template.format(destination=destination.strip())
+            try:
+                results = self._run_query(query)
+            except Exception as error:  # noqa: BLE001 — network failures must not abort the turn
+                logger.warning(
+                    "Web stays search query %r failed for %r: %s",
+                    query, destination, error,
+                )
+                return _web_stub_fallback(
+                    destination, budget, days, interests,
+                    reason="web search unavailable; showing stub catalog",
+                )
+            for result in results:
+                candidate = _map_web_result(result, destination)
+                if candidate is None:
+                    continue
+                key = (candidate.name.casefold(), candidate.source_url or "")
+                if key in seen:
+                    continue
+                seen.add(key)
+                if candidate.nightly_cost is not None:
+                    priced_count += 1
+                candidates.append(candidate)
+
+        if not candidates:
+            return _web_stub_fallback(
+                destination, budget, days, interests,
+                reason="web search returned no usable results; showing stub catalog",
+            )
+
+        # Budget cap: priced candidates above the cap are dropped; candidates
+        # without a parseable price are kept but sorted last (same as OBO).
+        kept = [
+            candidate
+            for candidate in candidates
+            if cap is None or candidate.nightly_cost is None
+            or candidate.nightly_cost <= cap
+        ]
+        if not kept:
+            return _web_stub_fallback(
+                destination, budget, days, interests,
+                reason="web search results over nightly budget; showing stub catalog",
+            )
+
+        kept.sort(
+            key=lambda c: (c.nightly_cost is None, c.nightly_cost or float("inf"))
+        )
+        kept = kept[:_WEB_RESULT_CAP]
+        _search_cache.set(cache_key, kept)
+        return kept
+
+    def health(self) -> dict[str, Any]:
+        settings = get_settings()
+        engine = getattr(settings, "web_search_mode", "stub")
+        return {
+            "provider": "web_search",
+            "engine_mode": engine,
+            "offline_safe": engine == "stub",  # stub engine falls back to the catalog
+            "max_queries": self.max_queries,
+            "results_per_query": self.results_per_query,
         }
 
 
@@ -791,7 +1232,10 @@ def _get_provider(mode: str) -> Any:
                 timeout=float(getattr(settings, "overpass_timeout", 30) or 30),
                 radius_meters=int(getattr(settings, "overpass_radius_meters", 5000) or 5000),
             )
+        elif mode == "web":
+            provider = WebSearchProvider()
         elif mode == "api":
+            # legacy OBO Travel provider, kept for rollback (prefer "web")
             provider = ApiProvider(
                 endpoint=getattr(settings, "stays_api_base_url", "https://onebookingonline.com/mcp"),
                 api_key=getattr(settings, "stays_api_key", ""),
@@ -812,7 +1256,10 @@ def _search_api(
     check_in: Optional[str] = None,
     check_out: Optional[str] = None,
 ) -> list[StayCandidate]:
-    """Search via the configured API provider (OBO Travel by default)."""
+    """Search via the configured API provider (OBO Travel by default).
+
+    Legacy path kept for rollback — prefer ``TOOL_STAYS_MODE=web``.
+    """
     settings = get_settings()
     provider = _get_provider("api")
     if provider is None:
@@ -861,7 +1308,12 @@ def search_stays(
     Modes (TOOL_STAYS_MODE):
       * ``stub`` — curated local catalog (default, offline-safe).
       * ``overpass`` — real OpenStreetMap lodging via Overpass API (no auth).
-      * ``api`` — real accommodation provider via OBO Travel MCP API.
+      * ``web`` — live results via the shared DuckDuckGo web-search tool;
+        nightly prices are kept only when confidently parsed from the snippet
+        (normalized to approximate USD), otherwise labeled estimates are filled
+        in. Requires ``WEB_SEARCH_MODE=duckduckgo``; falls back to the stub
+        catalog with a labeled note when web search is unavailable.
+      * ``api`` — legacy OBO Travel MCP API (kept for rollback; prefer ``web``).
 
     If ``use_geocoding`` is true (or GEOCODING_ENABLED=1) the destination is
     geocoded first and coordinates are passed to the provider so results can be
@@ -900,6 +1352,31 @@ def search_stays(
                     location=destination,
                     nightly_cost=None,
                     notes=f"overpass: provider raised {type(error).__name__}: {error}",
+                )
+            ]
+    if mode == "web":
+        provider = _get_provider("web")
+        if provider is None:
+            logger.warning("Web stays provider not initialized")
+            return _search_stub(destination, budget, days, interests)
+        try:
+            candidates = provider.search(
+                destination=destination,
+                budget=budget,
+                days=days,
+                interests=interests,
+            )
+            # Web snippets often lack a parseable nightly price — fill in
+            # labeled heuristic estimates for those, like the overpass path.
+            return pricing.apply_estimates(candidates, destination)
+        except Exception as error:  # noqa: BLE001 — provider failures must not abort the turn
+            logger.exception("Web stays provider raised unexpectedly for %r", destination)
+            return [
+                StayCandidate(
+                    name="Provider error",
+                    location=destination,
+                    nightly_cost=None,
+                    notes=f"web: provider raised {type(error).__name__}: {error}",
                 )
             ]
     if mode == "api":

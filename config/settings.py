@@ -26,14 +26,39 @@ class Settings(BaseSettings):
     qwen_model: str = Field(default="qwen3.8-27b", alias="QWEN_MODEL")
     qwen_api_key: str = Field(default="", alias="QWEN_API_KEY")
 
+    # Model sampling defaults for chat completions. MODEL_ENABLE_THINKING=None
+    # keeps the historical behavior: enabled while streaming, disabled otherwise.
+    model_max_tokens: int = Field(default=16384, alias="MODEL_MAX_TOKENS")
+    model_temperature: float = Field(default=1.0, alias="MODEL_TEMPERATURE")
+    model_top_p: float = Field(default=0.95, alias="MODEL_TOP_P")
+    model_reasoning_budget: int = Field(default=16384, alias="MODEL_REASONING_BUDGET")
+    model_enable_thinking: bool | None = Field(
+        default=None, alias="MODEL_ENABLE_THINKING"
+    )
+
     # Baseline A = 0 (Agents 1–3); Proposed = 1 (include Agent 4 Travel_History)
     enable_travel_history: bool = Field(default=True, alias="ENABLE_TRAVEL_HISTORY")
 
+    # UI workflow: after a manual plan edit, offer "ask the AI to reconsider".
+    # Users can override this per browser via the Settings page.
+    reconsider_prompt_enabled: bool = Field(
+        default=True, alias="RECONSIDER_PROMPT_ENABLED"
+    )
+
     # Tools
-    tool_stays_mode: Literal["stub", "overpass", "api"] = Field(default="stub", alias="TOOL_STAYS_MODE")
+    # TOOL_STAYS_MODE=web prefers live web-search results (requires
+    # WEB_SEARCH_MODE=duckduckgo); "api" is the legacy OBO Travel provider.
+    # Default stays "stub" (offline-safe).
+    tool_stays_mode: Literal["stub", "overpass", "api", "web"] = Field(default="stub", alias="TOOL_STAYS_MODE")
     tool_maps_mode: Literal["stub", "api"] = Field(default="stub", alias="TOOL_MAPS_MODE")
     web_search_mode: Literal["stub", "duckduckgo"] = Field(
         default="stub", alias="WEB_SEARCH_MODE"
+    )
+    weather_mode: Literal["stub", "api", "open-meteo"] = Field(
+        default="stub", alias="WEATHER_MODE"
+    )
+    weather_forecast_mode: Literal["stub", "open_meteo"] = Field(
+        default="stub", alias="WEATHER_FORECAST_MODE"
     )
 
     # Travel History DB
@@ -47,6 +72,11 @@ class Settings(BaseSettings):
     langfuse_secret_key: str = Field(default="", alias="LANGFUSE_SECRET_KEY")
     langfuse_host: str = Field(default="https://cloud.langfuse.com", alias="LANGFUSE_HOST")
     langfuse_enabled: bool = Field(default=False, alias="LANGFUSE_ENABLED")
+
+    # LangSmith (optional) — traces all LLM calls
+    langsmith_api_key: str = Field(default="", alias="LANGSMITH_API_KEY")
+    langsmith_endpoint: str = Field(default="https://api.smith.langchain.com", alias="LANGSMITH_ENDPOINT")
+    langsmith_project: str = Field(default="trip-planning-agent", alias="LANGSMITH_PROJECT")
 
     # Optional form default only — not a hard product requirement
     default_origin: str = Field(default="", alias="DEFAULT_ORIGIN")
@@ -64,9 +94,10 @@ class Settings(BaseSettings):
     overpass_timeout: float = Field(default=30.0, alias="OVERPASS_TIMEOUT")
     overpass_radius_meters: int = Field(default=5000, alias="OVERPASS_RADIUS_METERS")
 
-    # --- Stay search provider (Agent 1, used when TOOL_STAYS_MODE=api) ---
-    # OBO Travel MCP API (https://onebookingonline.com/mcp) — free, no auth
-    # required for keyless access (30 req/min, 500 req/day). Set
+    # --- Stay search provider (Agent 1, legacy; used when TOOL_STAYS_MODE=api) ---
+    # OBO Travel MCP API (https://onebookingonline.com/mcp) — kept for
+    # rollback; prefer TOOL_STAYS_MODE=web (live web-search results).
+    # Free, no auth required for keyless access (30 req/min, 500 req/day). Set
     # STAYS_API_KEY for higher limits (60 req/min, 2000 req/day).
     stays_api_base_url: str = Field(
         default="https://onebookingonline.com/mcp", alias="STAYS_API_BASE_URL"
@@ -120,6 +151,12 @@ def update_model_config(*, base_url: str, model: str, api_key: str | None) -> No
         _model_overrides["model"] = model
         if api_key is not None:
             _model_overrides["api_key"] = api_key
+
+
+def reset_model_config() -> None:
+    """Drop process-local model overrides (used by tests and reloads)."""
+    with _model_override_lock:
+        _model_overrides.clear()
 
 
 @lru_cache

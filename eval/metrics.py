@@ -116,6 +116,7 @@ def score_transport(leg: TransportLeg | None, expect: dict[str, Any]) -> dict[st
     return {
         "present": True,
         "mode": leg.mode,
+        "currency": leg.currency,
         "duration_minutes": leg.duration_minutes,
         "cost": leg.cost,
         "from_place": leg.from_place,
@@ -189,9 +190,24 @@ def score_itinerary(
     day_check = day_count == expected_days if expected_days else None
 
     total = itinerary.total_estimated_cost
-    budget_ok = True
+    budget_ok: Any = True
     if request.budget is not None and total is not None:
-        budget_ok = total <= request.budget + 1e-6
+        # A total that mixes currencies cannot be compared with the budget.
+        budget_ok = (
+            total <= request.budget + 1e-6
+            if itinerary.currency is not None
+            else None
+        )
+
+    costed_currencies = {
+        stay.currency
+        for stay in stays
+        if (stay.nightly_cost or 0) > 0 and stay.currency
+    } | {
+        leg.currency
+        for leg in transports
+        if (leg.cost or 0) > 0 and leg.currency
+    }
 
     expect_revise = bool(expect.get("expect_revise"))
     ignore_total = bool(expect.get("ignore_total_budget")) or expect_revise
@@ -201,6 +217,7 @@ def score_itinerary(
         "budget_total": budget_ok if not ignore_total else None,
         "day_coverage": day_check,
         "budget_revise": budget_ok if expect_revise else None,
+        "currency_consistent": len(costed_currencies) <= 1 if costed_currencies else None,
     }
     if expect.get("city_level_history"):
         tokens = [_norm(t) for t in expect.get("stay_location_contains") or []]
@@ -252,6 +269,7 @@ def score_itinerary(
         "expected_days": expected_days,
         "total_estimated_cost": total,
         "budget": request.budget,
+        "currency": itinerary.currency,
         "used_travel_history": itinerary.used_travel_history,
         "notes": list(itinerary.notes or []),
         "warnings": warnings,

@@ -89,3 +89,38 @@ def test_postgres_store_roundtrip_optional() -> None:
         assert "Shibuya" in store.list_places(user_id)
     finally:
         store.delete(user_id, entry_id)
+
+
+def test_extract_visited_places_keeps_real_places() -> None:
+    from agents.travel_history.memory import extract_visited_places
+
+    assert extract_visited_places("I have gone to the Peak before.") == [
+        "Victoria Peak"
+    ]
+    assert extract_visited_places("I went to Japan last year.") == ["Japan"]
+    assert extract_visited_places("I visited Kyoto in 2019 and loved it.") == [
+        "Kyoto"
+    ]
+    assert extract_visited_places(
+        "I have been to Tokyo before and I love hiking."
+    ) == ["Tokyo"]
+
+
+def test_extract_visited_places_drops_non_place_phrases() -> None:
+    from agents.travel_history.memory import extract_visited_places
+
+    assert extract_visited_places("I went to bed early yesterday.") == []
+    assert extract_visited_places("I have been to the doctor twice.") == []
+    assert extract_visited_places("After work I go to the gym.") == []
+    assert extract_visited_places("We went home late.") == []
+
+
+def test_extract_visited_places_ignores_clauses() -> None:
+    from agents.travel_history.memory import extract_visited_places
+
+    assert (
+        extract_visited_places(
+            "I went to a very small town near the mountains far away from here."
+        )
+        == []
+    )

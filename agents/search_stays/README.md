@@ -1,8 +1,9 @@
 # Agent 1 - Search Stays
 
-Accommodation candidates come from `tools.py` via `TOOL_STAYS_MODE`. Three modes
+Accommodation candidates come from `tools.py` via `TOOL_STAYS_MODE`. Four modes
 are supported: `stub` (default, offline-safe), `overpass` (OpenStreetMap, no
-auth), and `api` (OBO Travel MCP, live prices + booking URLs).
+auth), `web` (live web-search results — the preferred live mode), and `api`
+(OBO Travel MCP — legacy, kept for rollback).
 
 ## Modes
 
@@ -34,12 +35,50 @@ OVERPASS_TIMEOUT=30
 OVERPASS_RADIUS_METERS=5000
 ```
 
-### api (OBO Travel)
+### web (web search — preferred live mode)
+
+Runs 1–3 bounded DuckDuckGo queries per search (via the shared
+[`agents/web_search`](../web_search) tool, ~15s per-request timeout, 5-minute
+TTL cache) such as `"{destination} hotels price per night"`, then maps each
+result to a stay candidate:
+
+- **Name** from the result title, **source URL** from the result link
+  (DuckDuckGo redirect wrappers are unwrapped), **location** = destination
+  plus any neighborhood hint extracted from the snippet (e.g. "Tokyo
+  Shibuya").
+- **Nightly cost** is set only when a price is confidently parsed from the
+  title/snippet (`$120`, `US$120`, `USD 120`, `from ¥18,000`, `1,200 THB`,
+  …). Amounts outside a plausible per-night range for the currency, and
+  monthly/weekly rates or stay totals, are rejected. Non-USD prices are
+  normalized to **approximate USD with a static fixed rate** and the original
+  listing is kept in the notes. When nothing is parseable, `nightly_cost`
+  stays `None` and `pricing.apply_estimates` fills a labeled heuristic
+  estimate, like the overpass path.
+- Results that don't read as lodging or clearly don't match the destination
+  are filtered out. Priced candidates above the per-night budget cap are
+  dropped; unpriced candidates are kept but sorted last. At most 10 results.
+- Every result carries provenance in its notes: `web search: <host>` plus
+  how the price was derived.
+
+Requires `WEB_SEARCH_MODE=duckduckgo`. When the web-search tool is in stub
+mode, the network fails, or no usable results come back, the curated stub
+catalog is returned with a labeled note (`web: web search unavailable;
+showing stub catalog`) — results are never fabricated. Provider failures
+surface as a single `Provider error` candidate, never an exception.
+
+```
+TOOL_STAYS_MODE=web
+WEB_SEARCH_MODE=duckduckgo
+```
+
+### api (OBO Travel — legacy)
+
+> **Deprecated:** kept for rollback. Prefer `TOOL_STAYS_MODE=web`.
 
 Calls the [OBO Travel MCP API](https://onebookingonline.com/mcp) via JSON-RPC
 2.0 for live hotel availability and pricing. Returns real nightly rates,
 booking URLs, star ratings, free-cancellation windows, and hotel tokens for
-follow-up calls. This is the only mode that returns actual bookable prices.
+follow-up calls.
 
 No API key required for keyless access (30 req/min, 500 req/day). Optional
 `STAYS_API_KEY` for higher limits (60 req/min, 2000 req/day).
@@ -101,14 +140,17 @@ Tool mode (chat model calls `search_stays` directly):
 }
 ```
 
-For `api` mode, `provider_configured` is `false` until `STAYS_API_BASE_URL` is
+For `web` mode, `provider` reports `web_search` with the active
+`engine_mode` (`stub` falls back to the catalog, `duckduckgo` is live). For
+`api` mode, `provider_configured` is `false` until `STAYS_API_BASE_URL` is
 set, and `provider` reports `api_key_configured` and `endpoint`.
 
 ## Tests
 
 ```bash
-pytest tests/test_search_stays.py -v
+pytest tests/test_search_stays.py tests/test_search_stays_web.py -v
 ```
 
 Covers: budget caps, city matching, generic fallback, excluded locations, API
-mode labeled errors, and overpass geocode-failure handling.
+mode labeled errors, overpass geocode-failure handling, and the web mode
+(price parsing, destination/budget filtering, stub fallback).

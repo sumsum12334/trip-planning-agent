@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from collections.abc import Callable, Iterator
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import httpx
@@ -35,6 +37,24 @@ class TACCClient:
     def configured(self) -> bool:
         return bool(self.base_url)
 
+
+    def _sampling_params(self, *, stream: bool) -> dict[str, Any]:
+        """Build sampling payload fields from settings, keeping legacy defaults."""
+        settings = self.settings
+        enable_thinking = getattr(settings, "model_enable_thinking", None)
+        if enable_thinking is None:
+            # Historical behavior: thinking while streaming, disabled otherwise.
+            enable_thinking = stream
+        params: dict[str, Any] = {
+            "max_tokens": int(getattr(settings, "model_max_tokens", 16384) or 16384),
+            "temperature": float(getattr(settings, "model_temperature", 1.0)),
+            "top_p": float(getattr(settings, "model_top_p", 0.95)),
+            "chat_template_kwargs": {"enable_thinking": bool(enable_thinking)},
+        }
+        reasoning_budget = getattr(settings, "model_reasoning_budget", 16384)
+        if reasoning_budget:
+            params["reasoning_budget"] = int(reasoning_budget)
+        return params
 
     @staticmethod
     def _response_body(response: httpx.Response) -> str:
@@ -101,16 +121,10 @@ class TACCClient:
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        if on_event:
-            on_event({"type": "model", "label": "Preparing model request", "status": "completed"})
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
-            "max_tokens": 16384,
-            "temperature": 1.0,
-            "top_p": 0.95,
-            "reasoning_budget": 16384,
-            "chat_template_kwargs": {"enable_thinking": False},
+            **self._sampling_params(stream=False),
             **(extra or {}),
         }
         headers = {"Content-Type": "application/json"}
@@ -138,6 +152,7 @@ class TACCClient:
             settings=self.settings,
         ) as generation:
             try:
+                request_start_time = datetime.now(timezone.utc)
                 with httpx.Client(timeout=300.0) as client:
                     response = client.post(
                         self.base_url.rstrip("/") + "/chat/completions",
@@ -159,12 +174,21 @@ class TACCClient:
                     self._raise_for_status(response)
                     data = response.json()
                 text = data["choices"][0]["message"]["content"]
-                finish_generation(generation, output=text)
+                completion_tokens = max(len(text) // 4, 0)
+                finish_generation(
+                    generation,
+                    output=text,
+                    first_token_time=request_start_time,
+                    completion_tokens=completion_tokens,
+                )
             except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
+                completion_tokens = 0
                 finish_generation(
                     generation,
                     output={"error": str(error)},
                     error=error,
+                    first_token_time=None,
+                    completion_tokens=completion_tokens,
                 )
                 raise
         if on_event:
@@ -206,16 +230,11 @@ class TACCClient:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         if on_event:
-            on_event(
-                {
-                    "type": "model",
-                    "label": "Preparing model request",
-                    "status": "completed",
-                }
-            )
             on_event({"type": "model", "label": "Model is thinking", "detail": self.model, "status": "running"})
 
         cancelled = False
+        request_start_time = time.perf_counter()
+        first_chunk_time: float | None = None
         with httpx.Client(timeout=300.0) as client:
             while True:
                 if cancel_event is not None and cancel_event.is_set():
@@ -223,12 +242,8 @@ class TACCClient:
                 payload = {
                     "model": self.model,
                     "messages": messages,
-                    "max_tokens": 16384,
-                    "temperature": 1.0,
-                    "top_p": 0.95,
-                    "reasoning_budget": 16384,
                     "stream": True,
-                    "chat_template_kwargs": {"enable_thinking": True},
+                    **self._sampling_params(stream=True),
                 }
                 if tools:
                     payload["tools"] = tools
@@ -304,6 +319,8 @@ class TACCClient:
                                 if content:
                                     text = self._chunk_text(content)
                                     streamed_text.append(text)
+                                    if first_chunk_time is None:
+                                        first_chunk_time = datetime.now(timezone.utc)
                                     update_generation(
                                         generation,
                                         output="".join(streamed_text),
@@ -332,12 +349,21 @@ class TACCClient:
                             }
                         else:
                             generation_output = {"text": ""}
-                        finish_generation(generation, output=generation_output)
+                        completion_tokens = max(len(output_text) // 4, 0)
+                        finish_generation(
+                            generation,
+                            output=generation_output,
+                            first_token_time=first_chunk_time,
+                            completion_tokens=completion_tokens,
+                        )
                     except (httpx.HTTPError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+                        completion_tokens = max(len("".join(streamed_text)) // 4, 0)
                         finish_generation(
                             generation,
                             output="".join(streamed_text) or {"error": str(error)},
                             error=error,
+                            first_token_time=first_chunk_time,
+                            completion_tokens=completion_tokens,
                         )
                         raise
                 if cancelled:

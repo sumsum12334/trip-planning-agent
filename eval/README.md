@@ -11,6 +11,12 @@ It measures per-agent constraints (stay budget/location, transport fields) and
 `avoid_visited=true`, Proposed must drop visited stays while Baseline A still
 recommends at least one of them.
 
+**Revise cases** (`REVISE_CASES`) run a plan first and then re-enter the agent
+pipeline with changed constraints (a budget cut or a shorter trip) through
+`agents.coordinator.agent.revise`. The revised itinerary must fit the new
+constraints, cover the requested days, and carry a note describing the change
+(`note_contains`).
+
 The runner uses stub stay/maps tools and an isolated SQLite file. Stub mode is
 offline and does not call a live model endpoint. API mode sends a trip-planning
 prompt to the configured OpenAI-compatible `QWEN_BASE_URL` using `QWEN_MODEL`
@@ -21,7 +27,9 @@ and `QWEN_API_KEY`, and may use the optional Nemotron judge configuration.
 From the repository root:
 
 ```powershell
-cd C:\dev\trip-planning-agent
+# From the repository root (PowerShell on Windows; on macOS/Linux use
+# `source .venv/bin/activate` and `python -m eval.runner`).
+cd trip-planning-agent
 .\.venv\Scripts\python.exe -m eval.runner
 ```
 
@@ -68,9 +76,11 @@ Append a dict to `CASES` in `cases.py` with:
 
 - More history cases: multiple visited places, and an unrelated-history control
   (Tokyo trip should not drop stays just because Hong Kong was visited).
-- Over-budget transport (`hk_over_budget_transport`): records whether the
-  coordinator revises an itinerary that exceeds the total budget. This is a
-  **known Agent 3 gap** today (no revise loop) and does not fail the suite alone.
+- Over-budget transport (`hk_over_budget_transport`): the coordinator must
+  revise an itinerary that exceeds the total budget (cheaper stay) or fail
+  closed when no alternative fits.
+- Revise loop (`REVISE_CASES`): plan, then re-enter the pipeline through
+  `agents.coordinator.agent.revise` with a changed budget or trip length.
 - Gold tool-call cases (`eval/tool_cases.py`): execute the chat tool layer with
   the arguments a model should pass. Run with the default suite, or:
 

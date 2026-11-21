@@ -56,6 +56,16 @@ def test_unknown_places_get_generic_heuristic():
     assert again.mode == leg.mode
 
 
+def test_legs_carry_the_catalog_currency():
+    tokyo = run(TripRequest(destination="Tokyo"), "Shibuya", "Shinjuku")
+    assert tokyo.currency == "USD"
+    hk = run(TripRequest(destination="Hong Kong"), "Hong Kong Airport", "Central")
+    assert hk.currency == "HKD"
+    # A zero-cost walk has no currency label.
+    same = run(TripRequest(destination="Amsterdam"), "Dam Square", "Dam Square")
+    assert same.currency is None
+
+
 def test_health_reports_stub_catalog():
     info = health()
     assert info["agent"] == "estimate_transport"

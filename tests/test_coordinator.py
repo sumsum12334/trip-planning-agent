@@ -6,7 +6,7 @@ from datetime import date
 
 import pytest
 
-from agents.coordinator.agent import NoFeasiblePlanError, run, trip_length
+from agents.coordinator.agent import NoFeasiblePlanError, revise, run, trip_length
 from shared.schemas import TripRequest
 
 
@@ -115,15 +115,15 @@ def test_avoid_visited_skips_named_pois(tmp_path, monkeypatch):
 def test_revise_steps_down_from_over_budget_stay():
     req = TripRequest(
         destination="Tokyo",
-        origin="Tokyo Shinjuku",
-        budget=400,
+        origin="Tokyo Haneda Airport",
+        budget=370,
         days=3,
     )
     itinerary = run(req)
     stay = itinerary.days[0].stays[0]
     assert stay.name == "Shinjuku Business Hotel"
     assert itinerary.total_estimated_cost is not None
-    assert itinerary.total_estimated_cost <= 400
+    assert itinerary.total_estimated_cost <= 370
     assert any(
         "Revised stay from Asakusa Traditional Ryokan to Shinjuku Business Hotel" in note
         for note in itinerary.notes
@@ -154,10 +154,236 @@ def test_fail_closed_when_revise_cannot_meet_budget():
     req = TripRequest(
         destination="Tokyo",
         origin="Narita Airport",
-        budget=400,
+        budget=180,
         days=3,
     )
     with pytest.raises(NoFeasiblePlanError, match="still exceeds budget after revise"):
         run(req)
+
+
+def test_plan_currency_is_single_per_city():
+    hk = run(
+        TripRequest(destination="Hong Kong", origin="Hong Kong Airport", days=1, budget=400)
+    )
+    assert hk.currency == "HKD"
+    tokyo = run(
+        TripRequest(destination="Tokyo", origin="Tokyo Shinjuku", budget=400, days=3)
+    )
+    assert tokyo.currency == "USD"
+    for day in tokyo.days:
+        for stay in day.stays:
+            assert stay.currency == "USD"
+        for leg in day.transports:
+            assert leg.currency in (None, "USD")
+
+
+def test_mixed_currency_components_fail_closed(monkeypatch):
+    from agents.coordinator import agent as coordinator_agent
+    from shared.schemas import StayCandidate
+
+    def fake_search(request, excluded_locations=()):
+        return [
+            StayCandidate(
+                name="Euro Hotel",
+                location="Tokyo Asakusa",
+                nightly_cost=90.0,
+                currency="EUR",
+                rating=4.0,
+                source_url="https://example.com/stays/euro",
+            )
+        ]
+
+    monkeypatch.setattr(coordinator_agent, "search_stays", fake_search)
+    with pytest.raises(NoFeasiblePlanError, match="mix currencies"):
+        coordinator_agent.run(
+            TripRequest(destination="Tokyo", origin="Tokyo Shinjuku", budget=400, days=3)
+        )
+
+
+def test_unlabeled_costs_skip_budget_enforcement(monkeypatch):
+    from agents.coordinator import agent as coordinator_agent
+    from shared.schemas import StayCandidate
+
+    def fake_search(request, excluded_locations=()):
+        return [
+            StayCandidate(
+                name="No-Currency Hotel",
+                location="Tokyo Central",
+                nightly_cost=90.0,
+                currency=None,
+                rating=4.0,
+            )
+        ]
+
+    monkeypatch.setattr(coordinator_agent, "search_stays", fake_search)
+    itinerary = coordinator_agent.run(
+        TripRequest(destination="Tokyo", origin="Tokyo Shinjuku", budget=10, days=3)
+    )
+    assert itinerary.currency is None
+    assert any("Budget not enforced" in note for note in itinerary.notes)
+
+
+def test_revise_reenters_pipeline_and_notes_budget_change():
+    initial = run(
+        TripRequest(
+            destination="Hong Kong",
+            origin="Hong Kong Airport",
+            days=3,
+            budget=600,
+        )
+    )
+    revised = revise(
+        TripRequest(
+            destination="Hong Kong",
+            origin="Hong Kong Airport",
+            days=3,
+            budget=350,
+        ),
+        initial,
+    )
+    assert any(
+        "budget" in note.casefold() and "350" in note for note in revised.notes
+    )
+    assert revised.request.budget == 350
+    assert revised.total_estimated_cost is not None
+    assert revised.total_estimated_cost <= 350
+    assert len(revised.days) == 3
+
+
+def test_revise_notes_trip_length_change():
+    initial = run(
+        TripRequest(destination="Tokyo", origin="Tokyo Shinjuku", days=4, budget=800)
+    )
+    revised = revise(
+        TripRequest(destination="Tokyo", origin="Tokyo Shinjuku", days=2, budget=800),
+        initial,
+    )
+    assert any(
+        "trip length" in note.casefold() and "2" in note for note in revised.notes
+    )
+    assert len(revised.days) == 2
+
+
+def test_revise_rejects_destination_change():
+    initial = run(
+        TripRequest(destination="Tokyo", origin="Tokyo Shinjuku", days=2, budget=400)
+    )
+    with pytest.raises(ValueError, match="same destination"):
+        revise(
+            TripRequest(destination="Hong Kong", origin="Hong Kong Airport", days=2, budget=400),
+            initial,
+        )
+
+
+def test_summary_notes_from_model(monkeypatch):
+    from agents.coordinator import agent as coordinator_agent
+
+    class FakeTACC:
+        configured = True
+
+        def complete(self, prompt, **kwargs):
+            assert "JSON" in prompt
+            return {
+                "ok": True,
+                "stub": False,
+                "text": '{"notes": ["Stay fits the budget", "Arrival by metro"]}',
+            }
+
+    monkeypatch.setattr(coordinator_agent, "TACCClient", lambda settings=None: FakeTACC())
+    itinerary = run(
+        TripRequest(destination="Hong Kong", origin="Hong Kong Airport", days=1, budget=400)
+    )
+    assert any(
+        note.startswith("Model summary: Stay fits the budget")
+        for note in itinerary.notes
+    )
+
+
+def test_summary_skipped_for_stub_response(monkeypatch):
+    from agents.coordinator import agent as coordinator_agent
+
+    class FakeTACC:
+        configured = True
+
+        def complete(self, prompt, **kwargs):
+            return {"ok": False, "stub": True, "text": "[Model stub] set endpoint"}
+
+    monkeypatch.setattr(coordinator_agent, "TACCClient", lambda settings=None: FakeTACC())
+    itinerary = run(
+        TripRequest(destination="Hong Kong", origin="Hong Kong Airport", days=1, budget=400)
+    )
+    assert all(not note.startswith("Model summary:") for note in itinerary.notes)
+
+
+def test_summary_tolerates_malformed_model_output(monkeypatch):
+    from agents.coordinator import agent as coordinator_agent
+
+    class FakeTACC:
+        configured = True
+
+        def complete(self, prompt, **kwargs):
+            return {"ok": True, "stub": False, "text": "not json at all"}
+
+    monkeypatch.setattr(coordinator_agent, "TACCClient", lambda settings=None: FakeTACC())
+    itinerary = run(
+        TripRequest(destination="Hong Kong", origin="Hong Kong Airport", days=1, budget=400)
+    )
+    assert all(not note.startswith("Model summary:") for note in itinerary.notes)
+
+
+def test_parse_summary_notes_handles_fences_and_junk():
+    from agents.coordinator.agent import _parse_summary_notes
+
+    fenced = '```json\n{"notes": ["Fenced note", 5, "", "Second"]}\n```'
+    assert _parse_summary_notes(fenced) == [
+        "Model summary: Fenced note",
+        "Model summary: Second",
+    ]
+    assert _parse_summary_notes('{"notes": ["plain"]}') == ["Model summary: plain"]
+    assert _parse_summary_notes('{"notes": "not a list"}') == []
+    assert _parse_summary_notes('{"other": 1}') == []
+    assert _parse_summary_notes("[1, 2, 3]") == []
+    assert _parse_summary_notes("") == []
+    # More than three notes are capped.
+    long = '{"notes": ["a", "b", "c", "d", "e"]}'
+    assert len(_parse_summary_notes(long)) == 3
+    # Over-long notes are truncated to 160 characters of text after the label.
+    huge = '{"notes": ["' + "x" * 400 + '"]}'
+    parsed = _parse_summary_notes(huge)
+    assert parsed[0].startswith("Model summary: x")
+    assert len(parsed[0]) == len("Model summary: ") + 160
+
+
+def test_constraint_changes_reports_each_diff():
+    from agents.coordinator.agent import _constraint_changes
+    from datetime import date as _date
+
+    previous = TripRequest(destination="Tokyo", budget=400, days=3, interests=["food"])
+    # No changes
+    assert _constraint_changes(previous, previous) == [
+        "Constraints unchanged; plan re-validated"
+    ]
+    # Budget
+    notes = _constraint_changes(previous, TripRequest(destination="Tokyo", budget=300, days=3))
+    assert any("budget" in note and "300" in note and "400" in note for note in notes)
+    # Trip length
+    notes = _constraint_changes(previous, TripRequest(destination="Tokyo", budget=400, days=5))
+    assert any("trip length" in note and "5" in note and "3" in note for note in notes)
+    # Dates only (same inclusive length)
+    with_dates = TripRequest(
+        destination="Tokyo", budget=400, start_date=_date(2026, 3, 1), end_date=_date(2026, 3, 3)
+    )
+    notes = _constraint_changes(previous, with_dates)
+    assert any("date" in note.casefold() for note in notes)
+    # Interests
+    notes = _constraint_changes(
+        previous, TripRequest(destination="Tokyo", budget=400, days=3, interests=["food", "art"])
+    )
+    assert any("interests" in note.casefold() and "art" in note for note in notes)
+    # Repeat-avoidance toggle
+    notes = _constraint_changes(
+        previous, TripRequest(destination="Tokyo", budget=400, days=3, avoid_visited=True)
+    )
+    assert any("Repeat avoidance enabled" in note for note in notes)
 
 
