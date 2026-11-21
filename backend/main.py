@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 import queue
 import threading
@@ -1186,6 +1187,18 @@ def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
         updated_plan["currency"] = currency
     if request.mode != "day":
         updated_plan["budget_items"] = budget_items
+    if request.start_date is not None:
+        # Trip start (arrival) date from the plan header's date input. An empty
+        # value clears it; otherwise it must parse as an ISO YYYY-MM-DD date.
+        start_date = request.start_date.strip()
+        if start_date:
+            try:
+                datetime.date.fromisoformat(start_date)
+            except ValueError as error:
+                raise HTTPException(
+                    status_code=422, detail="start_date must be a YYYY-MM-DD date."
+                ) from error
+        updated_plan["start_date"] = start_date or None
 
     # Full day edits (itinerary + budget together) from the merged day editor.
     if request.mode != "category":

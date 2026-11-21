@@ -46,6 +46,32 @@ export function formatPlanDate(value) {
   return `${match[3]} ${MONTHS_SHORT[month - 1]} ${match[1]}`;
 }
 
+// Returns the `dayCount` consecutive ISO dates (YYYY-MM-DD) starting at
+// `startDate`, or [] when the input is not a valid calendar date or the count
+// is not a positive integer. Used for the plan header's weather range: the UI
+// derives the end date from the start date and the day count.
+export function planDateRange(startDate, dayCount) {
+  if (typeof startDate !== "string") return [];
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(startDate.trim());
+  if (!match) return [];
+  const count = Number(dayCount);
+  if (!Number.isInteger(count) || count < 1) return [];
+  // JS Date silently rolls over invalid dates (2026-02-30 → 2026-03-02), so
+  // require the parsed date to round-trip to the same calendar day.
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const from = new Date(Date.UTC(year, month - 1, day));
+  if (from.getUTCFullYear() !== year || from.getUTCMonth() !== month - 1 || from.getUTCDate() !== day) return [];
+  const dates = [];
+  for (let index = 0; index < count; index += 1) {
+    const current = new Date(from.getTime());
+    current.setUTCDate(from.getUTCDate() + index);
+    dates.push(current.toISOString().slice(0, 10));
+  }
+  return dates;
+}
+
 const stringListSignature = (values) =>
   (Array.isArray(values) ? values : []).map((value) => String(value ?? "")).join("␟");
 const placeSignature = (values) =>

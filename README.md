@@ -189,6 +189,10 @@ expected to use concrete labels rather than a vague "other" bucket.
 Edited budgets are persisted with `PUT /api/conversations/{id}/trip-plan` and
 are sent to the model on the next turn as a `plan_context` block, so the agent
 reflects the user's corrected figures without a separate notification message.
+The plan header also has a start-date input (toolbar row, next to the export
+buttons): choosing a date persists `start_date` on the plan, the UI derives the
+end date from the day count, and the per-day weather block fetches forecasts
+for those dates.
 
 The chat model can also call the sub-agent tools `search_stays` (Agent 1),
 `estimate_transport` (Agent 2), and `web_search` during a turn, defined in
