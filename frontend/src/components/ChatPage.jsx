@@ -194,6 +194,7 @@ export function ChatPage({ current, setCurrent, loadConversations, userId }) {
       if (Array.isArray(payload.budget_items)) merged.budget_items = payload.budget_items;
       if ("budget" in payload) merged.budget = payload.budget;
       if (payload.currency) merged.currency = payload.currency;
+      if ("start_date" in payload) merged.start_date = payload.start_date || null;
       return {
         ...previous,
         events: previous.events.map((event) => event === target

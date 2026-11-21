@@ -7,6 +7,7 @@ import {
   formatBudget,
   formatPlanDate,
   markerNumbersForDay,
+  planDateRange,
   planEditChanges,
   planFromEvents,
   routePoints,
@@ -71,6 +72,31 @@ describe("splitLines", () => {
   it("splits, trims, and drops empty lines", () => {
     expect(splitLines("a\n b \n\n c")).toEqual(["a", "b", "c"]);
     expect(splitLines(null)).toEqual([]);
+  });
+});
+
+describe("planDateRange", () => {
+  it("returns one ISO date per day starting at the start date", () => {
+    expect(planDateRange("2026-11-25", 3)).toEqual([
+      "2026-11-25",
+      "2026-11-26",
+      "2026-11-27",
+    ]);
+    expect(planDateRange("2026-11-30", 2)).toEqual(["2026-11-30", "2026-12-01"]);
+  });
+
+  it("rolls across month and year boundaries", () => {
+    expect(planDateRange("2026-12-31", 2)).toEqual(["2026-12-31", "2027-01-01"]);
+    expect(planDateRange("2028-02-28", 2)).toEqual(["2028-02-28", "2028-02-29"]);
+  });
+
+  it("returns [] for invalid or missing input", () => {
+    expect(planDateRange("", 3)).toEqual([]);
+    expect(planDateRange(null, 3)).toEqual([]);
+    expect(planDateRange("25/11/2026", 3)).toEqual([]);
+    expect(planDateRange("2026-02-30", 3)).toEqual([]);
+    expect(planDateRange("2026-11-25", 0)).toEqual([]);
+    expect(planDateRange("2026-11-25", -1)).toEqual([]);
   });
 });
 

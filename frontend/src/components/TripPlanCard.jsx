@@ -4,6 +4,7 @@ import {
   formatBudget,
   formatPlanDate,
   markerNumbersForDay,
+  planDateRange,
   planEditChanges,
   routePoints,
 } from "../lib/planUtils.js";
@@ -38,7 +39,8 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
   const [expandedDays, setExpandedDays] = useState({});
   const allDaysOpen = days.length > 0 && days.every((day) => expandedDays[day.day]);
 
-  // Weather date state - read-only display
+  // Weather date state. The start date is editable from the plan header
+  // (toolbar date input); the end date and per-day dates derive from it.
   const [weatherFromDate, setWeatherFromDate] = useState(() => plan.start_date ? String(plan.start_date) : "");
   const [weatherToDate, setWeatherToDate] = useState("");
   const [weatherData, setWeatherData] = useState({});
@@ -53,14 +55,8 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
 
   // Calculate the covered date range (start date + day count)
   useEffect(() => {
-    if (weatherFromDate && days.length > 0) {
-      const from = new Date(weatherFromDate + "T00:00:00");
-      const to = new Date(from);
-      to.setDate(from.getDate() + days.length - 1);
-      setWeatherToDate(to.toISOString().split("T")[0]);
-    } else {
-      setWeatherToDate("");
-    }
+    const range = planDateRange(weatherFromDate, days.length);
+    setWeatherToDate(range.length ? range[range.length - 1] : "");
   }, [weatherFromDate, days.length]);
 
   // Sync weather from date with plan (also picks up a changed start_date)
@@ -72,17 +68,15 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
 
   // Auto-fetch weather for all days when fromDate changes
   const fetchAllWeather = useCallback(async () => {
-    if (!weatherFromDate || days.length === 0) return;
-    
+    const range = planDateRange(weatherFromDate, days.length);
+    if (range.length === 0) return;
+
     setWeatherLoading(prev => ({ ...prev, global: true }));
     setWeatherError(prev => ({ ...prev, global: "" }));
-    
+
     try {
-      const fromDate = new Date(weatherFromDate + "T00:00:00");
       const dayWeatherPromises = days.map(async (day, index) => {
-        const dayDate = new Date(fromDate);
-        dayDate.setDate(fromDate.getDate() + index);
-        const dateStr = dayDate.toISOString().split("T")[0];
+        const dateStr = range[index];
         
         try {
           const response = await fetch("/agents/weather", {
@@ -170,6 +164,17 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
     setNotice("Day saved. The assistant will use this on your next message.");
     setReconsiderPrompt(reconsiderEnabled && changes.length ? changes : null);
   }
+  function handleStartDateChange(value) {
+    // The end date and per-day weather dates derive from this single input;
+    // persisting it keeps the assistant informed on the next turn.
+    setWeatherFromDate(value);
+    setWeatherData({});
+    setWeatherError({});
+    onSaveBudget?.({ mode: "date", budget: estimate, currency, start_date: value });
+    setNotice(value
+      ? "Start date saved; weather now covers this trip."
+      : "Start date cleared.");
+  }
   function askReconsider() {
     const changes = reconsiderPrompt;
     setReconsiderPrompt(null);
@@ -210,6 +215,15 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
       {weatherLoading?.global && <span className="weather-loading-chip">Loading weather…</span>}
       <button type="button" className="plan-tool" onClick={() => downloadPlanMarkdown(plan)}>⬇ Markdown</button>
       <button type="button" className="plan-tool" onClick={() => printPlanReport(plan)}>🖨 PDF report</button>
+      <label className="plan-date-input" title="Trip start date: sets the covered date range and fetches the per-day weather">
+        <span className="plan-date-label">🗓 Start</span>
+        <input
+          type="date"
+          value={weatherFromDate}
+          onChange={(event) => handleStartDateChange(event.target.value)}
+        />
+        {weatherToDate && <span className="plan-date-to">→ {weatherToDate}</span>}
+      </label>
     </div>
     <div className="trip-plan-content">
       {mapOpen && <TripMap plan={plan} />}

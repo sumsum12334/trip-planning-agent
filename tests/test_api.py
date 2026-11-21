@@ -399,6 +399,29 @@ def test_trip_plan_update_and_validation(client: TestClient) -> None:
     stored_plan = store.get_trip_plan(conversation_id)
     assert stored_plan["budget"] == 350
 
+    # The plan header's start-date input persists an ISO date; the UI uses it
+    # to compute the end date and fetch the per-day weather.
+    dated = client.put(
+        f"/api/conversations/{conversation_id}/trip-plan",
+        json={"start_date": "2026-11-25"},
+    )
+    assert dated.status_code == 200
+    assert store.get_trip_plan(conversation_id)["start_date"] == "2026-11-25"
+
+    bad_date = client.put(
+        f"/api/conversations/{conversation_id}/trip-plan",
+        json={"start_date": "25/11/2026"},
+    )
+    assert bad_date.status_code == 422
+    assert store.get_trip_plan(conversation_id)["start_date"] == "2026-11-25"
+
+    cleared = client.put(
+        f"/api/conversations/{conversation_id}/trip-plan",
+        json={"start_date": ""},
+    )
+    assert cleared.status_code == 200
+    assert store.get_trip_plan(conversation_id)["start_date"] is None
+
     bad_item = client.put(
         f"/api/conversations/{conversation_id}/trip-plan",
         json={"budget_items": [{"category": "", "amount": 5}]},
