@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Optional, TypedDict
 
 import httpx
 
 from langgraph.graph import END, START, StateGraph
+from langsmith import traceable
 
 from agents.coordinator.pois import pack_pois
 from agents.estimate_transport import run as estimate_transport
@@ -431,6 +433,12 @@ def revise(
     return itinerary
 
 
+@traceable(
+    run_type="chain",
+    name="trip_planning_coordinator",
+    project_name=os.getenv("LANGSMITH_PROJECT", "trip-planning-agent"),
+    metadata={"version": "0.1.0"},
+)
 def run(request: TripRequest, *, session_id: str | None = None) -> Itinerary:
     """Run the current coordinator through the LangGraph boundary."""
     trace = start_trace(

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from html.parser import HTMLParser
 from urllib.parse import quote_plus
 
 import httpx
+from langsmith import traceable
 from pydantic import BaseModel
 
 from config.settings import get_settings
@@ -59,6 +61,12 @@ class _DuckDuckGoParser(HTMLParser):
             self._in_snippet = False
 
 
+@traceable(
+    run_type="tool",
+    name="agent_web_search",
+    project_name=os.getenv("LANGSMITH_PROJECT", "trip-planning-agent"),
+    metadata={"agent": "web_search"},
+)
 def run(query: str, *, limit: int = 5) -> list[WebSearchResult]:
     """Search the web when enabled, otherwise return a safe local result."""
     settings = get_settings()
