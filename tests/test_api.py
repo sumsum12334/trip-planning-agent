@@ -247,6 +247,104 @@ def test_chat_stream_stub_and_conversation_persisted(client: TestClient) -> None
     assert roles == ["user", "assistant"]
 
 
+def test_chat_stream_uses_configured_model_before_fallback(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The configured model drives the turn; the multi-agent pipeline only runs
+    when the model finishes a trip request without emitting a plan."""
+    seen: dict[str, object] = {}
+
+    class FakeClient:
+        model = "fake-configured-model"
+        configured = True
+
+        def stream(self, message: str, **kwargs):
+            seen["model_called"] = True
+            seen["tools"] = [
+                tool["function"]["name"] for tool in kwargs.get("tools") or []
+            ]
+            yield {"kind": "content", "text": "Here is my advice."}
+
+    def fake_multi_agent(message, session_id, user_id, trace_context, stream_queue):
+        seen["fallback_message"] = message
+        stream_queue.put(
+            (
+                "event",
+                {
+                    "type": "tool",
+                    "label": "Start trip plan",
+                    "status": "running",
+                    "data": {"tool": "start_trip_plan"},
+                },
+            )
+        )
+        return {"kind": "itinerary", "itinerary": {}, "text": "Fallback plan"}
+
+    monkeypatch.setattr("backend.main.TACCClient", FakeClient)
+    monkeypatch.setattr("backend.main._run_multi_agent_plan", fake_multi_agent)
+
+    with client.stream(
+        "POST",
+        "/api/chat/stream",
+        json={"message": "Plan a trip to Lisbon", "user_id": "api-model-first-user"},
+    ) as response:
+        assert response.status_code == 200
+        frames = _sse_frames(response)
+
+    done = next(frame for frame in frames if frame.get("kind") == "done")
+    assert seen["model_called"] is True
+    assert "start_trip_plan" in seen["tools"]
+    assert seen["fallback_message"] == "Plan a trip to Lisbon"
+    assert done["model"] == "fake-configured-model"
+    assert done["stub"] is False
+    # The model's own prose wins over the fallback summary.
+    assert done["text"] == "Here is my advice."
+    assert any(
+        (frame.get("data") or {}).get("tool") == "start_trip_plan"
+        for frame in frames
+        if frame.get("kind") == "event"
+    )
+
+
+def test_chat_stream_skips_fallback_when_model_emits_plan(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeClient:
+        model = "fake-configured-model"
+        configured = True
+
+        def stream(self, message: str, **kwargs):
+            kwargs["tool_executor"](
+                "start_trip_plan", {"destination": "Kyoto", "budget": 500}
+            )
+            yield {"kind": "content", "text": "Plan created."}
+
+    def unexpected_fallback(*args, **kwargs):
+        raise AssertionError("fallback pipeline must not run when a plan was emitted")
+
+    monkeypatch.setattr("backend.main.TACCClient", FakeClient)
+    monkeypatch.setattr("backend.main._run_multi_agent_plan", unexpected_fallback)
+
+    with client.stream(
+        "POST",
+        "/api/chat/stream",
+        json={"message": "Plan a trip to Kyoto", "user_id": "api-plan-emitted-user"},
+    ) as response:
+        assert response.status_code == 200
+        frames = _sse_frames(response)
+
+    done = next(frame for frame in frames if frame.get("kind") == "done")
+    assert done["model"] == "fake-configured-model"
+    assert done["stub"] is False
+    plans = [
+        frame["data"]["result"]
+        for frame in frames
+        if frame.get("kind") == "event"
+        and (frame.get("data") or {}).get("tool") == "display_trip_plan"
+    ]
+    assert plans and plans[-1]["destination"] == "Kyoto"
+
+
 def test_chat_stop_unknown_request_id(client: TestClient) -> None:
     response = client.post("/api/chat/stop", json={"request_id": "req-does-not-exist"})
     assert response.status_code == 200

@@ -37,6 +37,9 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
   const [mapOpen, setMapOpen] = useState(points.length > 0);
   const [showReferences, setShowReferences] = useState(true);
   const [expandedDays, setExpandedDays] = useState({});
+  // The card only renders once the backend has emitted a real plan (the
+  // `start_trip_plan` tool event), so show that plan immediately. Placeholder
+  // content lives in TripPlanPending and never fakes plan values.
   const allDaysOpen = days.length > 0 && days.every((day) => expandedDays[day.day]);
 
   // Weather date state. The start date is editable from the plan header
@@ -416,4 +419,25 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
       </ul>}
     </div>}
   </div>;
+}
+
+// Blank plan shell shown as soon as a message is sent. It deliberately
+// contains no placeholder values; the real TripPlanCard replaces it when the
+// agent starts calling the trip-plan tools.
+export function TripPlanPending() {
+  return (
+    <div
+      className="trip-plan-card trip-plan-pending"
+      aria-busy="true"
+      aria-label="Trip plan is being prepared"
+    >
+      <div className="trip-plan-header">
+        <div>
+          <div className="question-kicker">YOUR TRIP PLAN</div>
+        </div>
+        <span>✦</span>
+      </div>
+      <div className="trip-plan-blank" aria-hidden="true" />
+    </div>
+  );
 }

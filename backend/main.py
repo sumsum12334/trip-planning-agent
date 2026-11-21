@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import json
 import queue
+import re
 import threading
 import uuid
 from pathlib import Path
@@ -340,6 +341,205 @@ def stop_chat(request: ChatStopRequest) -> dict:
     }
 
 
+def _looks_like_trip_request(message: str) -> bool:
+    """Heuristic: does the user message read like a trip-planning request?"""
+    lowered = message.lower().strip()
+    if not lowered:
+        return False
+    greetings = {"hi", "hello", "hey", "good morning", "good afternoon", "good evening", "yo", "sup"}
+    if lowered in greetings:
+        return False
+    trip_keywords = (
+        "plan", "trip", "visit", "travel", "go to", "flight", "hotel",
+        "stay", "itinerary", "vacation", "holiday", "destination", "tour",
+    )
+    return any(kw in lowered for kw in trip_keywords)
+
+
+_CITY_TOKENS = (
+    "tokyo", "kyoto", "osaka", "paris", "london", "amsterdam", "rome", "berlin",
+    "madrid", "barcelona", "seoul", "beijing", "shanghai", "hong kong", "bangkok",
+    "singapore", "sydney", "mumbai", "delhi", "dubai", "istanbul", "cairo", "rio",
+    "sao paulo", "mexico city", "buenos aires", "moscow", "vienna", "prague",
+    "budapest", "athens", "lisbon", "dublin", "stockholm", "copenhagen", "oslo",
+    "helsinki", "reykjavik", "auckland", "wellington", "cape town", "johannesburg",
+    "nairobi", "lagos", "accra", "casablanca", "tunis", "algiers",
+)
+
+
+def _parse_trip_constraints(message: str) -> dict[str, Any]:
+    """Best-effort extraction of budget, days, and destination from a free-text
+    trip request so the deterministic fallback pipeline uses real constraints
+    instead of dummy ``None`` values (which produced the ``Not specified`` /
+    ``0`` placeholder values in the plan panel).
+
+    Returns a dict with any of ``budget`` (float), ``days`` (int) and
+    ``destination`` (str) that could be confidently extracted.
+    """
+    lowered = message.lower()
+    constraints: dict[str, Any] = {}
+
+    # Budget: "$800", "USD 800", "800 dollars".
+    m = re.search(r"[\$£€]\s*(\d+(?:\.\d+)?)", message)
+    if m:
+        constraints["budget"] = float(m.group(1))
+    else:
+        m = re.search(r"(\d+(?:\.\d+)?)\s*(?:usd|dollars?)\b", lowered)
+        if m:
+            constraints["budget"] = float(m.group(1))
+
+    # Days: "2-day", "2 days", "3 day trip".
+    m = re.search(r"(\d+)\s*[-–]\s*day\b", lowered) or re.search(r"(\d+)\s+days?\b", lowered)
+    if m:
+        constraints["days"] = int(m.group(1))
+
+    # Destination city: "to Tokyo", "trip to Paris", "visit Kyoto", "in Berlin".
+    destination: str | None = None
+    for city in _CITY_TOKENS:
+        patterns = (
+            rf"\bto\s+{city}\b",
+            rf"\btrip\s+to\s+{city}\b",
+            rf"\bvisit\s+{city}\b",
+            rf"\bin\s+{city}\b",
+            rf"\b{city}\s+trip\b",
+            rf"\b{city}\s+vacation\b",
+            rf"\b{city}\s+holiday\b",
+        )
+        if any(re.search(pat, lowered) for pat in patterns):
+            destination = city.title()
+            break
+    if destination:
+        constraints["destination"] = destination
+
+    return constraints
+
+
+def _run_multi_agent_plan(
+    request_message: str,
+    session_id: str,
+    user_id: str,
+    trace_context: dict | None,
+    stream_queue: "queue.Queue[tuple[str, object]]",
+) -> dict | None:
+    """Run the multi-agent coordinator pipeline and stream agent events.
+
+    Emits SSE agent events for Travel History → Stay Search → Coordinator
+    so the Live workflow panel shows each agent working. Returns a dict with
+    the itinerary (or an error) for the ``done`` frame.
+    """
+    from shared.schemas import TripRequest
+
+    constraints = _parse_trip_constraints(request_message)
+
+    def _emit(agent: str, label: str, status: str, detail: str = "", data: dict | None = None) -> None:
+        stream_queue.put(("event", {
+            "type": "agent",
+            "label": label,
+            "status": status,
+            "detail": detail,
+            "data": data or {},
+        }))
+
+    _emit("travel_history", "Travel History Agent", "running", "Checking travel history")
+    _emit("search_stays", "Stay Search Agent", "running", "Searching accommodations")
+    _emit("coordinate", "Coordinator Agent", "running", "Building itinerary")
+
+    trip_request = TripRequest(
+        destination=constraints.get("destination", request_message.strip()),
+        user_id=user_id,
+        budget=constraints.get("budget"),
+        days=constraints.get("days"),
+        interests=[],
+    )
+
+    try:
+        itinerary = coordinate(trip_request, session_id=session_id)
+
+        stay_count = len(itinerary.days[0].stays) if itinerary.days and itinerary.days[0].stays else 0
+        cost = itinerary.total_estimated_cost or 0
+        currency = itinerary.currency or ""
+
+        _emit("travel_history", "Travel History Agent", "completed", "History checked", {})
+        _emit("search_stays", "Stay Search Agent", "completed", f"{stay_count} stays evaluated", {})
+        _emit("coordinate", "Coordinator Agent", "completed", f"Itinerary ready: {currency}{cost}", {})
+
+        # Publish the itinerary as a trip-plan tool event so the browser renders
+        # the focal trip-plan panel immediately instead of waiting for the agent
+        # to call start_trip_plan / set_trip_day during the turn.
+        raw_plan = {
+            "destination": trip_request.destination,
+            "currency": itinerary.currency or "",
+            "budget": trip_request.budget,
+            "start_date": trip_request.start_date.isoformat() if trip_request.start_date else None,
+            "days": [
+                {
+                    "day": day.day_index,
+                    "title": f"Day {day.day_index}",
+                    "activities": list(day.pois or []),
+                    "stays": [
+                        {
+                            "name": stay.name,
+                            "location": stay.location,
+                            "nightly_cost": stay.nightly_cost,
+                            "currency": stay.currency,
+                            "notes": stay.notes,
+                            "coordinates": stay.coordinates,
+                        }
+                        for stay in (day.stays or [])
+                    ],
+                    "transports": [
+                        {
+                            "from_place": leg.from_place,
+                            "to_place": leg.to_place,
+                            "mode": leg.mode,
+                            "duration_minutes": leg.duration_minutes,
+                            "cost": leg.cost,
+                            "currency": leg.currency,
+                            "source_url": leg.source_url,
+                            "notes": leg.notes,
+                        }
+                        for leg in (day.transports or [])
+                    ],
+                    "budget": day.estimated_cost,
+                    "budget_items": [],
+                }
+                for day in itinerary.days
+            ],
+            "notes": list(itinerary.notes or []),
+            "references": [],
+            "budget_items": [],
+            "status": "displayed",
+        }
+        stream_queue.put(
+            ("event", _trip_plan_event("start_trip_plan", assemble_trip_plan(raw_plan)).model_dump())
+        )
+
+        return {
+            "kind": "itinerary",
+            "itinerary": itinerary.model_dump(mode="json"),
+            "text": _format_itinerary_summary(itinerary),
+        }
+    except NoFeasiblePlanError as error:
+        _emit("coordinate", "Coordinator Agent", "error", str(error), {})
+        return {"kind": "error", "message": str(error)}
+
+
+def _format_itinerary_summary(itinerary: Any) -> str:
+    """Build a plain-text summary of the itinerary for the chat bubble."""
+    lines = [f"✈️ {itinerary.request.destination} — {len(itinerary.days)} day(s)"]
+    if itinerary.currency and itinerary.total_estimated_cost is not None:
+        lines.append(f"💰 Estimated total: {itinerary.currency}{itinerary.total_estimated_cost}")
+    for day in itinerary.days:
+        lines.append(f"\n**Day {day.day_index}**")
+        for stay in (day.stays or []):
+            lines.append(f"  🏨 {stay.name} — {stay.nightly_cost} {stay.currency or ''}/night")
+        for leg in (day.transports or []):
+            lines.append(f"  🚗 {leg.mode or 'transport'} — {leg.cost} {leg.currency or ''}")
+    if itinerary.notes:
+        lines.append(f"\n📝 {' | '.join(itinerary.notes[:3])}")
+    return "\n".join(lines)
+
+
 @app.post("/api/chat/stream")
 def chat_stream(request: ChatRequest) -> StreamingResponse:
     store = ConversationStore(get_settings().database_url)
@@ -466,11 +666,19 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
         def save_pause(messages: list[dict[str, Any]], result: dict[str, Any]) -> None:
             stream_queue.put(("pause", (messages, result)))
 
+        # Set as soon as a trip-plan tool produces a plan for the browser. The
+        # deterministic pipeline below only runs when the model never did.
+        plan_emitted = threading.Event()
+
         def run_model() -> None:
             def tool_executor(name: str, arguments: dict[str, Any]) -> Any:
                 if name in TRIP_PLAN_TOOL_NAMES:
                     model_result, ui_plan = _apply_trip_plan_tool(store, conversation_id, name, arguments)
                     if ui_plan is not None:
+                        # Only a plan with a destination is renderable; ignore
+                        # partial reference-only events for the fallback check.
+                        if ui_plan.get("destination"):
+                            plan_emitted.set()
                         stream_queue.put(("event", _trip_plan_event(name, ui_plan).model_dump()))
                     return model_result
                 try:
@@ -562,6 +770,40 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                 else:
                     text_parts.append(delta["text"])
                 yield f"data: {json.dumps({'kind': delta['kind'], 'text': delta['text']})}\n\n"
+            # Fallback: the configured model is the primary planner. If it
+            # answered a trip request without ever emitting a plan through the
+            # trip-plan tools (for example an endpoint without tool support),
+            # run the deterministic multi-agent pipeline so the trip-plan panel
+            # still receives a plan instead of staying blank.
+            if not cancelled and not plan_emitted.is_set() and _looks_like_trip_request(request.message):
+                fallback_queue: queue.Queue[tuple[str, object]] = queue.Queue()
+                try:
+                    fallback = _run_multi_agent_plan(
+                        request.message,
+                        conversation_id,
+                        request.user_id or conversation_id,
+                        trace_context_for(trace),
+                        fallback_queue,
+                    )
+                except Exception as error:  # keep the turn retryable instead of aborting
+                    fallback = {"kind": "error", "message": str(error)}
+                while not fallback_queue.empty():
+                    queued_kind, queued_payload = fallback_queue.get_nowait()
+                    if queued_kind == "event":
+                        yield emit(ChatEvent(**queued_payload))
+                if isinstance(fallback, dict):
+                    if fallback.get("kind") == "itinerary":
+                        if not "".join(text_parts).strip():
+                            text_parts.append(fallback["text"])
+                    elif fallback.get("kind") == "error":
+                        yield emit(
+                            ChatEvent(
+                                type="model",
+                                label="Fallback planner failed",
+                                detail=fallback["message"],
+                                status="error",
+                            )
+                        )
             if cancelled:
                 yield emit(
                     ChatEvent(
@@ -1187,9 +1429,9 @@ def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
         updated_plan["currency"] = currency
     if request.mode != "day":
         updated_plan["budget_items"] = budget_items
+    # Trip start (arrival) date from the plan header's date input. An empty
+    # value clears it; otherwise it must parse as an ISO YYYY-MM-DD date.
     if request.start_date is not None:
-        # Trip start (arrival) date from the plan header's date input. An empty
-        # value clears it; otherwise it must parse as an ISO YYYY-MM-DD date.
         start_date = request.start_date.strip()
         if start_date:
             try:

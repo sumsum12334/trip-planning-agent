@@ -117,6 +117,17 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 .plan-tool{padding:7px 11px;border-radius:9px;border:1px solid #cfdcf3;background:#fff;color:#3f5f95;font-size:12px;font-weight:600}
 .plan-tool:hover{background:#eef4ff;border-color:#a9c4ec}
 .plan-tool.primary{background:#6c63ff;border-color:#6c63ff;color:#fff}
+
+/* Blank trip-plan shell shown from the moment a message is sent until the
+   agent emits the first trip-plan tool event. It contains no placeholder
+   values, only a faint shimmer so the panel reads as loading. */
+.trip-plan-pending{min-height:360px}
+.trip-plan-blank{min-height:260px;margin-top:14px;border-radius:12px;background:linear-gradient(90deg,#f4f7fc 25%,#fbfcfe 50%,#f4f7fc 75%);background-size:200% 100%;animation:shimmer 2s ease-in-out infinite}
+.app[data-color-mode="dark"] .trip-plan-blank{background:linear-gradient(90deg,#141c2b 25%,#1a2436 50%,#141c2b 75%);background-size:200% 100%}
+@keyframes shimmer{
+  0%{background-position:200% 0}
+  100%{background-position:-200% 0}
+}
 .plan-tool.primary:hover{background:#5b52e6}
 .plan-tool:disabled{opacity:.5;cursor:not-allowed}
 .plan-collapse-toggle{margin-left:auto}

@@ -194,6 +194,16 @@ buttons): choosing a date persists `start_date` on the plan, the UI derives the
 end date from the day count, and the per-day weather block fetches forecasts
 for those dates.
 
+The plan panel opens as a blank **YOUR TRIP PLAN** shell the moment a message is
+sent, so no placeholder values (`Not specified`, `DAY 1`, `$0`) ever flash. The
+configured model is the primary planner: it streams the answer and builds the
+plan through the trip-plan tools (`start_trip_plan`, then `set_trip_day` /
+`set_trip_budget` / `set_trip_references`), and the panel fills in part by part
+as each tool event arrives. If the model answers a trip request without calling
+any trip-plan tool (for example an endpoint without tool support), the
+deterministic multi-agent pipeline runs as a fallback and emits the same plan
+events.
+
 The chat model can also call the sub-agent tools `search_stays` (Agent 1),
 `estimate_transport` (Agent 2), and `web_search` during a turn, defined in
 `agents/chat_tools.py`. It can also call `get_weather_forecast` with a location
