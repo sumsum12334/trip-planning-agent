@@ -442,6 +442,67 @@ Relevant for evaluation reproducibility:
   running Postgres on `localhost:5433`; the default is local SQLite, which
   works offline.
 
+## 2.9.1 Model selection and hardware requirements
+
+The evaluation harness and live app depend on the model endpoint's capabilities.
+Reviewers should consider the following before running API-mode evaluation:
+
+**Model selection (via `QWEN_BASE_URL`, `QWEN_MODEL`, `QWEN_API_KEY`)**
+
+- **Context limit:** Trip-planning prompts carry destination, dates, budget,
+  interests, conversation history, and plan context. Models with a small
+  context window may truncate the system prompt or prior turns, causing missing
+  constraints, dropped POIs, or incomplete itineraries. Use a model with a
+  sufficiently large context window (the configured
+  `nvidia/nemotron-3.5-super-vl-120b-a12b` is a VL/reasoning-class model with
+  a large context window).
+- **Reasoning capability:** The coordinator agent asks the model to propose,
+  revise, and note plan changes (e.g., budget cuts, shorter trips). Models
+  without reasoning capability may fail to produce coherent `note_contains`
+  text or may not satisfy revise constraints. API-mode revise cases and
+  fail-closed checks are especially sensitive to this.
+- **Tool calling:** The chat layer can invoke `search_stays`,
+  `estimate_transport`, `web_search`, `get_weather_forecast`, and trip-plan
+  tools (`start_trip_plan`, `set_trip_day`, `set_trip_budget`,
+  `set_trip_references`, `remove_trip_day`, `get_trip_plan`). The endpoint
+  must support OpenAI-compatible function calling. If the model does not
+  support tools, `TACCClient` retries once without tools (logged as
+  "Model server has no tool calling; retrying without tools"), which degrades
+  agent behavior.
+- **Sampling parameters:** `MODEL_MAX_TOKENS`, `MODEL_TEMPERATURE`,
+  `MODEL_TOP_P`, and `MODEL_REASONING_BUDGET` (via `MODEL_ENABLE_THINKING`)
+  affect output length and determinism. Low `max_tokens` can truncate the
+  itinerary before the final `done` event; high temperature increases
+  run-to-run variance in API mode.
+
+**Hardware requirements**
+
+- **Server (backend/frontend):** The artifact itself is a Python FastAPI app
+  and a Node/Vite frontend. It runs on a standard server or laptop with
+  Python 3.11+ and Node.js 18+. No GPU is required on the server because
+  model inference happens on the remote endpoint
+  (`https://integrate.api.nvidia.com/v1`). Memory and CPU needs are modest;
+  the eval runner's stub mode is fully offline and deterministic.
+- **Model provider side:** GPU/vRAM is the provider's responsibility
+  (NVIDIA NIM in the current configuration). Reviewers running API mode
+  depend on the provider's endpoint availability, rate limits, and latency.
+  NVIDIA's free tier has rate limits (e.g., 5 requests/second,
+  10,000 requests/day for Nemotron), which may throttle large eval suites.
+
+**Impact on evaluation results**
+
+- **Stub mode (graded path):** Unaffected by model selection or hardware — it
+  uses offline stub catalogs and is deterministic. This is the reproducible
+  reference and does not require an API key or GPU.
+- **API mode (AI evaluation):** Results (TTFT, TPS, TPOT, token count,
+  LLM-as-a-Judge scores) depend on the selected model and provider hardware.
+  A smaller or non-reasoning model may produce lower judge scores, fail revise
+  constraints, or drop tool calls. Archive each API-mode report
+  (`eval-<timestamp>.json/.csv`) to pin a specific model/hardware combination.
+- **Stub vs API divergence:** Do not compare stub-mode pass/fail counts with
+  API-mode judge scores directly; they measure different things (deterministic
+  constraint checks vs. live model quality).
+
 ## 2.10 Contact / questions
 
 Project-specific questions may be directed to the artifact authors through the
