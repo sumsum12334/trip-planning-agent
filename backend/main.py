@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 import queue
+import re
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -72,6 +75,8 @@ from trip_planning_agent.observability import (
     end_trace,
     start_trace,
     trace_context_for,
+    ls_create_run,
+    ls_update_generation,
 )
 
 app = FastAPI(title="trip-planning-agent", version="0.1.0")
@@ -95,6 +100,65 @@ _LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 # and the model client check the event between deltas.
 
 
+def _plan_has_no_coordinates(plan: dict[str, Any]) -> bool:
+    """True when no part of the plan can be drawn on the route map."""
+    if plan.get("destination_coordinates"):
+        return False
+    airport = plan.get("airport")
+    if isinstance(airport, dict) and airport.get("coordinates"):
+        return False
+    for day in plan.get("days") or []:
+        if not isinstance(day, dict):
+            continue
+        if day.get("coordinates"):
+            return False
+        places = day.get("places") or []
+        if any(isinstance(place, dict) and place.get("coordinates") for place in places):
+            return False
+    return True
+
+
+_geocoder: Any = None
+_geocode_attempts: dict[str, float] = {}
+_geocode_lock = threading.Lock()
+_GEOCODE_RETRY_SECONDS = 600.0
+
+
+def _destination_coordinates(destination: str) -> dict[str, float] | None:
+    """Geocode a destination once per retry window (Nominatim is rate-limited).
+
+    Used only when a plan carries no coordinates at all, so the route map still
+    has a start point. Results are cached by the geocoder for 24 hours; failed
+    attempts back off for ten minutes instead of retrying on every tool call.
+    """
+    key = destination.strip().lower()
+    if not key:
+        return None
+    now = time.monotonic()
+    with _geocode_lock:
+        attempted = _geocode_attempts.get(key)
+        if attempted is not None and now - attempted < _GEOCODE_RETRY_SECONDS:
+            return None
+        _geocode_attempts[key] = now
+    global _geocoder
+    if _geocoder is None:
+        from agents.search_stays.tools import NominatimGeocoder
+
+        _geocoder = NominatimGeocoder()
+    return _geocoder.geocode(destination)
+
+
+def _ensure_destination_coordinates(plan: dict[str, Any]) -> dict[str, Any]:
+    """Fill ``destination_coordinates`` when the plan has no route points."""
+    if not _plan_has_no_coordinates(plan):
+        return plan
+    destination = str(plan.get("destination") or "").strip()
+    coordinates = _destination_coordinates(destination)
+    if not coordinates:
+        return plan
+    return {**plan, "destination_coordinates": coordinates}
+
+
 def _apply_trip_plan_tool(
     store: ConversationStore, conversation_id: str, name: str, arguments: dict[str, Any]
 ) -> tuple[Any, dict[str, Any] | None]:
@@ -111,6 +175,7 @@ def _apply_trip_plan_tool(
     if name == "get_trip_plan":
         # Reading the plan does not change the UI.
         return model_result, None
+    new_plan = _ensure_destination_coordinates(new_plan)
     store.save_trip_plan(conversation_id, new_plan)
     return model_result, assemble_trip_plan(new_plan)
 
@@ -354,6 +419,64 @@ def _looks_like_trip_request(message: str) -> bool:
     return any(kw in lowered for kw in trip_keywords)
 
 
+_CITY_TOKENS = (
+    "tokyo", "kyoto", "osaka", "paris", "london", "amsterdam", "rome", "berlin",
+    "madrid", "barcelona", "seoul", "beijing", "shanghai", "hong kong", "bangkok",
+    "singapore", "sydney", "mumbai", "delhi", "dubai", "istanbul", "cairo", "rio",
+    "sao paulo", "mexico city", "buenos aires", "moscow", "vienna", "prague",
+    "budapest", "athens", "lisbon", "dublin", "stockholm", "copenhagen", "oslo",
+    "helsinki", "reykjavik", "auckland", "wellington", "cape town", "johannesburg",
+    "nairobi", "lagos", "accra", "casablanca", "tunis", "algiers",
+)
+
+
+def _parse_trip_constraints(message: str) -> dict[str, Any]:
+    """Best-effort extraction of budget, days, and destination from a free-text
+    trip request so the deterministic fallback pipeline uses real constraints
+    instead of dummy ``None`` values (which produced the ``Not specified`` /
+    ``0`` placeholder values in the plan panel).
+
+    Returns a dict with any of ``budget`` (float), ``days`` (int) and
+    ``destination`` (str) that could be confidently extracted.
+    """
+    lowered = message.lower()
+    constraints: dict[str, Any] = {}
+
+    # Budget: "$800", "$1,200", "USD 800", "800 dollars".
+    m = re.search(r"[\$£€]\s*(\d[\d,]*(?:\.\d+)?)", message)
+    if m:
+        constraints["budget"] = float(m.group(1).replace(",", ""))
+    else:
+        m = re.search(r"(\d[\d,]*(?:\.\d+)?)\s*(?:usd|dollars?)\b", lowered)
+        if m:
+            constraints["budget"] = float(m.group(1).replace(",", ""))
+
+    # Days: "2-day", "2 days", "3 day trip".
+    m = re.search(r"(\d+)\s*[-–]\s*day\b", lowered) or re.search(r"(\d+)\s+days?\b", lowered)
+    if m:
+        constraints["days"] = int(m.group(1))
+
+    # Destination city: "to Tokyo", "trip to Paris", "visit Kyoto", "in Berlin".
+    destination: str | None = None
+    for city in _CITY_TOKENS:
+        patterns = (
+            rf"\bto\s+{city}\b",
+            rf"\btrip\s+to\s+{city}\b",
+            rf"\bvisit\s+{city}\b",
+            rf"\bin\s+{city}\b",
+            rf"\b{city}\s+trip\b",
+            rf"\b{city}\s+vacation\b",
+            rf"\b{city}\s+holiday\b",
+        )
+        if any(re.search(pat, lowered) for pat in patterns):
+            destination = city.title()
+            break
+    if destination:
+        constraints["destination"] = destination
+
+    return constraints
+
+
 def _run_multi_agent_plan(
     request_message: str,
     session_id: str,
@@ -369,6 +492,8 @@ def _run_multi_agent_plan(
     """
     from shared.schemas import TripRequest
 
+    constraints = _parse_trip_constraints(request_message)
+
     def _emit(agent: str, label: str, status: str, detail: str = "", data: dict | None = None) -> None:
         stream_queue.put(("event", {
             "type": "agent",
@@ -383,10 +508,10 @@ def _run_multi_agent_plan(
     _emit("coordinate", "Coordinator Agent", "running", "Building itinerary")
 
     trip_request = TripRequest(
-        destination=request_message.strip(),
+        destination=constraints.get("destination", request_message.strip()),
         user_id=user_id,
-        budget=None,
-        days=None,
+        budget=constraints.get("budget"),
+        days=constraints.get("days"),
         interests=[],
     )
 
@@ -400,6 +525,57 @@ def _run_multi_agent_plan(
         _emit("travel_history", "Travel History Agent", "completed", "History checked", {})
         _emit("search_stays", "Stay Search Agent", "completed", f"{stay_count} stays evaluated", {})
         _emit("coordinate", "Coordinator Agent", "completed", f"Itinerary ready: {currency}{cost}", {})
+
+        # Publish the itinerary as a trip-plan tool event so the browser renders
+        # the focal trip-plan panel immediately instead of waiting for the agent
+        # to call start_trip_plan / set_trip_day during the turn.
+        raw_plan = {
+            "destination": trip_request.destination,
+            "currency": itinerary.currency or "",
+            "budget": trip_request.budget,
+            "start_date": trip_request.start_date.isoformat() if trip_request.start_date else None,
+            "days": [
+                {
+                    "day": day.day_index,
+                    "title": f"Day {day.day_index}",
+                    "activities": list(day.pois or []),
+                    "stays": [
+                        {
+                            "name": stay.name,
+                            "location": stay.location,
+                            "nightly_cost": stay.nightly_cost,
+                            "currency": stay.currency,
+                            "notes": stay.notes,
+                            "coordinates": stay.coordinates,
+                        }
+                        for stay in (day.stays or [])
+                    ],
+                    "transports": [
+                        {
+                            "from_place": leg.from_place,
+                            "to_place": leg.to_place,
+                            "mode": leg.mode,
+                            "duration_minutes": leg.duration_minutes,
+                            "cost": leg.cost,
+                            "currency": leg.currency,
+                            "source_url": leg.source_url,
+                            "notes": leg.notes,
+                        }
+                        for leg in (day.transports or [])
+                    ],
+                    "budget": day.estimated_cost,
+                    "budget_items": [],
+                }
+                for day in itinerary.days
+            ],
+            "notes": list(itinerary.notes or []),
+            "references": [],
+            "budget_items": [],
+            "status": "displayed",
+        }
+        stream_queue.put(
+            ("event", _trip_plan_event("start_trip_plan", assemble_trip_plan(_ensure_destination_coordinates(raw_plan))).model_dump())
+        )
 
         return {
             "kind": "itinerary",
@@ -444,26 +620,11 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
     memory_user_id = request.user_id or conversation_id
     remembered_places = remember_from_message(memory_user_id, request.message)
     history_store = TravelHistoryStore(get_settings().database_url)
-    # Surface known places from the in-process cache (database only on a cache
-    # miss or after writes). Do not require a history tool call on every plan.
-    known_places = (
-        history_store.list_places(memory_user_id)[:20]
-        if get_settings().enable_travel_history
-        else []
-    )
-    if known_places:
-        prompt = (
-            "Known travel history for this user (already loaded; do not call "
-            "search_travel_history just to re-read this list): "
-            + ", ".join(known_places)
-            + "\n\n"
-            + prompt
-        )
     history_tools = [{
         "type": "function",
         "function": {
             "name": "search_travel_history",
-            "description": "Filter or refresh the user's saved travel history for a destination or place. Use only when known history was not already provided, or a filtered lookup is needed.",
+            "description": "Search the user's saved travel history for a destination or place. For trip-planning requests, call this after the initial itinerary is out to check the planned places against past trips, or whenever a filtered lookup is needed.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -552,19 +713,37 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
         def save_pause(messages: list[dict[str, Any]], result: dict[str, Any]) -> None:
             stream_queue.put(("pause", (messages, result)))
 
+        # Set as soon as a trip-plan tool produces a plan for the browser. The
+        # deterministic pipeline below only runs when the model never did.
+        plan_emitted = threading.Event()
+
         def run_model() -> None:
             def tool_executor(name: str, arguments: dict[str, Any]) -> Any:
+                # Each tool call gets its own LangSmith run (a no-op handle
+                # when LangSmith is disabled), per the tool-calling tracing
+                # introduced on the eval-baseline-vs-proposed branch.
+                ls_run, _ls_run_id = ls_create_run(
+                    name=name,
+                    run_type="tool",
+                    inputs={"arguments": arguments},
+                    tags=["trip-planning-agent", "tool-call", name],
+                )
                 if name in TRIP_PLAN_TOOL_NAMES:
                     model_result, ui_plan = _apply_trip_plan_tool(store, conversation_id, name, arguments)
                     if ui_plan is not None:
+                        # Only a plan with a destination is renderable; ignore
+                        # partial reference-only events for the fallback check.
+                        if ui_plan.get("destination"):
+                            plan_emitted.set()
                         stream_queue.put(("event", _trip_plan_event(name, ui_plan).model_dump()))
+                    ls_update_generation(ls_run, output={"result": model_result})
                     return model_result
                 try:
-                    return execute_history_tool(name, arguments)
+                    result = execute_history_tool(name, arguments)
                 except ValueError as error:
-                    return {"ok": False, "tool": name, "error": str(error)}
-
-            use_multi_agent = _looks_like_trip_request(request.message)
+                    result = {"ok": False, "tool": name, "error": str(error)}
+                ls_update_generation(ls_run, output={"result": result})
+                return result
 
             # Build role-separated conversation messages for the model so that
             # LangSmith traces show clean user input (not mixed with prior model
@@ -574,17 +753,6 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
             if TRIP_PLANNING_SYSTEM_PROMPT:
                 initial_messages.append(
                     {"role": "system", "content": TRIP_PLANNING_SYSTEM_PROMPT}
-                )
-            if known_places:
-                initial_messages.append(
-                    {
-                        "role": "system",
-                        "content": (
-                            "Known travel history for this user (already loaded; do not call "
-                            "search_travel_history just to re-read this list): "
-                            + ", ".join(known_places)
-                        ),
-                    }
                 )
             if plan_context:
                 initial_messages.append(
@@ -597,31 +765,22 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                     initial_messages.append({"role": role, "content": content})
             initial_messages.append({"role": "user", "content": request.message})
 
+
             try:
-                if use_multi_agent:
-                    result = _run_multi_agent_plan(
-                        request.message,
-                        conversation_id,
-                        request.user_id or conversation_id,
-                        trace_context_for(trace),
-                        stream_queue,
-                    )
-                    stream_queue.put(("done", result))
-                else:
-                    for delta in client.stream(
-                        request.message,
-                        system=TRIP_PLANNING_SYSTEM_PROMPT,
-                        initial_messages=initial_messages,
-                        on_event=lambda event: stream_queue.put(("event", event)),
-                        tools=history_tools,
-                        tool_executor=tool_executor,
-                        on_pause=save_pause,
-                        session_id=conversation_id,
-                        trace_context=trace_context_for(trace),
-                        cancel_event=cancel_event,
-                    ):
-                        stream_queue.put(("delta", delta))
-                    stream_queue.put(("done", None))
+                for delta in client.stream(
+                    request.message,
+                    system=TRIP_PLANNING_SYSTEM_PROMPT,
+                    initial_messages=initial_messages,
+                    on_event=lambda event: stream_queue.put(("event", event)),
+                    tools=history_tools,
+                    tool_executor=tool_executor,
+                    on_pause=save_pause,
+                    session_id=conversation_id,
+                    trace_context=trace_context_for(trace),
+                    cancel_event=cancel_event,
+                ):
+                    stream_queue.put(("delta", delta))
+                stream_queue.put(("done", None))
             except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
                 stream_queue.put(("error", error))
 
@@ -653,41 +812,6 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                     continue
                 if kind == "done":
                     cancelled = cancel_event.is_set()
-                    if isinstance(payload, dict):
-                        if payload.get("kind") == "itinerary":
-                            itinerary = payload["itinerary"]
-                            assistant_message = {"role": "assistant", "content": payload["text"]}
-                            conversation_with_response = conversation + [assistant_message]
-                            store.save(
-                                conversation_id,
-                                conversation_with_response,
-                                [event.model_dump() for event in activity],
-                            )
-                            end_trace(trace, output=payload["text"])
-                            trace_finished = True
-                            yield (
-                                f"data: {json.dumps({'kind': 'done', 'text': payload['text'], 'reasoning': '', 'model': 'coordinator-multi-agent', 'stub': False, 'conversation_id': conversation_id, 'pending_question': None, 'events': [event.model_dump() for event in activity], 'itinerary': itinerary})}\n\n"
-                            )
-                            return
-                        if payload.get("kind") == "error":
-                            yield emit(
-                                ChatEvent(
-                                    type="model",
-                                    label="Multi-agent plan failed",
-                                    detail=payload["message"],
-                                    status="error",
-                                )
-                            )
-                            end_trace(
-                                trace,
-                                output={"error": payload["message"]},
-                                error=ValueError(payload["message"]),
-                            )
-                            trace_finished = True
-                            yield (
-                                f"data: {json.dumps({'kind': 'done', 'text': '', 'reasoning': '', 'model': 'coordinator-multi-agent', 'stub': False, 'conversation_id': conversation_id, 'pending_question': None, 'events': [event.model_dump() for event in activity]})}\n\n"
-                            )
-                            return
                     break
                 delta = payload
                 if delta["kind"] == "reasoning":
@@ -695,6 +819,40 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                 else:
                     text_parts.append(delta["text"])
                 yield f"data: {json.dumps({'kind': delta['kind'], 'text': delta['text']})}\n\n"
+            # Fallback: the configured model is the primary planner. If it
+            # answered a trip request without ever emitting a plan through the
+            # trip-plan tools (for example an endpoint without tool support),
+            # run the deterministic multi-agent pipeline so the trip-plan panel
+            # still receives a plan instead of staying blank.
+            if not cancelled and not plan_emitted.is_set() and _looks_like_trip_request(request.message):
+                fallback_queue: queue.Queue[tuple[str, object]] = queue.Queue()
+                try:
+                    fallback = _run_multi_agent_plan(
+                        request.message,
+                        conversation_id,
+                        request.user_id or conversation_id,
+                        trace_context_for(trace),
+                        fallback_queue,
+                    )
+                except Exception as error:  # keep the turn retryable instead of aborting
+                    fallback = {"kind": "error", "message": str(error)}
+                while not fallback_queue.empty():
+                    queued_kind, queued_payload = fallback_queue.get_nowait()
+                    if queued_kind == "event":
+                        yield emit(ChatEvent(**queued_payload))
+                if isinstance(fallback, dict):
+                    if fallback.get("kind") == "itinerary":
+                        if not "".join(text_parts).strip():
+                            text_parts.append(fallback["text"])
+                    elif fallback.get("kind") == "error":
+                        yield emit(
+                            ChatEvent(
+                                type="model",
+                                label="Fallback planner failed",
+                                detail=fallback["message"],
+                                status="error",
+                            )
+                        )
             if cancelled:
                 yield emit(
                     ChatEvent(
@@ -839,7 +997,7 @@ def _prepare_question_continuation(request: ChatRequest) -> dict[str, Any]:
         "type": "function",
         "function": {
             "name": "search_travel_history",
-            "description": "Filter or refresh the user's saved travel history for a destination or place. Use only when known history was not already provided, or a filtered lookup is needed.",
+            "description": "Search the user's saved travel history for a destination or place. For trip-planning requests, call this after the initial itinerary is out to check the planned places against past trips, or whenever a filtered lookup is needed.",
             "parameters": {
                 "type": "object",
                 "properties": {"query": {"type": "string"}},
@@ -1320,6 +1478,18 @@ def update_trip_plan(conversation_id: str, request: TripPlanUpdate) -> dict:
         updated_plan["currency"] = currency
     if request.mode != "day":
         updated_plan["budget_items"] = budget_items
+    # Trip start (arrival) date from the plan header's date input. An empty
+    # value clears it; otherwise it must parse as an ISO YYYY-MM-DD date.
+    if request.start_date is not None:
+        start_date = request.start_date.strip()
+        if start_date:
+            try:
+                datetime.date.fromisoformat(start_date)
+            except ValueError as error:
+                raise HTTPException(
+                    status_code=422, detail="start_date must be a YYYY-MM-DD date."
+                ) from error
+        updated_plan["start_date"] = start_date or None
 
     # Full day edits (itinerary + budget together) from the merged day editor.
     if request.mode != "category":

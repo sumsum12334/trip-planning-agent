@@ -29,7 +29,9 @@ def _langfuse_enabled(settings: Settings) -> bool:
 
 
 def _langsmith_enabled(settings: Settings) -> bool:
-    return bool(settings.langsmith_api_key)
+    # getattr keeps settings-like stand-ins (tests, callers with the older
+    # Settings shape) working when the LangSmith fields are absent.
+    return bool(getattr(settings, "langsmith_api_key", ""))
 
 
 def _langfuse_client(settings: Settings) -> Optional[Any]:
@@ -413,12 +415,25 @@ def ls_update_generation(
 ) -> None:
     """Update a LangSmith LLM run output.
 
-    Note: LangSmith's update_run() can only set outputs once, so we only
-    call it from ls_finish_generation(). This function is kept for API
-    compatibility but does not make an API call.
+    Calls LangSmith's update_run() to set outputs and end_time on the run.
     """
     if run is None:
         return
+    try:
+        ls_client = getattr(run, "_langsmith_client", None)
+        run_id = str(getattr(run, "_langsmith_run_id", ""))
+        if ls_client is not None and run_id:
+            ls_client.update_run(
+                run_id=run_id,
+                outputs={"output": output} if output is not None else {},
+                error=str(error) if error else None,
+                end_time=datetime.now(timezone.utc),
+                first_token_time=first_token_time,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
+    except Exception:
+        logger.exception("Could not update LangSmith model tracking.")
 
 
 def finish_generation(
@@ -469,22 +484,52 @@ def update_generation(
     if observation is None:
         return
     try:
-        observation.update(
-            output=output,
-            level="ERROR" if error else "DEFAULT",
-            status_message=str(error) if error else None,
-        )
+        if hasattr(observation, "update"):
+            observation.update(
+                output=output,
+                level="ERROR" if error else "DEFAULT",
+                status_message=str(error) if error else None,
+            )
     except Exception:
         logger.exception("Could not update Langfuse model tracking.")
-    # Also update the LangSmith run attached to this observation.
-    ls_run_id = getattr(observation, "_langsmith_run_id", None)
-    ls_client = getattr(observation, "_langsmith_client", None)
-    if ls_client is not None and ls_run_id:
-        ls_update_generation(
-            observation,
-            output=output,
-            error=error,
-            first_token_time=first_token_time,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
+
+
+def ls_create_run(
+    name: str,
+    *,
+    run_type: str = "tool",
+    inputs: dict[str, Any] | None = None,
+    project_name: str | None = None,
+    tags: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> tuple[Any, str] | tuple[None, None]:
+    """Create a LangSmith run and return (client, run_id) for later completion.
+
+    LangSmith's create_run() returns None by default (fire-and-forget), so we
+    generate our own UUID and store the client + run_id on a SimpleNamespace
+    for later use with ls_update_generation().
+    """
+    settings = get_settings()
+    ls_client = _langsmith_client(settings)
+    if ls_client is None:
+        return None, None
+
+    run_id = str(uuid.uuid4())
+    try:
+        ls_client.create_run(
+            id=run_id,
+            name=name,
+            run_type=run_type,
+            inputs=inputs or {},
+            project_name=project_name or settings.langsmith_project,
+            tags=tags or [],
+            metadata=metadata or {},
         )
+    except Exception:
+        logger.exception("LangSmith create_run failed for %s", name)
+        return None, None
+
+    return SimpleNamespace(
+        _langsmith_client=ls_client,
+        _langsmith_run_id=run_id,
+    ), run_id

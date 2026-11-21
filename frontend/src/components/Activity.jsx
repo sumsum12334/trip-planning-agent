@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useMemo } from "react";
 import { Box, Button, Chip, Dialog, DialogTitle, DialogContent, Paper, IconButton, Typography } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
 import { eventIcon, formatBudget } from "../lib/planUtils.js";
-import { agentForEvent, currentAgent, mergeToolEvents } from "../lib/workflow.js";
+import { agentForEvent, currentAgent, workflowCards } from "../lib/workflow.js";
 
 const AGENT_COLORS = {
   "Agent 1 · search_stays": { light: "#e8f5e9", dark: "#1b5e20", border: "#81c784", text: "#2e7d32" },
@@ -73,6 +73,9 @@ function EventDetailDialog({ event, agent, open, onClose }) {
   const hasArgs = event.data?.arguments;
   const hasResult = event.data?.result;
   const isStaysResult = event.data?.tool === "search_stays" && Array.isArray(event.data?.result?.stays);
+  // For an answered question the choice is rendered as its own block below the
+  // Result (the generic detail line is suppressed so it is not shown twice).
+  const answeredQuestion = event.data?.tool === "ask_user_question" && Boolean(event.data?.selected);
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth PaperProps={{ elevation: 8 }}>
@@ -90,7 +93,7 @@ function EventDetailDialog({ event, agent, open, onClose }) {
         </IconButton>
       </DialogTitle>
       <DialogContent sx={{ p: 3, maxHeight: "60vh", overflow: "auto" }}>
-        {event.detail && (
+        {event.detail && !answeredQuestion && (
           <Typography variant="body2" color="textSecondary" gutterBottom>{event.detail}</Typography>
         )}
         {event.timestamp && (
@@ -113,6 +116,16 @@ function EventDetailDialog({ event, agent, open, onClose }) {
             <Paper variant="outlined" sx={{ p: 2, background: "#fafafa", maxHeight: "30vh", overflow: "auto" }}>
               <pre style={{ margin: 0, fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                 {formatToolResult(event.data.result)}
+              </pre>
+            </Paper>
+          </Box>
+        )}
+        {answeredQuestion && (
+          <Box sx={{ mt: 3 }}>
+            <Typography variant="subtitle2" color={color.text} gutterBottom fontWeight={700}>Answer selected</Typography>
+            <Paper variant="outlined" sx={{ p: 2, background: "#fafafa" }}>
+              <pre style={{ margin: 0, fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                {event.data.selected}
               </pre>
             </Paper>
           </Box>
@@ -145,9 +158,10 @@ export function Activity({ events }) {
 
   const working = currentAgent(events);
 
-  // One card per tool call: "Calling X" is merged with its matching
-  // "X result received" event; everything else passes through as-is.
-  const cards = useMemo(() => mergeToolEvents(events), [events]);
+  // One card per workflow step: "Calling X" is merged with its matching
+  // "X result received" event, and the plan panel's display_trip_plan mirror
+  // events are left out so the timeline shows the actual workflow only.
+  const cards = useMemo(() => workflowCards(events), [events]);
 
   // Compute agent handovers for the timeline
   const rows = useMemo(() => {
