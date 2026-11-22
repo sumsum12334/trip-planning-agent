@@ -76,3 +76,5 @@ recordings/
 
 # Local helper scripts (per review: scripts folder stays uncommitted)
 scripts/
+
+AGENTS.md
