@@ -15,6 +15,7 @@ from agents.coordinator.pois import pack_pois
 from agents.estimate_transport import run as estimate_transport
 from agents.search_stays import run as search_stays
 from agents.travel_history import run as travel_history
+from agents.weather.agent import run as weather_run
 from config.settings import get_settings
 from shared.schemas import DayPlan, Itinerary, StayCandidate, TransportLeg, TripRequest
 from shared.prompts import TRIP_PLANNING_SYSTEM_PROMPT
@@ -36,6 +37,7 @@ class CoordinatorState(TypedDict, total=False):
     trace_context: dict[str, str] | None
     visited: list[str]
     stays: list[Any]
+    weather: dict[str, Any] | None
     itinerary: Itinerary
 
 
@@ -251,6 +253,24 @@ def _search_stays_node(state: CoordinatorState) -> CoordinatorState:
     return {"stays": search_stays(request, excluded_locations=excluded)}
 
 
+def _weather_node(state: CoordinatorState) -> CoordinatorState:
+    """Run weather agent and place forecast in graph state."""
+    request = state["request"]
+    settings = get_settings()
+    if settings.weather_mode == "stub":
+        return {"weather": {"mode": "stub", "note": "Weather in stub mode — set WEATHER_MODE=open-meteo for live forecasts"}}
+    try:
+        weather_data = weather_run(
+            request.destination,
+            request.start_date.isoformat() if request.start_date else None,
+            request.end_date.isoformat() if request.end_date else None,
+        )
+        return {"weather": weather_data}
+    except Exception as error:  # noqa: BLE001 — weather must not abort the plan
+        logger.exception("Weather fetch failed for %r", request.destination)
+        return {"weather": {"mode": "error", "note": f"Weather unavailable: {type(error).__name__}"}}
+
+
 def _coordinate_node(state: CoordinatorState) -> CoordinatorState:
     request = state["request"]
     settings = get_settings()
@@ -258,12 +278,23 @@ def _coordinate_node(state: CoordinatorState) -> CoordinatorState:
 
     visited = state.get("visited", [])
     stays = state.get("stays", [])
+    weather = state.get("weather")
     used_history = settings.enable_travel_history
     notes: list[str] = []
     if settings.baseline_a:
         notes.append("Baseline A: Agent 4 disabled (ENABLE_TRAVEL_HISTORY=0)")
     if used_history:
         notes.append(f"Travel history entries considered: {len(visited)}")
+    if weather:
+        condition = weather.get("condition", "")
+        temp_c = weather.get("temperature_c")
+        temp_f = weather.get("temperature_f")
+        mode = weather.get("mode", "unknown")
+        temp_text = f"{temp_c}°C ({temp_f}°F)" if temp_c is not None else ""
+        if condition:
+            notes.append(f"Weather at {request.destination}: {condition}{f', {temp_text}' if temp_text else ''} (mode: {mode})")
+        elif weather.get("note"):
+            notes.append(f"Weather at {request.destination}: {weather['note']} (mode: {mode})")
 
     # Filter out provider error stays (no cost data) so they don't break the plan
     valid_stays = [
@@ -301,10 +332,12 @@ def _coordinate_node(state: CoordinatorState) -> CoordinatorState:
 _graph = StateGraph(CoordinatorState)
 _graph.add_node("travel_history", _travel_history_node)
 _graph.add_node("search_stays", _search_stays_node)
+_graph.add_node("weather", _weather_node)
 _graph.add_node("coordinate", _coordinate_node)
 _graph.add_edge(START, "travel_history")
 _graph.add_edge("travel_history", "search_stays")
-_graph.add_edge("search_stays", "coordinate")
+_graph.add_edge("search_stays", "weather")
+_graph.add_edge("weather", "coordinate")
 _graph.add_edge("coordinate", END)
 _coordinator_graph = _graph.compile()
 

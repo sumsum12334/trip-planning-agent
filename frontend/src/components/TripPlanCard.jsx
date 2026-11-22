@@ -53,7 +53,12 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
 
   // Weather date state. The start date is editable from the plan header
   // (toolbar date input); the end date and per-day dates derive from it.
-  const [weatherFromDate, setWeatherFromDate] = useState(() => plan.start_date ? String(plan.start_date) : "");
+  // Default to tomorrow when the plan has no start date so weather fetches
+  // and displays automatically instead of requiring a manual date pick.
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowIso = tomorrow.toISOString().slice(0, 10);
+  const [weatherFromDate, setWeatherFromDate] = useState(() => plan.start_date ? String(plan.start_date) : tomorrowIso);
   const [weatherToDate, setWeatherToDate] = useState("");
   const [weatherData, setWeatherData] = useState({});
   const [weatherLoading, setWeatherLoading] = useState({});

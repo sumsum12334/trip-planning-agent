@@ -1252,6 +1252,20 @@ def _get_provider(mode: str) -> Any:
         return provider
 
 
+def _clean_destination_for_api(destination: str) -> str:
+    """Strip country/region suffixes that external stay APIs don't accept.
+
+    The model may emit destinations like ``"Tokyo, Japan"`` or ``"Paris, France"``,
+    but OBO Travel (and most stay APIs) expect just the city name. Remove
+    everything after the first comma and trim whitespace.
+    """
+    if not destination:
+        return destination
+    # Take only the part before the first comma
+    city = destination.split(",")[0].strip()
+    return city if city else destination
+
+
 def _search_api(
     destination: str,
     budget: Optional[float],
@@ -1278,7 +1292,7 @@ def _search_api(
         ]
     try:
         candidates = provider.search(
-            destination=destination,
+            destination=_clean_destination_for_api(destination),
             budget=budget,
             days=days,
             interests=interests,
