@@ -273,7 +273,6 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
                     title={dayMarkerNames.length ? `Map markers ${formatMarkerRanges(dayMarkers)}: ${dayMarkerNames.join(", ")}` : "Map reference"}
                   >
                     <span className="day-map-ref-range">🗺 {formatMarkerRanges(dayMarkers)}</span>
-                    {dayMarkerNames.length > 0 && <span className="day-map-ref-places">{dayMarkerNames.join(" · ")}</span>}
                   </span>
                 )}
                 {!isEditing && <button type="button" className="plan-tool" onClick={() => { setEditingBudget(false); setEditingDay(day.day); setExpandedDays((previous) => ({ ...previous, [day.day]: true })); setNotice(""); setReconsiderPrompt(null); }}>Edit</button>}
