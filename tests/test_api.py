@@ -306,6 +306,61 @@ def test_chat_stream_uses_configured_model_before_fallback(
     )
 
 
+def test_chat_stream_skips_fallback_when_model_asks_a_question(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A clarification turn is intentionally planless: the deterministic
+    fallback must not invent a dummy plan while the question waits."""
+    seen: dict[str, object] = {}
+
+    class FakeQuestionClient:
+        model = "fake-configured-model"
+        configured = True
+
+        def stream(self, message: str, **kwargs):
+            seen["model_called"] = True
+            result = {
+                "question": "Which airport do you fly into?",
+                "options": ["Fiumicino (FCO)", "Ciampino (CIA)"],
+                "status": "awaiting_user",
+            }
+            # Mirror TACCClient: run the tool, then pause and end the turn.
+            kwargs["tool_executor"](
+                "ask_user_question",
+                {"question": result["question"], "options": result["options"]},
+            )
+            kwargs["on_pause"](
+                [{"role": "user", "content": message}], result
+            )
+            yield {"kind": "content", "text": ""}
+
+    def unexpected_fallback(*args, **kwargs):
+        raise AssertionError("fallback must not run when a question is pending")
+
+    monkeypatch.setattr("backend.main.TACCClient", FakeQuestionClient)
+    monkeypatch.setattr("backend.main._run_multi_agent_plan", unexpected_fallback)
+
+    with client.stream(
+        "POST",
+        "/api/chat/stream",
+        json={"message": "Plan a trip to Rome", "user_id": "api-question-user"},
+    ) as response:
+        assert response.status_code == 200
+        frames = _sse_frames(response)
+
+    assert seen["model_called"] is True
+    done = next(frame for frame in frames if frame.get("kind") == "done")
+    assert done["pending_question"] is not None
+    assert done["pending_question"]["question"] == "Which airport do you fly into?"
+    # No trip-plan event may reach the UI for a question-only turn.
+    assert not [
+        frame
+        for frame in frames
+        if frame.get("kind") == "event"
+        and (frame.get("data") or {}).get("tool") == "display_trip_plan"
+    ]
+
+
 def test_chat_stream_skips_fallback_when_model_emits_plan(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

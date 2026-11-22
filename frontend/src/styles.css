@@ -249,7 +249,10 @@ input:focus, textarea:focus, .MuiInputBase-root:focus, .MuiInputBase-root.Mui-fo
 
 /* Day/map cross-references */
 .trip-day-head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
-.day-map-ref{flex:0 0 auto;padding:2px 7px;border-radius:999px;background:#e8f0ff;color:#3f6fc4;font-size:10px;font-weight:700;white-space:nowrap}
+/* Two-row map reference: the marker range ("2-4, 7") on top, the day's place
+   names underneath (truncated; the full list lives in the title tooltip). */
+.day-map-ref{flex:0 0 auto;display:flex;flex-direction:column;gap:1px;padding:3px 9px;border-radius:10px;background:#e8f0ff;color:#3f6fc4;font-size:10px;font-weight:700;max-width:230px}
+.day-map-ref-range{white-space:nowrap}
 .place-marker-ref{display:inline-grid;place-items:center;width:15px;height:15px;margin-right:4px;border-radius:50%;background:#3b5ecb;color:#fff;font-size:9px;font-weight:700;vertical-align:middle}
 .app[data-color-mode="dark"] .place-marker-ref{background:#9db8ff;color:#17233d}
 .app[data-color-mode="dark"] .day-map-ref{background:rgba(106,168,255,0.18);color:#9db8ff}

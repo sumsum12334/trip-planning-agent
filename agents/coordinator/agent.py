@@ -113,18 +113,15 @@ def render_days(
 ) -> list[DayPlan]:
     """Emit one DayPlan per requested day, charging one night on each day.
 
-    Cycles through available stays so each day gets a different accommodation
-    with its own coordinates for the map.
+    All days share the single chosen stay; its coordinates anchor the map.
     """
     packed = pois_by_day or []
+    stay = _chosen_stay(stays)
     days: list[DayPlan] = []
-    stay_count = len(stays)
     for index in range(1, trip_length(request) + 1):
         transports = [transport] if index == 1 else []
         day_places = packed[index - 1] if index - 1 < len(packed) else []
-        # Cycle through stays: day 1 -> stays[0], day 2 -> stays[1], etc.
-        stay = stays[(index - 1) % stay_count] if stay_count else None
-        # Use stay coordinates as day coordinates for the map
+        # Use the stay coordinates as the day coordinates for the map
         day_coordinates = stay.coordinates if stay and stay.coordinates else None
         # Build places: POI places from pack_pois + stay as a place
         places: list[dict] = list(day_places)
@@ -155,10 +152,11 @@ def render_itinerary(
     used_history: bool,
     notes: list[str],
 ) -> Itinerary:
-    """Render a complete itinerary with all available stays.
+    """Render a complete itinerary around one chosen stay.
 
-    Cycles through stays per day so each day gets a different accommodation
-    with its own coordinates for the map.
+    The chosen stay is the highest-rated candidate; ``revise_itinerary`` may
+    later step down to a cheaper one. The stay coordinates (and the arrival
+    airport) feed the map fields on the itinerary.
     """
     stay = _chosen_stay(stays)
     transport = _arrival_transport(request, stay)
@@ -170,8 +168,8 @@ def render_itinerary(
         excluded=excluded,
     )
     days = render_days(request, stays, transport, packed)
-    currency = _components_currency(stays, [transport])
-    
+    currency = _components_currency([stay] if stay else [], [transport])
+
     # Build airport info with coordinates for the map
     airport_info = None
     if transport and transport.from_place:
@@ -179,7 +177,7 @@ def render_itinerary(
             "name": transport.from_place,
             "coordinates": None,  # Could be geocoded later
         }
-    
+
     # Destination coordinates from the chosen stay (or first stay with coords)
     dest_coords = stay.coordinates if stay and stay.coordinates else None
     if not dest_coords:
@@ -187,7 +185,7 @@ def render_itinerary(
             if s.coordinates:
                 dest_coords = s.coordinates
                 break
-    
+
     return Itinerary(
         request=request,
         days=days,

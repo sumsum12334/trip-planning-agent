@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from config.settings import get_settings
+
 # City catalogs: (name, interest tags, lat, lng). Tags are lowercase and optional.
 # Fallback when web search is disabled or unavailable.
 _CITY_POIS: dict[str, list[tuple[str, tuple[str, ...], float, float]]] = {
@@ -88,38 +90,43 @@ def pack_pois(
     Returns a list of lists of place dicts with ``name`` and ``coordinates``
     so the map can render each stop.
     """
-    # Try dynamic web search first
-    try:
-        from agents.web_search import run as web_search
-        from agents.search_stays.tools import NominatimGeocoder
+    # Dynamic web search only when explicitly enabled: in stub mode the
+    # placeholder result would otherwise take over the deterministic catalog
+    # that tests and the evaluation harness rely on.
+    if get_settings().web_search_mode == "duckduckgo":
+        try:
+            from agents.web_search import run as web_search
+            from agents.search_stays.tools import NominatimGeocoder
 
-        web_results = web_search(f"top tourist attractions {destination}", limit=days * per_day)
-        if web_results:
-            geocoder = NominatimGeocoder()
-            dynamic_places: list[list[dict]] = [[] for _ in range(max(days, 1))]
-            cursor = 0
-            for result in web_results:
-                coords = None
-                try:
-                    coords = geocoder.geocode(result.title)
-                except Exception:
+            web_results = web_search(
+                f"top tourist attractions {destination}", limit=days * per_day
+            )
+            if web_results:
+                geocoder = NominatimGeocoder()
+                dynamic_places: list[list[dict]] = [[] for _ in range(max(days, 1))]
+                cursor = 0
+                for result in web_results:
                     coords = None
-                place = {
-                    "name": result.title,
-                    "coordinates": coords,
-                    "url": result.url,
-                    "snippet": result.snippet,
-                }
-                dynamic_places[cursor % max(days, 1)].append(place)
-                cursor += 1
-            # Trim empty days
-            dynamic_places = [d for d in dynamic_places if d]
-            while len(dynamic_places) < max(days, 1):
-                dynamic_places.append([])
-            return dynamic_places[: max(days, 1)]
-    except Exception:
-        # Web search unavailable — fall through to stub catalog
-        pass
+                    try:
+                        coords = geocoder.geocode(result.title)
+                    except Exception:
+                        coords = None
+                    place = {
+                        "name": result.title,
+                        "coordinates": coords,
+                        "url": result.url,
+                        "snippet": result.snippet,
+                    }
+                    dynamic_places[cursor % max(days, 1)].append(place)
+                    cursor += 1
+                # Trim empty days
+                dynamic_places = [d for d in dynamic_places if d]
+                while len(dynamic_places) < max(days, 1):
+                    dynamic_places.append([])
+                return dynamic_places[: max(days, 1)]
+        except Exception:
+            # Web search unavailable — fall through to stub catalog
+            pass
 
     # Fallback: stub catalog
     length = max(days, 1)
