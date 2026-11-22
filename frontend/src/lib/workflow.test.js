@@ -175,18 +175,19 @@ describe("workflowState", () => {
   });
 
   it("reports Ready after a fallback-pipeline turn whose plain agent runs completed", () => {
-    // Regression: the fallback pipeline's "Travel History Agent" / "Stay
-    // Search Agent" / "Coordinator Agent" events stayed running in the raw
-    // list after their same-label completions, so the status bar hung on
-    // "Building the itinerary" once the turn had finished.
+    // Regression: the fallback pipeline's plain "… Agent" events (including
+    // Transport Estimate Agent) stayed running in the raw list after their
+    // same-label completions, so the status bar hung once the turn finished.
     const events = [
       { type: "agent", label: "Coordinator agent started", status: "running" },
       { type: "agent", label: "Travel History Agent", status: "running" },
       { type: "agent", label: "Stay Search Agent", status: "running" },
+      { type: "agent", label: "Transport Estimate Agent", status: "running" },
       { type: "agent", label: "Coordinator Agent", status: "running" },
       { type: "tool", label: "Trip plan updated (start_trip_plan)", status: "completed", data: { tool: "display_trip_plan", result: {} } },
       { type: "agent", label: "Travel History Agent", status: "completed" },
       { type: "agent", label: "Stay Search Agent", status: "completed" },
+      { type: "agent", label: "Transport Estimate Agent", status: "completed" },
       { type: "agent", label: "Coordinator Agent", status: "completed" },
       { type: "agent", label: "Coordinator agent completed", status: "completed" },
     ];
@@ -496,19 +497,22 @@ describe("mergeToolEvents: agent run pairs", () => {
   it("pairs the fallback pipeline's plain-label agent runs by label", () => {
     // The deterministic fallback emits "… Agent" running/completed pairs with
     // no "started" suffix; interleaved, they must not steal each other's
-    // close event.
+    // close event. Any agent label pairs (no hardcoded list).
     const cards = mergeToolEvents([
       { type: "agent", label: "Travel History Agent", status: "running" },
       { type: "agent", label: "Stay Search Agent", status: "running" },
+      { type: "agent", label: "Transport Estimate Agent", status: "running" },
       { type: "agent", label: "Coordinator Agent", status: "running" },
       { type: "agent", label: "Travel History Agent", status: "completed" },
       { type: "agent", label: "Stay Search Agent", status: "completed" },
+      { type: "agent", label: "Transport Estimate Agent", status: "completed" },
       { type: "agent", label: "Coordinator Agent", status: "completed" },
     ]);
-    expect(cards).toHaveLength(3);
+    expect(cards).toHaveLength(4);
     expect(cards.map((card) => card.label)).toEqual([
       "Travel History Agent",
       "Stay Search Agent",
+      "Transport Estimate Agent",
       "Coordinator Agent",
     ]);
     expect(cards.every((card) => card.status === "completed")).toBe(true);

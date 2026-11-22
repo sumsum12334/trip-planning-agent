@@ -132,24 +132,14 @@ const isModelRequestOpen = (event) =>
 const isModelResponseClose = (event) =>
   event?.type === "model" && event.status !== "running" && MODEL_RESPONSE_LABELS.has(event.label);
 
-// The deterministic fallback pipeline emits plain "… Agent" running/completed
-// pairs (no "started" suffix); pair them like the generic agent runs so a
-// completed fallback step cannot leave a stale running event behind.
-const AGENT_RUN_PLAIN_LABELS = new Set([
-  "Travel History Agent",
-  "Stay Search Agent",
-  "Coordinator Agent",
-]);
-const isAgentRunOpen = (event) =>
-  event?.type === "agent" &&
-  event.status === "running" &&
-  (/ started$/i.test(event.label || "") || AGENT_RUN_PLAIN_LABELS.has(event.label || ""));
-const isAgentRunClose = (event) =>
-  event?.type === "agent" &&
-  event.status !== "running" &&
-  (/ (completed|failed)$/i.test(event.label || "") ||
-    event.label === "Stopped by user" ||
-    AGENT_RUN_PLAIN_LABELS.has(event.label || ""));
+// Any agent run opens on a running agent event and closes when a later event
+// with the same base label reaches a terminal status. Base-label pairing
+// covers both the chat flow's "… started/completed/failed" pairs and the
+// deterministic fallback pipeline's plain "… Agent" pairs (Travel History
+// Agent, Stay Search Agent, Transport Estimate Agent, Coordinator Agent, …)
+// without maintaining a hardcoded label list.
+const isAgentRunOpen = (event) => event?.type === "agent" && event.status === "running";
+const isAgentRunClose = (event) => event?.type === "agent" && event.status !== "running";
 // Pair key: the run label without its started/completed/failed suffix, so
 // "Coordinator agent started" and "Coordinator agent completed" share a key.
 const agentRunKey = (label) =>

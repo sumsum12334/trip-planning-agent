@@ -1011,8 +1011,15 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
             # answered a trip request without ever emitting a plan through the
             # trip-plan tools (for example an endpoint without tool support),
             # run the deterministic multi-agent pipeline so the trip-plan panel
-            # still receives a plan instead of staying blank.
-            if not cancelled and not plan_emitted.is_set() and _looks_like_trip_request(request.message):
+            # still receives a plan instead of staying blank. When the model
+            # asked a clarification question, the turn is intentionally planless
+            # — do not invent a dummy plan the user has not answered for yet.
+            if (
+                not cancelled
+                and pending_question is None
+                and not plan_emitted.is_set()
+                and _looks_like_trip_request(request.message)
+            ):
                 fallback_queue: queue.Queue[tuple[str, object]] = queue.Queue()
                 try:
                     fallback = _run_multi_agent_plan(
