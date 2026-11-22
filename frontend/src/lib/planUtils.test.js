@@ -5,6 +5,7 @@ import {
   buildPlanMarkdown,
   escapeHtml,
   formatBudget,
+  formatMarkerRanges,
   formatPlanDate,
   markerNumbersForDay,
   planDateRange,
@@ -125,6 +126,25 @@ describe("markerNumbersForDay", () => {
     ];
     expect(markerNumbersForDay(points, 2)).toEqual([2, 3]);
     expect(markerNumbersForDay(points, 3)).toEqual([]);
+  });
+});
+
+describe("formatMarkerRanges", () => {
+  it("collapses contiguous markers into a range", () => {
+    expect(formatMarkerRanges([1, 2, 3])).toBe("1-3");
+    expect(formatMarkerRanges([2, 3, 4])).toBe("2-4");
+  });
+
+  it("keeps non-contiguous runs separate", () => {
+    expect(formatMarkerRanges([2, 3, 4, 7])).toBe("2-4, 7");
+    expect(formatMarkerRanges([1, 5, 6])).toBe("1, 5-6");
+  });
+
+  it("handles single markers and normalises the input", () => {
+    expect(formatMarkerRanges([5])).toBe("5");
+    expect(formatMarkerRanges([])).toBe("");
+    // Unsorted input and duplicates are normalised.
+    expect(formatMarkerRanges([3, 1, 2, 2])).toBe("1-3");
   });
 });
 

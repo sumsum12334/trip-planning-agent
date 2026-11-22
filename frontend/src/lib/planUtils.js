@@ -226,6 +226,35 @@ export function markerNumbersForDay(points, dayNumber) {
     .map((point, index) => (point.day === dayNumber ? index + 1 : null))
     .filter((number) => number != null);
 }
+
+// Compact map-reference text: contiguous markers collapse to a range so a day
+// holding markers 1, 2, 3 reads "1-3" instead of "1 · 2 · 3". Non-contiguous
+// runs stay separate: [2, 3, 4, 7] -> "2-4, 7".
+export function formatMarkerRanges(numbers) {
+  const sorted = [...new Set((numbers || []).filter((number) => typeof number === "number" && Number.isFinite(number)))]
+    .sort((a, b) => a - b);
+  const ranges = [];
+  let start = null;
+  let previous = null;
+  for (const number of sorted) {
+    if (start === null) {
+      start = number;
+      previous = number;
+      continue;
+    }
+    if (number === previous + 1) {
+      previous = number;
+      continue;
+    }
+    ranges.push(start === previous ? `${start}` : `${start}-${previous}`);
+    start = number;
+    previous = number;
+  }
+  if (start !== null) {
+    ranges.push(start === previous ? `${start}` : `${start}-${previous}`);
+  }
+  return ranges.join(", ");
+}
 export function splitLines(value) {
   return String(value || "").split("\n").map((line) => line.trim()).filter(Boolean);
 }

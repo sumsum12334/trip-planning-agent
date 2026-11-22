@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect, useCallback } from "react";
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, Typography } from "@mui/material";
 import {
   formatBudget,
+  formatMarkerRanges,
   formatPlanDate,
   markerNumbersForDay,
   planDateRange,
@@ -242,7 +243,9 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
       <div className="trip-overview">
         {days.map((day) => {
           const budget = dayBudgets.find((entry) => entry.day === day.day);
+          const dayMarkerPoints = points.filter((point) => point.day === day.day);
           const dayMarkers = markerNumbersForDay(points, day.day);
+          const dayMarkerNames = dayMarkerPoints.map((point) => point.label).filter(Boolean);
           const markerFor = (name) => {
             const index = points.findIndex((point) => point.kind === "place" && point.day === day.day && point.label === name);
             return index >= 0 ? index + 1 : null;
@@ -264,7 +267,15 @@ export function TripPlanCard({ plan, onSaveBudget, onReconsider, reconsiderEnabl
                 {weather && weather.temperature_c != null && <span className="overview-weather">{weather.temperature_c}°C (est.)</span>}
               </button>
               <div className="trip-day-head-actions">
-                {dayMarkers.length > 0 && <span className="day-map-ref" title="Map reference">🗺 {dayMarkers.join(" · ")}</span>}
+                {dayMarkers.length > 0 && (
+                  <span
+                    className="day-map-ref"
+                    title={dayMarkerNames.length ? `Map markers ${formatMarkerRanges(dayMarkers)}: ${dayMarkerNames.join(", ")}` : "Map reference"}
+                  >
+                    <span className="day-map-ref-range">🗺 {formatMarkerRanges(dayMarkers)}</span>
+                    {dayMarkerNames.length > 0 && <span className="day-map-ref-places">{dayMarkerNames.join(" · ")}</span>}
+                  </span>
+                )}
                 {!isEditing && <button type="button" className="plan-tool" onClick={() => { setEditingBudget(false); setEditingDay(day.day); setExpandedDays((previous) => ({ ...previous, [day.day]: true })); setNotice(""); setReconsiderPrompt(null); }}>Edit</button>}
               </div>
             </div>
