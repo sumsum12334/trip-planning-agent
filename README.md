@@ -2,7 +2,7 @@
 CSIT6000V Course Project
 
 ## Architecture
-<img width="3066" height="1746" alt="trip_agent_multiagent_overview" src="https://github.com/user-attachments/assets/c9eecec0-1fcf-442e-bbf3-e9a99719cfc7" />
+<img width="3066" height="1746" alt="trip_agent_multiagent_overview" src="docs/figures/trip_agent_multiagent_overview.png" />
 
 ### Architecture flow
 
@@ -114,11 +114,11 @@ unchanged, and the summary is never hidden chain-of-thought.
 |---------|-------------|------------|
 | **SQLite (default)** | Local without Docker/cloud | `DATABASE_URL=sqlite:///./data/travel_history.sqlite` |
 | **Postgres (Docker)** | Optional local Postgres | `docker compose up -d postgres`, then `DATABASE_URL=postgresql://trip:trip@localhost:5432/travel_history` |
-| **Postgres (Neon)** | Course/cloud shared DB | Pooled `DATABASE_URL` from `.env` after `neon init` / `neon deploy` |
+| **Postgres (Neon)** | Course/cloud shared DB | Update `.env`: set `DATABASE_URL` to the pooled Neon connection string (optional: `DATABASE_URL_UNPOOLED`, `NEON_BRANCH`). `neon init` / `neon deploy` / `neon env pull` can write these values into `.env`. |
 
 **Driver:** install once with `pip install ".[db]"` (pulls `psycopg[binary]`), or `pip install "psycopg[binary]"`.
 
-**Neon:** this repo can be linked with Neon CLI (`neon init` / `neon deploy`). The app reads the pooled `DATABASE_URL` from `.env` (also `DATABASE_URL_UNPOOLED` and `NEON_BRANCH`). Refresh credentials with `neon env pull` (or re-run deploy). `.env` is gitignored — never commit real URLs or passwords; use placeholders in docs only.
+**Neon:** to use Neon for Agent 4 travel history, update `.env` with the pooled `DATABASE_URL`. Optionally also set `DATABASE_URL_UNPOOLED` (direct URL for migrations/admin) and `NEON_BRANCH` (for example `production`). The app reads only these `.env` values, not the Neon project files. The Neon CLI (`neon init` / `neon deploy` / `neon env pull`) can write or refresh the credentials in `.env`. `.env` is gitignored — never commit real URLs or passwords; use placeholders in docs only.
 
 **Health check:** `GET /health` → `agents.travel_history.storage` is `sqlite` or `postgres` (also reports a redacted connection summary).
 Chat messages also record explicit past-visit statements, using the
@@ -395,9 +395,9 @@ Credentials match `.env.example` (`trip` / `trip` / `travel_history`). Stop
 only Postgres with `docker compose stop postgres`; `docker compose down` keeps
 the `pgdata` volume unless you add `-v`.
 
-For cloud Postgres (Neon), keep Docker Postgres off and set `DATABASE_URL` to
-the pooled connection string in `.env` (see Travel history database above). Do
-not put real Neon passwords in the README or git.
+For cloud Postgres (Neon), keep Docker Postgres off and update `.env`: set
+`DATABASE_URL` to the pooled connection string (see Travel history database
+above). Do not put real Neon passwords in the README or git.
 
 Useful checks from another PowerShell window:
 
@@ -429,11 +429,14 @@ errors.
 | `OVERPASS_API_URL` | Comma-separated Overpass mirror URLs (used when `TOOL_STAYS_MODE=overpass`) |
 | `OVERPASS_TIMEOUT` | Overpass request timeout seconds (default 30) |
 | `OVERPASS_RADIUS_METERS` | Overpass search radius in meters (default 5000) |
-| `DATABASE_URL` | Travel history DB. Default SQLite: `sqlite:///./data/travel_history.sqlite`. Local Docker Postgres: `postgresql://trip:trip@localhost:5432/travel_history` (`pip install ".[db]"`, `docker compose up -d postgres`). Neon: pooled URL from `.env` after `neon init` / `neon deploy` (refresh with `neon env pull`). Chat stays on SQLite. `GET /health` → `agents.travel_history.storage` = `sqlite` \| `postgres`. |
+| `DATABASE_URL` | Travel history DB. Default SQLite: `sqlite:///./data/travel_history.sqlite`. Local Docker Postgres: `postgresql://trip:trip@localhost:5432/travel_history` (`pip install ".[db]"`, `docker compose up -d postgres`). To use Neon, update `.env` with the pooled URL (`neon init` / `neon deploy` / `neon env pull` can write it). Chat stays on SQLite. `GET /health` → `agents.travel_history.storage` = `sqlite` \| `postgres`. |
 | `DATABASE_URL_UNPOOLED` | Optional Neon direct URL (migrations/admin). App runtime uses pooled `DATABASE_URL`. |
 | `NEON_BRANCH` | Optional Neon branch name (e.g. `production`) when using Neon. |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST` | Langfuse 5.x credentials and host |
 | `LANGFUSE_ENABLED` | Set to `1` to emit flushed model-generation traces |
+| `LANGSMITH_API_KEY` | Optional LangSmith API key. When set, every LLM call is traced for evaluation (TTFT, TPOT, input, and output). Create a key at https://smith.langchain.com. |
+| `LANGSMITH_ENDPOINT` | Optional LangSmith API URL (default `https://api.smith.langchain.com`). |
+| `LANGSMITH_PROJECT` | Optional LangSmith project name (default `trip-planning-agent`). |
 | `NEMOTRON_API_KEY` / `NEMOTRON_API_URL` | Optional Nemotron judge API used by API-mode evaluation |
 
 Install the Langfuse extra before starting the backend:
@@ -453,6 +456,18 @@ Standalone `/plan` requests receive a generated session ID. Streaming requests
 record the final answer text, while private reasoning content is not sent to
 Langfuse. Tracking errors are logged without changing the model request result.
 
+**LangSmith (optional evaluation traces).** LangSmith is off until you set `LANGSMITH_API_KEY` in `.env` (there is no separate enable flag). Install the client with `pip install langsmith`, create an API key at [LangSmith](https://smith.langchain.com), then update `.env`:
+
+```powershell
+# Required to turn LangSmith on:
+LANGSMITH_API_KEY=your-key
+# Optional; these are the defaults:
+# LANGSMITH_ENDPOINT=https://api.smith.langchain.com
+# LANGSMITH_PROJECT=trip-planning-agent
+```
+
+Restart the app, run a request that calls the model, then open [LangSmith](https://smith.langchain.com) and select the project (`trip-planning-agent` by default). Traces record model input and output separately, plus TTFT and TPOT. Tracking errors are logged without changing the model request result. Do not commit the API key. The graded stub evaluation does not use LangSmith.
+
 UI is not hosted on TACC; only the backend calls the course model-serving endpoint (request → queue → worker).
 
 ### Deploy to TACC
@@ -466,11 +481,246 @@ repository root using [`tuxiv.conf`](./tuxiv.conf). See
 
 ## Evaluation (Baseline A vs Proposed)
 
-Langfuse is optional tracing only. To score the agents, run the fixed-case harness:
+The project evaluates Baseline A (`ENABLE_TRAVEL_HISTORY=0`, Agents 1–3) against Proposed (`ENABLE_TRAVEL_HISTORY=1`, Agents 1–4) in three complementary ways: a reproducible automatic stub harness, **AI evaluation** of live model outputs, and **human evaluation** with an explicit scoring rubric. Langfuse and LangSmith are optional tracing tools; they do not replace these checks. Details and commands are in [`eval/README.md`](./eval/README.md).
+
+### Automatic stub harness
 
 ```powershell
 .\.venv\Scripts\python.exe -m eval.runner
 ```
 
-See [`eval/README.md`](./eval/README.md). The suite compares Baseline A (`ENABLE_TRAVEL_HISTORY=0`) with Proposed (`ENABLE_TRAVEL_HISTORY=1`) on stay budget/location, transport fields, and history avoidance. Stub mode is offline by default; `--mode api` uses the configured QWEN endpoint and requires `QWEN_BASE_URL` (or `--model-url`).
+The suite compares the two variants on stay budget and location, transport fields, history avoidance, revise, and fail-closed behaviour. Stub mode is offline by default and does not use LangSmith or a live model. On the current codebase the expected result is `Eval [STUB] 30/30` (25 plan/revise cases plus 5 tool-layer cases), with History contrast `4/4` and Tool layer `5/5`. This is the graded reproduction path.
 
+### AI evaluation
+
+`--mode api` uses the configured Qwen endpoint and requires `QWEN_BASE_URL` (or `--model-url`). It records response metrics such as TTFT and tokens per second in the JSON/CSV report under `eval/results/`. When `NEMOTRON_API_KEY` and `NEMOTRON_API_URL` are set, the runner also attaches an LLM-as-a-judge score from NVIDIA Nemotron (Nemotron-3.5-Bolt-E4B). The judge rates each model response on a 1–5 integer scale for four dimensions:
+
+- **relevance:** does the response address the requested destination, dates or days, and other stated constraints?
+- **completeness:** are stays, transport, and daily activities present for the requested trip length?
+- **helpfulness:** is the itinerary usable and actionable?
+- **accuracy:** are recommended places, costs, and details consistent with the request and with each other?
+
+A model response is treated as acceptable on the AI judge if every dimension is at least 3. Live scores can vary with the endpoint and are not part of the stub 30/30 count. API mode talks to the model directly and does not send traces to LangSmith.
+
+To inspect live LLM calls from the running app in LangSmith (TTFT, TPOT, and model input/output), set `LANGSMITH_API_KEY` in `.env` as described under Key `.env` knobs above, install `langsmith`, restart the app, then open the traces at [LangSmith](https://smith.langchain.com) in the project named by `LANGSMITH_PROJECT` (default `trip-planning-agent`). If the LangSmith organization is in the GCP APAC region, open [APAC LangSmith](https://apac.smith.langchain.com) and set `LANGSMITH_ENDPOINT=https://apac.api.smith.langchain.com`. The stub harness does not use LangSmith.
+
+### Human evaluation
+
+Human raters score the same Baseline A versus Proposed trip plans (and, when available, API-mode model itineraries) with a fixed rubric, so success criteria and scoring rules are explicit. The 1–5 dimensions match the AI judge — relevance, completeness, helpfulness, and accuracy — using the same questions listed above, so the two sets of scores can be compared.
+
+Raters also mark these binary checks, which align with the automatic harness:
+
+- **Stay location and budget:** the stay is in the requested city and does not exceed the nightly budget.
+- **Transport:** transport is present and city-consistent (for example, a Paris airport must not reuse a Hong Kong catalog row).
+- **History contrast:** on `avoid_visited` cases, Proposed must drop the visited stay or POI. Baseline A is expected to still include it; do not mark Baseline A as failing this check for that reason. Record whether the contrast holds (Proposed avoids, Baseline A does not).
+- **Revise:** after a tighter budget or a shorter trip, the new plan still meets the revised constraints.
+- **Fail-closed:** an invalid or infeasible request fails clearly and does not silently overspend.
+- **Source links:** when the plan includes source links, they should open and refer to the recommended place. Leave this check blank when no links are present.
+
+**Scoring rules.** Each 1–5 dimension is an integer from 1 (poor) to 5 (excellent). A rater marks a plan *acceptable* only if every applicable dimension is at least 3 and every applicable binary check passes. For an invalid or infeasible request, the item is acceptable only if the system fails closed and the failure is understandable. Raters should score independently and record `case id`, variant (`baseline_a` or `proposed`), rater id, the four dimension scores, the binary checks, an acceptable/not-acceptable mark, and a short note. Store that sheet as a CSV under `eval/results/` (this file is not written by `eval.runner`). The stub 30/30 result does not require human raters.
+
+## Getting Started Instructions
+
+This section is a short kick-the-tires path. After a normal Python setup you can confirm that the artifact runs in well under 30 minutes, with no TACC account, API keys, or Docker.
+
+### Prerequisites
+
+- Python 3.11 or newer
+- Git
+- A virtual environment tool (`python -m venv` is enough)
+- **Optional, for the web UI only:** Node.js 18+ with npm
+- **Optional:** Docker, for local container debugging
+- **Optional:** a TACC/`tcloud` login, only if you want to serve the course Qwen model
+
+The commands below are written for Windows PowerShell. On Linux or macOS, use `.venv/bin/python` instead of `.\.venv\Scripts\python.exe`, and `cp` instead of `copy`.
+
+### Setup
+
+```powershell
+git clone https://github.com/sumsum12334/trip-planning-agent.git
+cd trip-planning-agent
+copy .env.example .env
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+If `Activate.ps1` is blocked, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` and retry, or call the venv Python with an explicit path as shown below. Leave the Qwen fields in `.env` blank for this smoke test, and leave the default `DATABASE_URL` (local SQLite). To use Neon later for Agent 4 travel history, update `.env` with the pooled `DATABASE_URL` as described under Travel history database above. Never commit `.env`.
+
+### End-to-end example: one evaluation case
+
+From the repository root, with the virtual environment available:
+
+```powershell
+.\.venv\Scripts\python.exe -m eval.runner --case tokyo_history_avoid_shibuya
+```
+
+This case seeds a visit to Shibuya and asks for a Tokyo plan with `avoid_visited=true`. It runs the same request under Baseline A and Proposed.
+
+**Expected output** (elapsed times vary by machine; the pass/fail fields should match):
+
+```
+Eval 1/1 cases passed (96.6 ms). History contrast 1/1. Tool layer 0/0.
+tokyo_history_avoid_shibuya  kind=plan  baseline=PASS  proposed=PASS  days=4/4  extra=PASS
+Wrote eval/results/eval-YYYYMMDD-HHMMSS.json
+Wrote eval/results/eval-YYYYMMDD-HHMMSS.csv
+```
+
+How to read this line:
+
+- `baseline` and `proposed` are both `PASS`, so both variants return a valid 4-day itinerary (`days (exp)` is `4/4`).
+- `extra` is the history-contrast check: Proposed must drop the already-visited Shibuya stay, while Baseline A (no Agent 4) still recommends it. `PASS` means that contrast holds.
+
+A LangChain/LangGraph deprecation warning from the installed library may appear on stderr. It does not fail the case.
+
+### Optional: start the web app and check `/health`
+
+This is not required to reproduce the evaluation. It confirms that the UI and API start locally.
+
+```powershell
+npm install
+npm run build
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
+Then open:
+
+- UI: http://127.0.0.1:8000/
+- Health: http://127.0.0.1:8000/health — the JSON should include `"ok": true`
+- API docs: http://127.0.0.1:8000/docs
+
+Without `QWEN_BASE_URL`, chat uses a local stub. Stay search defaults to the offline `stub` catalog. Stop the server with `Ctrl+C`. For UI-only development, `npm run dev` starts the Vite dev server; the commands above serve the production build from `frontend/dist`.
+
+## Detailed Instructions
+
+This section explains how to rerun the evaluation that supports the project's main findings, and how to interpret the outputs.
+
+### What the harness measures
+
+`eval/runner.py` runs each plan case twice:
+
+- **Baseline A:** `ENABLE_TRAVEL_HISTORY=0` (Agents 1–3)
+- **Proposed:** `ENABLE_TRAVEL_HISTORY=1` (Agents 1–4)
+
+It always forces stub stay and maps tools and an isolated temporary SQLite database. It does not use your `.env` `DATABASE_URL` or a live model.
+
+The checks cover:
+
+- Stay budget and location constraints
+- Required transport fields and city-consistent catalog matches
+- History avoidance (Proposed drops a visited stay or POI; Baseline A still includes it)
+- Multi-day coverage (`expected_days`)
+- Budget revise (switch to a cheaper stay when the plan is over budget)
+- The revise loop (`REVISE_CASES`): after an initial plan, re-enter the pipeline with a cut budget or a shorter trip and check the new constraints
+- Fail-closed behaviour for invalid or infeasible requests
+- Gold tool-call cases in `eval/tool_cases.py` (the chat tool layer with the arguments a model should pass). This is **not** live model tool-routing accuracy.
+
+### Reproduce the full evaluation
+
+From the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe -m eval.runner
+```
+
+Useful variants:
+
+```powershell
+.\.venv\Scripts\python.exe -m eval.runner --plan-only
+.\.venv\Scripts\python.exe -m eval.runner --tools-only
+.\.venv\Scripts\python.exe -m eval.runner --case tokyo_revise_cheaper_stay --case tokyo_history_avoid_poi
+```
+
+Optional live-model mode (not required to reproduce the stub results):
+
+```powershell
+.\.venv\Scripts\python.exe -m eval.runner --mode api
+```
+
+API mode is the AI evaluation path described under Evaluation above. It requires `QWEN_BASE_URL` (including `/v1`) or `--model-url`. It is separate from the deterministic Baseline A vs Proposed tool checks: it calls the configured model and records response metrics such as TTFT and tokens per second in the JSON/CSV report. If `NEMOTRON_API_KEY` and `NEMOTRON_API_URL` are set, the runner attaches Nemotron LLM-as-a-judge scores (relevance, completeness, helpfulness, and accuracy, each 1–5). A response is treated as acceptable on the AI judge if every dimension is at least 3. Live scores can vary and are not the graded stub reproduction path. API mode does not send traces to LangSmith.
+
+To inspect live LLM calls from the running app in LangSmith, set `LANGSMITH_API_KEY` in `.env` (see Key `.env` knobs), install `langsmith`, restart the app, and open [LangSmith](https://smith.langchain.com) in the `LANGSMITH_PROJECT` (default `trip-planning-agent`). If the organization is in the GCP APAC region, use [APAC LangSmith](https://apac.smith.langchain.com) and set `LANGSMITH_ENDPOINT=https://apac.api.smith.langchain.com`. Traces include TTFT, TPOT, and model input/output. The stub evaluation does not use LangSmith.
+
+Human evaluation uses the rubric and scoring rules in the Human evaluation subsection above. Score Baseline A and Proposed plans (and API-mode itineraries when available) independently, then save a CSV under `eval/results/`. Human ratings are not produced by `eval.runner` and are not required to reproduce the stub 30/30 result.
+
+Reports from the runner are written to `eval/results/` as JSON and CSV. That directory is gitignored.
+
+Unit tests (including a determinism check that the same stub case twice agrees) are optional:
+
+```powershell
+pip install -e ".[test]"
+.\.venv\Scripts\python.exe -m pytest
+```
+
+### Test cases, data, and configuration
+
+Cases are defined in `eval/cases.py` and `eval/tool_cases.py`. They are written against the stub catalogs in `agents/search_stays/tools.py` and `agents/estimate_transport/tools.py`. No external data download is required.
+
+**Plan cases**
+
+| Case id | What it checks |
+|---------|----------------|
+| `tokyo_budget_ok` | Tokyo stay under budget, location match |
+| `tokyo_history_avoid_shibuya` | Proposed avoids a visited Shibuya stay; Baseline A still recommends it |
+| `tokyo_history_without_avoid_flag` | History exists but `avoid_visited` is off |
+| `hk_budget_ok` | Hong Kong stay under budget |
+| `hk_tight_budget` | Tight budget still yields a feasible stay |
+| `hk_history_avoid_central` | Proposed avoids a visited Central stay |
+| `amsterdam_ok` | Amsterdam stub catalog path |
+| `unknown_city_generic_fallback` | Unknown city may use the generic fallback |
+| `empty_catalog_tight_budget` | No feasible stay: fail closed |
+| `transport_same_place_walk` | Same-place transport is a walk |
+| `tokyo_history_multiple_places` | Several visited places are avoided |
+| `tokyo_history_unrelated_place` | A Hong Kong visit must not drop Tokyo stays |
+| `hk_over_budget_transport` | Over-budget plan is revised or fail-closed |
+| `tokyo_history_alias_shibuya` | Lowercase `shibuya` still matches |
+| `tokyo_history_city_too_broad` | A visit recorded only as `Tokyo` must not drop every Tokyo stay |
+| `paris_airport_not_hk_catalog` | Paris airport transport must not reuse the Hong Kong Airport Express row |
+| `empty_destination_fail_closed` | Empty destination should fail closed at validation |
+| `invalid_days_zero` | `days=0` should fail closed |
+| `tokyo_airport_cost_scale` | Large transport vs stay budget is flagged; the case can still pass |
+| `tokyo_revise_cheaper_stay` | Coordinator revises to a cheaper stay when over budget |
+| `tokyo_pois_interest_food` | POI packing respects interest ranking |
+| `tokyo_history_avoid_poi` | Proposed drops a visited POI; Baseline A still includes it |
+| `tokyo_dates_span_three_days` | Inclusive start/end dates with no `days` field still yield a 3-day itinerary |
+| `hk_revise_budget_cut` | After an initial plan, the revise loop must satisfy a lower budget |
+| `tokyo_revise_shorter_trip` | After an initial plan, the revise loop must cover a shorter trip |
+
+**Tool-layer cases** (run with the default suite, or `--tools-only`): `tool_search_stays_tokyo`, `tool_estimate_transport_hk`, `tool_stays_and_transport_amsterdam`, `tool_search_stays_missing_destination`, `tool_unknown_name`.
+
+### Expected results and how they map to the report
+
+On the current codebase, a full stub run prints a header of the form:
+
+```
+Eval [STUB] 30/30 cases passed (... ms). History contrast 4/4. Tool layer 5/5.
+```
+
+followed by one row per case and `Wrote` paths for the JSON and CSV reports. Latency numbers vary by machine; pass/fail columns should not. This count is 25 plan/revise cases plus 5 tool-layer cases.
+
+The metrics that support the main findings are:
+
+- **History contrast** (`History contrast 4/4` in the header, and `extra=PASS` on the avoidance cases). This is the Baseline A vs Proposed difference: with a seeded visit and `avoid_visited=true`, Proposed drops the visited stay or POI and Baseline A does not. See the history-avoidance cases above.
+- **Per-agent plan checks** (`baseline` / `proposed` columns): stay budget and location, transport fields, day coverage, revise, and fail-closed.
+- **Revise loop** (`kind=revise` rows such as `hk_revise_budget_cut` and `tokyo_revise_shorter_trip`): after the first plan, the coordinator is re-entered with tighter constraints and must still pass.
+- **Tool layer** (`Tool layer 5/5`): the gold tool-call cases succeed independently of a live model.
+- **AI evaluation** (`--mode api`, optional): JSON/CSV fields for TTFT and tokens per second, plus Nemotron judge scores for relevance, completeness, helpfulness, and accuracy when the Nemotron key is set. These are not part of the stub 30/30 count.
+- **Optional LangSmith traces** (live app only): when `LANGSMITH_API_KEY` is set, LLM traces in [LangSmith](https://smith.langchain.com) (or [APAC LangSmith](https://apac.smith.langchain.com) for an APAC organization) show TTFT, TPOT, and model input/output. This is not part of the stub 30/30 result.
+- **Human evaluation:** rater CSVs under `eval/results/` using the rubric above (the same four 1–5 dimensions, plus the binary checks and the acceptable/not-acceptable rule). These scores are collected by raters, not by `eval.runner`.
+
+Please map the automatic outputs, AI judge scores, and human scores to the corresponding tables or figures in the project report when you discuss Baseline A vs Proposed, history avoidance, budget revise, and fail-closed behaviour. The JSON/CSV files in `eval/results/` are the machine-readable source for those numbers.
+
+Environment variables, Docker, TACC deployment, and the live web-app demo are documented in the sections above.
+
+### Known limitations and expected variation
+
+- The graded reproduction path is the stub eval harness. It does not measure live-model tool-routing quality, Overpass/OBO or live web-search results, or TACC serving performance.
+- Latency in the printed summary varies by machine. Pass/fail on stub cases should be stable; `tests/test_eval_runner.py` checks determinism for a stub case.
+- Live stay/maps/weather modes and live model endpoints can vary with availability, rate limits, and provider data. They may differ from the stub catalogs used in the report's main tables.
+- API-mode results and optional Nemotron judge scores depend on a live endpoint and can vary. They are not required to reproduce the stub evaluation. LangSmith traces are also optional and are not used by the stub harness.
+- Human ratings can vary between raters. They complement the automatic harness and the AI judge; they are not a substitute for the stub 30/30 result.
+- `tokyo_airport_cost_scale` may print a cost-scale warning without failing the case.
+- TACC jobs expire after the partition limit (1 hour). Leftover vLLM processes on a node can also hold GPU memory and block later jobs; cancel your own jobs when finished.
+- Do not commit `.env`, secrets, `.venv`, or `node_modules`.
+
+Further detail lives in [`eval/README.md`](./eval/README.md), [`tacc/README.md`](./tacc/README.md), and the per-agent README files under `agents/`.
