@@ -403,24 +403,24 @@ All runs below were executed with the same configuration:
 
 | Metric | Result |
 |---|---|
-| Cases passed | 20/30 |
-| Failed | 10/30 |
+| Cases passed | 22/30 |
+| Failed | 8/30 |
 | History contrast | 0/4 |
 | Tool layer | 5/5 |
-| Plan latency (mean) | 3446.5 ms |
-| Plan latency (max) | 6698.2 ms |
+| Plan latency (mean) | 5718.3 ms |
+| Plan latency (max) | 15504.7 ms |
 | Plan runs measured | 46 |
-| Generated | 2026-11-22T02:57:38+08:00 |
+| Generated | 2026-11-23T21:20:07+08:00 |
 
 **Per-case model metrics (TTFT, TPS, TPOT, token count):**
 
-API mode records per-call latency metrics under `model_metrics.model_metrics` in the JSON report. The Nemotron model returns its output in `reasoning_content` (chain-of-thought) rather than `content`, so per-case `ttft_ms`, `tps`, `tpot_ms`, and `token_count` may be `None`/`0` when the model's streaming response doesn't yield extractable content tokens. The overall plan latency (wall-clock time per case) is still recorded: mean 3446.5 ms, max 6698.2 ms.
+API mode records per-call latency metrics under `model_metrics.model_metrics` in the JSON report. The Nemotron model returns its output in `reasoning_content` (chain-of-thought) rather than `content`, so per-case `ttft_ms`, `tps`, `tpot_ms`, and `token_count` may be `None`/`0` when the model's streaming response doesn't yield extractable content tokens. The overall plan latency (wall-clock time per case) is still recorded: mean 5718.3 ms, max 15504.7 ms.
 
-**Why 10 cases still fail in API mode:**
+**Why 8 cases still fail in API mode:**
 
 API mode extracts hotel/stay mentions from the model's free-text response using regex (`_extract_hotels_from_text`). The Nemotron model is a reasoning model that outputs chain-of-thought in `reasoning_content` rather than a clean `Hotel Name - $price/night - reason` list. When the model doesn't return stays in a parseable format, the extraction yields zero stays, causing the `has_stays` check to fail. This is a model-output-format issue, not a constraint-check failure — the same cases pass in stub mode (30/30) because stub mode uses deterministic catalogs instead of model-generated text.
 
-The 20 cases that pass in API mode include:
+The 22 cases that pass in API mode include:
 - All 5 tool-layer cases (PASS)
 - Validation/fail-closed cases: `empty_destination_fail_closed`, `invalid_days_zero` (PASS)
 - Revise cases: `hk_revise_budget_cut`, `tokyo_revise_shorter_trip` (PASS)
