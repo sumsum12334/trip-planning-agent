@@ -19,6 +19,31 @@ from trip_planning_agent.observability import (
 )
 
 
+def normalize_messages_for_vllm(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Put system instructions in a single leading message.
+
+    vLLM returns HTTP 400 ("System message must be at the beginning.") when
+    more than one system message is sent, or when a system message appears
+    after another role. Follow-up turns were hitting this because plan
+    context was added as a second system message.
+    """
+    systems: list[str] = []
+    rest: list[dict[str, Any]] = []
+    for message in messages:
+        if message.get("role") == "system":
+            content = message.get("content") or ""
+            if not isinstance(content, str):
+                content = json.dumps(content)
+            if content and content not in systems:
+                systems.append(content)
+            continue
+        rest.append(message)
+    if not systems:
+        return list(rest)
+    return [{"role": "system", "content": "\n\n".join(systems)}, *rest]
+
+
+
 class TACCClient:
     """Keep the existing client name while speaking the chat completions protocol."""
 
@@ -126,6 +151,7 @@ class TACCClient:
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
+        messages = normalize_messages_for_vllm(messages)
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -230,6 +256,7 @@ class TACCClient:
             if system:
                 messages.append({"role": "system", "content": system})
             messages.append({"role": "user", "content": prompt})
+        messages = normalize_messages_for_vllm(messages)
         headers = {"Content-Type": "application/json"}
         api_key = get_model_config(self.settings)["api_key"]
         if api_key:
@@ -246,7 +273,7 @@ class TACCClient:
                     return
                 payload = {
                     "model": self.model,
-                    "messages": messages,
+                    "messages": normalize_messages_for_vllm(messages),
                     "stream": True,
                     **self._sampling_params(stream=True),
                 }

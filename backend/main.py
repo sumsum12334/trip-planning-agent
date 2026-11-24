@@ -938,18 +938,19 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
             # outputs). The full history is passed via initial_messages; prompt
             # carries only the current user turn for clean tracing.
             initial_messages: list[dict[str, str]] = []
+            system_parts: list[str] = []
             if TRIP_PLANNING_SYSTEM_PROMPT:
-                initial_messages.append(
-                    {"role": "system", "content": TRIP_PLANNING_SYSTEM_PROMPT}
-                )
+                system_parts.append(TRIP_PLANNING_SYSTEM_PROMPT)
             if plan_context:
+                system_parts.append(plan_context)
+            if system_parts:
                 initial_messages.append(
-                    {"role": "system", "content": plan_context}
+                    {"role": "system", "content": "\n\n".join(system_parts)}
                 )
             for item in conversation:
                 role = item.get("role", "user")
                 content = item.get("content", "")
-                if role in ("user", "assistant", "system"):
+                if role in ("user", "assistant"):
                     initial_messages.append({"role": role, "content": content})
             initial_messages.append({"role": "user", "content": request.message})
 
